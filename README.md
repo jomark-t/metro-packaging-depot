@@ -1,17 +1,20 @@
 # Metro Packaging Depot — Monthly Schedule Generator
 
-A small local web app that auto-generates a monthly duty schedule for
-your 6-person team and stores it in a local SQLite database
-(`schedule.db`, created automatically on first run).
+A small web app that auto-generates a monthly duty schedule for your
+6-person team and stores it in Postgres — the same database whether
+you're running it locally or on the live deployment, so there's one
+source of truth.
 
 ## Setup
 
-Requires Python 3.9+.
+Requires Python 3.9+ and a Postgres connection string (see **Database**
+below — the whole team, local or deployed, points at the same database).
 
 ```bash
 cd staff-scheduler
 pip install -r requirements.txt
 python -m playwright install chromium
+cp .env.example .env   # then fill in DATABASE_URL
 python app.py
 ```
 
@@ -20,6 +23,27 @@ of a headless Chromium browser — it's used to render the schedule PDF so
 it comes out pixel-identical to the on-screen table (see below).
 
 Then open **http://127.0.0.1:5000** in your browser.
+
+## Database
+
+The app stores everything (schedules, payroll, employee records) in
+Postgres via the `DATABASE_URL` environment variable — loaded from a
+local `.env` file for local dev (`python-dotenv`), and set as a Fly
+secret for the deployment. Because both point at the *same* database,
+there's no separate "local data" vs "production data" to keep in sync —
+edit from your laptop or from the live site and it's the same records
+either way.
+
+We use [Neon](https://neon.tech) (free tier, serverless Postgres) — sign
+up, create a project, and copy its connection string into `.env` locally
+and into the Fly secret:
+
+```bash
+fly secrets set DATABASE_URL="postgresql://...neon connection string..." -a metro-packaging-depot
+```
+
+`app.py`'s `init_db()` creates the schema automatically on first run
+against an empty database — no manual migrations needed.
 
 ## Using it
 
@@ -47,9 +71,10 @@ PDF export — runs fully locally, no internet required for those).
 ## Deploying (Fly.io, auto-deploy on push)
 
 The app runs as a Docker container on [Fly.io](https://fly.io) at
-**metro-packaging-depot.fly.dev**, with a 1GB persistent volume mounted at
-`/data` so `schedule.db` and uploaded employee photos survive redeploys
-(see `entrypoint.sh`).
+**metro-packaging-depot.fly.dev**. The database lives in Postgres (see
+**Database** above), and a 1GB persistent volume mounted at `/data`
+holds uploaded employee photos so they survive redeploys (see
+`entrypoint.sh`).
 
 Auto-deploy is handled by Fly's own GitHub integration (set up via the Fly
 dashboard's "Launch from GitHub"), not a GitHub Actions workflow — Fly
@@ -159,7 +184,7 @@ Each card saves independently with its own **Save** button.
 
 ## Notes / limitations
 
-- Built with Flask + SQLite on the backend, Tailwind CSS (via CDN) on
+- Built with Flask + Postgres on the backend, Tailwind CSS (via CDN) on
   the frontend, styled around your brand colors (#1c33bb blue, #07c067
   green, #b88c53 tan, plus black/white). Printer/Checker get their own
   bold solid-fill look so they never look like Assist/Closing.
@@ -177,5 +202,5 @@ Each card saves independently with its own **Save** button.
 - Regenerating a month fully replaces that month's saved schedule.
   If a month was generated with an older version of this app before
   you replaced the files, hit **Generate schedule** again for that
-  month to pick up the latest rules — the saved data in `schedule.db`
+  month to pick up the latest rules — the saved data in the database
   doesn't update itself.

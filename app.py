@@ -1,7 +1,6 @@
 """
 Staff Scheduler - a small local web app that auto-generates a monthly
-duty schedule for a 6-person retail/café team and stores it in a
-local SQLite database.
+duty schedule for a 6-person retail/café team and stores it in Postgres.
 
 Run with:  python app.py
 Then open: http://127.0.0.1:5000
@@ -9,14 +8,21 @@ Then open: http://127.0.0.1:5000
 
 import calendar
 import os
-import sqlite3
 from datetime import date, timedelta
 
+import psycopg2
+from dotenv import load_dotenv
 from flask import Flask, g, jsonify, render_template, request
+from psycopg2.extras import RealDictCursor
 
-DB_PATH = os.environ.get(
-    "DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "schedule.db")
-)
+load_dotenv()
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Copy .env.example to .env and fill in your "
+        "Postgres connection string (see README's Deploying section)."
+    )
 BUSINESS_NAME = "Metro Packaging Depot"
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "uploads")
 ALLOWED_PHOTO_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
@@ -110,8 +116,7 @@ EDITABLE_OPTIONS = {
 def get_db():
     db = getattr(g, "_database", None)
     if db is None:
-        db = g._database = sqlite3.connect(DB_PATH)
-        db.row_factory = sqlite3.Row
+        db = g._database = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return db
 
 
@@ -123,28 +128,44 @@ def close_connection(exception):
 
 
 def init_db():
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
+    db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     cur = db.cursor()
     cur.execute(
         """CREATE TABLE IF NOT EXISTS staff (
-            id INTEGER PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             name TEXT UNIQUE,
+            full_name TEXT,
             role TEXT,
             category TEXT,
             employment TEXT,
-            target INTEGER
+            target INTEGER,
+            daily_rate REAL,
+            address TEXT,
+            phone TEXT,
+            email TEXT,
+            photo_filename TEXT,
+            birthday TEXT,
+            default_sss REAL,
+            default_pagibig REAL,
+            default_philhealth REAL,
+            default_hmo REAL,
+            sss_id TEXT,
+            pagibig_id TEXT,
+            philhealth_id TEXT,
+            hmo_id TEXT,
+            bank_name TEXT,
+            bank_account_name TEXT,
+            bank_account_number TEXT
         )"""
     )
     cur.execute(
         """CREATE TABLE IF NOT EXISTS schedule (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            staff_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            staff_id INTEGER REFERENCES staff(id),
             date TEXT,
             shift_label TEXT,
             time_range TEXT,
-            detail TEXT,
-            FOREIGN KEY(staff_id) REFERENCES staff(id)
+            detail TEXT
         )"""
     )
     # cup counts: store-wide printed-cup quantity for a given work day,
@@ -159,8 +180,8 @@ def init_db():
     # deductions). pay_date is the ISO date of the 10th or 25th payout.
     cur.execute(
         """CREATE TABLE IF NOT EXISTS payroll_extras (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            staff_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            staff_id INTEGER REFERENCES staff(id),
             pay_date TEXT,
             ot_hours REAL NOT NULL DEFAULT 0,
             sss REAL NOT NULL DEFAULT 0,
@@ -168,56 +189,26 @@ def init_db():
             philhealth REAL NOT NULL DEFAULT 0,
             hmo REAL NOT NULL DEFAULT 0,
             error_deduction REAL NOT NULL DEFAULT 0,
-            UNIQUE(staff_id, pay_date),
-            FOREIGN KEY(staff_id) REFERENCES staff(id)
+            UNIQUE(staff_id, pay_date)
         )"""
     )
-    existing_extras_cols = {row["name"] for row in cur.execute("PRAGMA table_info(payroll_extras)")}
-    if "error_deduction" not in existing_extras_cols:
-        cur.execute("ALTER TABLE payroll_extras ADD COLUMN error_deduction REAL NOT NULL DEFAULT 0")
-
-    # migrate older databases that predate these columns
-    existing_cols = {row["name"] for row in cur.execute("PRAGMA table_info(staff)")}
-    new_columns = {
-        "full_name": "TEXT",
-        "daily_rate": "REAL",
-        "address": "TEXT",
-        "phone": "TEXT",
-        "email": "TEXT",
-        "photo_filename": "TEXT",
-        "birthday": "TEXT",
-        "default_sss": "REAL",
-        "default_pagibig": "REAL",
-        "default_philhealth": "REAL",
-        "default_hmo": "REAL",
-        "sss_id": "TEXT",
-        "pagibig_id": "TEXT",
-        "philhealth_id": "TEXT",
-        "hmo_id": "TEXT",
-        "bank_name": "TEXT",
-        "bank_account_name": "TEXT",
-        "bank_account_number": "TEXT",
-    }
-    for col, col_type in new_columns.items():
-        if col not in existing_cols:
-            cur.execute(f"ALTER TABLE staff ADD COLUMN {col} {col_type}")
 
     for s in STAFF:
-        cur.execute("SELECT id FROM staff WHERE name=?", (s["name"],))
+        cur.execute("SELECT id FROM staff WHERE name=%s", (s["name"],))
         row = cur.fetchone()
         if row is None:
             # first-run seed only - full_name/role/employment/target/daily_rate
             # and everything else become user-editable via the Employees tab
             # after this, so they're never touched again below
             cur.execute(
-                "INSERT INTO staff (name, full_name, role, category, employment, target, daily_rate) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO staff (name, full_name, role, category, employment, target, daily_rate) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (s["name"], s["full_name"], s["role"], s["category"], s["employment"], s["target"], s["daily_rate"]),
             )
         else:
             # category is structural - the scheduling algorithm has logic
             # keyed to it, so it must always match the code, but every other
             # field is user-editable now and must survive app restarts
-            cur.execute("UPDATE staff SET category=? WHERE id=?", (s["category"], row["id"]))
+            cur.execute("UPDATE staff SET category=%s WHERE id=%s", (s["category"], row["id"]))
     db.commit()
     db.close()
 
@@ -281,8 +272,7 @@ def compute_machine_roles(days):
 
 
 def generate_schedule(year, month):
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
+    db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     cur = db.cursor()
 
     cur.execute("SELECT id, name, target FROM staff")
@@ -294,7 +284,7 @@ def generate_schedule(year, month):
 
     # wipe any previous schedule for this month before regenerating
     cur.execute(
-        "DELETE FROM schedule WHERE date BETWEEN ? AND ?",
+        "DELETE FROM schedule WHERE date BETWEEN %s AND %s",
         (first_day.isoformat(), last_day.isoformat()),
     )
     db.commit()
@@ -556,7 +546,7 @@ def generate_schedule(year, month):
         for a in assignments[d]:
             staff_id = staff_rows[a["name"]]["id"]
             cur.execute(
-                "INSERT INTO schedule (staff_id, date, shift_label, time_range, detail) VALUES (?,?,?,?,?)",
+                "INSERT INTO schedule (staff_id, date, shift_label, time_range, detail) VALUES (%s,%s,%s,%s,%s)",
                 (staff_id, d.isoformat(), a["label"], a["time_range"], a["detail"]),
             )
             if a["name"] in counts:
@@ -578,7 +568,7 @@ def fetch_schedule_days(db, year, month):
                   schedule.time_range, schedule.detail
            FROM schedule
            JOIN staff ON schedule.staff_id = staff.id
-           WHERE date BETWEEN ? AND ?
+           WHERE date BETWEEN %s AND %s
            ORDER BY date""",
         (first_day.isoformat(), last_day.isoformat()),
     )
@@ -640,7 +630,7 @@ def compute_payroll(db, start, end, pay_date):
     staff_rows = [dict(r) for r in cur.fetchall()]
 
     cur.execute(
-        "SELECT staff_id, date, shift_label FROM schedule WHERE date BETWEEN ? AND ?",
+        "SELECT staff_id, date, shift_label FROM schedule WHERE date BETWEEN %s AND %s",
         (start.isoformat(), end.isoformat()),
     )
     schedule_rows = cur.fetchall()
@@ -653,13 +643,13 @@ def compute_payroll(db, start, end, pay_date):
             cup_shifts[r["staff_id"]].append((r["date"], r["shift_label"]))
 
     cur.execute(
-        "SELECT date, quantity FROM cup_counts WHERE date BETWEEN ? AND ?",
+        "SELECT date, quantity FROM cup_counts WHERE date BETWEEN %s AND %s",
         (start.isoformat(), end.isoformat()),
     )
     cup_counts = {r["date"]: r["quantity"] for r in cur.fetchall()}
 
     cur.execute(
-        "SELECT staff_id, ot_hours, sss, pagibig, philhealth, hmo, error_deduction FROM payroll_extras WHERE pay_date=?",
+        "SELECT staff_id, ot_hours, sss, pagibig, philhealth, hmo, error_deduction FROM payroll_extras WHERE pay_date=%s",
         (pay_date.isoformat(),),
     )
     extras_by_staff = {r["staff_id"]: dict(r) for r in cur.fetchall()}
@@ -801,7 +791,7 @@ def api_staff_update(name):
     data = request.get_json(force=True)
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id FROM staff WHERE name=?", (name,))
+    cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
     row = cur.fetchone()
     staff_id = row["id"]
 
@@ -818,8 +808,8 @@ def api_staff_update(name):
             updates[field] = (value or "").strip()
 
     if updates:
-        set_clause = ", ".join(f"{field}=?" for field in updates)
-        cur.execute(f"UPDATE staff SET {set_clause} WHERE id=?", (*updates.values(), staff_id))
+        set_clause = ", ".join(f"{field}=%s" for field in updates)
+        cur.execute(f"UPDATE staff SET {set_clause} WHERE id=%s", (*updates.values(), staff_id))
         db.commit()
     return jsonify({"status": "ok"})
 
@@ -840,7 +830,7 @@ def api_staff_photo(name):
 
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id, photo_filename FROM staff WHERE name=?", (name,))
+    cur.execute("SELECT id, photo_filename FROM staff WHERE name=%s", (name,))
     row = cur.fetchone()
 
     filename = f"{name.lower()}.{ext}"
@@ -854,7 +844,7 @@ def api_staff_photo(name):
             os.remove(old_path)
 
     file.save(filepath)
-    cur.execute("UPDATE staff SET photo_filename=? WHERE id=?", (filename, row["id"]))
+    cur.execute("UPDATE staff SET photo_filename=%s WHERE id=%s", (filename, row["id"]))
     db.commit()
     return jsonify({"status": "ok", "photo_filename": filename})
 
@@ -893,15 +883,15 @@ def api_update_entry():
 
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id FROM staff WHERE name=?", (name,))
+    cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
     staff_id = cur.fetchone()["id"]
 
-    cur.execute("DELETE FROM schedule WHERE staff_id=? AND date=?", (staff_id, date_str))
+    cur.execute("DELETE FROM schedule WHERE staff_id=%s AND date=%s", (staff_id, date_str))
     time_range = None
     if label != "Off":
         time_range = SHIFT_TIME_RANGES[label]
         cur.execute(
-            "INSERT INTO schedule (staff_id, date, shift_label, time_range, detail) VALUES (?,?,?,?,?)",
+            "INSERT INTO schedule (staff_id, date, shift_label, time_range, detail) VALUES (%s,%s,%s,%s,%s)",
             (staff_id, date_str, label, time_range, None),
         )
     db.commit()
@@ -928,7 +918,7 @@ def api_has_schedule():
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT COUNT(*) as c FROM schedule WHERE date BETWEEN ? AND ?",
+        "SELECT COUNT(*) as c FROM schedule WHERE date BETWEEN %s AND %s",
         (first_day.isoformat(), last_day.isoformat()),
     )
     exists = cur.fetchone()["c"] > 0
@@ -961,7 +951,7 @@ def api_payroll_save():
 
     for row in data.get("cup_counts", []):
         cur.execute(
-            "INSERT INTO cup_counts (date, quantity) VALUES (?, ?) "
+            "INSERT INTO cup_counts (date, quantity) VALUES (%s, %s) "
             "ON CONFLICT(date) DO UPDATE SET quantity=excluded.quantity",
             (row.get("date"), int(row.get("quantity") or 0)),
         )
@@ -971,11 +961,11 @@ def api_payroll_save():
         name = row.get("name")
         if name not in staff_by_name:
             continue
-        cur.execute("SELECT id FROM staff WHERE name=?", (name,))
+        cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
         staff_id = cur.fetchone()["id"]
         cur.execute(
             """INSERT INTO payroll_extras (staff_id, pay_date, ot_hours, sss, pagibig, philhealth, hmo, error_deduction)
-               VALUES (?,?,?,?,?,?,?,?)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT(staff_id, pay_date) DO UPDATE SET
                  ot_hours=excluded.ot_hours, sss=excluded.sss, pagibig=excluded.pagibig,
                  philhealth=excluded.philhealth, hmo=excluded.hmo, error_deduction=excluded.error_deduction""",
