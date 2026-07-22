@@ -46,29 +46,18 @@ PDF export — runs fully locally, no internet required for those).
 
 ## Deploying (Fly.io, auto-deploy on push)
 
-The app is set up to deploy as a Docker container to [Fly.io](https://fly.io),
-with a persistent volume so `schedule.db` and uploaded employee photos
-survive redeploys, and a GitHub Actions workflow that redeploys
-automatically on every push to `main`.
+The app runs as a Docker container on [Fly.io](https://fly.io) at
+**metro-packaging-depot.fly.dev**, with a 1GB persistent volume mounted at
+`/data` so `schedule.db` and uploaded employee photos survive redeploys
+(see `entrypoint.sh`).
 
-One-time setup:
+Auto-deploy is handled by Fly's own GitHub integration (set up via the Fly
+dashboard's "Launch from GitHub"), not a GitHub Actions workflow — Fly
+watches this repo directly and rebuilds/redeploys on every push to `main`.
+No `FLY_API_TOKEN` secret or workflow file needed.
 
-1. Install [flyctl](https://fly.io/docs/flyctl/install/) and run
-   `fly auth signup` (or `fly auth login` if you already have an account).
-2. From this directory, `fly apps create <your-app-name>` — pick a
-   globally-unique name and put it in `fly.toml`'s `app =` line (it also
-   sets `primary_region`, currently `sin`/Singapore — change if you're
-   elsewhere).
-3. `fly volumes create data --region sin --size 1` — creates the 1GB
-   persistent volume the app mounts at `/data`.
-4. `fly deploy` — builds and deploys manually the first time, so you can
-   confirm it works before wiring up CI.
-5. `fly tokens create deploy -x 999999h` — generates a deploy token. Add
-   it as a GitHub repo secret named `FLY_API_TOKEN` (repo **Settings →
-   Secrets and variables → Actions → New repository secret**).
-
-After that, every `git push` to `main` triggers
-`.github/workflows/fly-deploy.yml`, which redeploys automatically.
+To manage the deployed app from the CLI: `fly status -a metro-packaging-depot`,
+`fly logs -a metro-packaging-depot`, `fly volumes list -a metro-packaging-depot`.
 
 Note: Chromium (for the schedule PDF) needs real memory, so the VM is
 sized at 1GB with scale-to-zero when idle (`auto_stop_machines`) to keep
