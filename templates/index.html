@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{ business_name }} — Monthly Schedule</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: {
+            blue: '#1c33bb',
+            green: '#07c067',
+            tan: '#b88c53',
+          },
+        },
+        fontFamily: {
+          display: ['Fraunces', 'Georgia', 'serif'],
+          sans: ['Inter', 'sans-serif'],
+          mono: ['IBM Plex Mono', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; }
+  ::-webkit-scrollbar { height: 10px; width: 10px; }
+  ::-webkit-scrollbar-track { background: #f1f1f1; }
+  ::-webkit-scrollbar-thumb { background: #c7ccd9; border-radius: 6px; }
+  thead th { position: sticky; top: 0; z-index: 10; }
+  .tab-btn, .payday-btn { color: rgba(255,255,255,0.7); }
+  .tab-btn.active-tab, .payday-btn.active-payday { background: #ffffff; color: #1c33bb; }
+  /* The <select>s in the header use white text/translucent background to
+     sit on the blue header bar, but the opened option list is a separate
+     native popup that browsers render with its own (usually white)
+     background - inheriting that white text made options unreadable. */
+  select option { color: #111827; background: #ffffff; }
+</style>
+</head>
+<body class="bg-[#F3F4F8] text-black">
+
+<header class="bg-brand-blue text-white px-6 py-5 flex items-center justify-between flex-wrap gap-4">
+  <div class="flex items-center gap-3 flex-wrap">
+    <span class="text-3xl text-brand-green leading-none">⟡</span>
+    <div>
+      <h1 class="font-display font-semibold text-xl tracking-tight">{{ business_name }}</h1>
+      <p class="text-xs text-white/70">Monthly schedule generator</p>
+    </div>
+    <div class="ml-2 inline-flex bg-white/10 rounded-lg p-1 gap-1">
+      <button id="tabScheduleBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
+      <button id="tabPayrollBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
+      <button id="tabEmployeesBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Employees</button>
+    </div>
+  </div>
+
+  <div id="scheduleControls" class="flex items-center gap-2 flex-wrap">
+    <select id="monthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+    <select id="yearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+    <button id="generateBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
+      Generate schedule
+    </button>
+    <button id="downloadPdfBtn" class="bg-white text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-white/90 active:bg-white/80 transition disabled:opacity-60 flex items-center gap-1.5">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download PDF
+    </button>
+  </div>
+
+  <div id="payrollControls" class="flex items-center gap-2 flex-wrap" style="display:none">
+    <select id="payrollMonthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+    <select id="payrollYearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+    <div class="inline-flex bg-white/10 rounded-lg p-1 gap-1">
+      <button id="payday10Btn" class="payday-btn px-3 py-1.5 rounded-md text-sm font-medium transition">10th</button>
+      <button id="payday25Btn" class="payday-btn px-3 py-1.5 rounded-md text-sm font-medium transition">25th</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-[1500px] mx-auto px-6 py-7">
+  <div id="scheduleView">
+    <section id="summary" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6"></section>
+
+    <section class="flex flex-wrap gap-x-5 gap-y-2 mb-3 text-xs text-gray-600">
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-blue"></i>Opening</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-gray-200 border border-black"></i>Closing</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-tan"></i>Assist</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-green"></i>Inventory Day</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-[#8a6a3e]"></i>Printer</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-black"></i>Checker</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-gray-300"></i>Off</span>
+    </section>
+
+    <p class="text-xs text-gray-500 mb-2">Click any shift to reassign it.</p>
+
+    <div class="bg-white border border-gray-200 rounded-xl overflow-auto shadow-sm">
+      <table id="scheduleTable" class="w-full min-w-[900px] border-collapse">
+        <thead>
+          <tr id="tableHeadRow" class="bg-brand-blue text-white"></tr>
+        </thead>
+        <tbody id="tableBody" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+
+    <div id="emptyState" class="text-center py-16 text-gray-500" style="display:none;">
+      <p class="mb-4 text-sm">No schedule generated for this month yet.</p>
+      <button class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95" onclick="generateSchedule()">Generate now</button>
+    </div>
+  </div>
+
+  <div id="payrollView" style="display:none">
+    <p id="payrollPeriodLabel" class="text-sm text-gray-600 mb-5"></p>
+
+    <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-6">
+      <h2 class="font-display font-semibold text-base mb-1">Printed cup counts</h2>
+      <p id="cupCountsHint" class="text-xs text-gray-500 mb-3">
+        Store-wide printed-cup total for every day in this cutoff,
+        including weekends. The Printer earns ₱0.15/cup and the Checker
+        ₱0.10/cup, based on whoever held each role that day.
+      </p>
+      <div id="cupCountsContainer" class="overflow-auto"></div>
+      <p id="noCupDays" class="text-xs text-gray-400" style="display:none">No machine-operator work days in this cutoff.</p>
+    </div>
+
+    <div class="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm mb-4 inline-flex items-center gap-3">
+      <span class="text-xs text-gray-500 uppercase tracking-wide font-mono">Total salary this cutoff</span>
+      <span id="payrollTotalNet" class="font-mono text-2xl font-semibold text-brand-blue"></span>
+    </div>
+
+    <div class="bg-white border border-gray-200 rounded-xl overflow-auto shadow-sm mb-4">
+      <table id="payrollTable" class="w-full min-w-[1200px] border-collapse">
+        <thead>
+          <tr id="payrollHeadRow" class="bg-brand-blue text-white"></tr>
+        </thead>
+        <tbody id="payrollBody" class="divide-y divide-gray-100"></tbody>
+        <tfoot id="payrollFoot"></tfoot>
+      </table>
+    </div>
+
+    <div class="flex items-center gap-3 mb-10 flex-wrap">
+      <button id="savePayrollBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
+        Save payroll data
+      </button>
+      <button id="downloadPayslipsBtn" class="bg-white text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 border border-gray-200 hover:bg-gray-50 transition disabled:opacity-60 flex items-center gap-1.5">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Payslips PDF
+      </button>
+      <span id="payrollSaveStatus" class="text-xs text-gray-500"></span>
+    </div>
+  </div>
+
+  <div id="employeesView" style="display:none">
+    <p class="text-sm text-gray-600 mb-5">
+      Profile, contact details, wage rate, and standing payroll deductions
+      per employee. Each card saves independently.
+    </p>
+    <div id="employeesGrid" class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-10"></div>
+  </div>
+</main>
+
+<footer class="max-w-[1500px] mx-auto px-6 pb-10">
+  <details class="bg-white border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-600">
+    <summary class="cursor-pointer font-display font-semibold text-black text-[15px]">Scheduling rules used</summary>
+    <ul class="list-disc pl-5 mt-3 space-y-1.5 leading-relaxed">
+      <li><strong class="text-black">Store hours:</strong> Mon–Sat 8:00 AM–8:00 PM, Sun 8:00 AM–5:00 PM.</li>
+      <li><strong class="text-black">Sales shifts:</strong> Opening 8:00 AM–5:00 PM, Closing 11:00 AM–8:00 PM.</li>
+      <li><strong class="text-black">Clare</strong> (Store Manager) — guaranteed 24 duty days/month.</li>
+      <li><strong class="text-black">Jem &amp; Von</strong> (Sales) — guaranteed 21 duty days/month each.</li>
+      <li><strong class="text-black">Jha</strong> (Part-time Sales) — permanent Wed 8AM–5PM (Opening), Fri 8AM–12NN assist, and most Sundays (always keeps at least 2 Sundays off a month to rest).</li>
+      <li><strong class="text-black">Sundays</strong> are capped at 2 people total on Opening (8AM–5PM).</li>
+      <li><strong class="text-black">1st Sunday of the month</strong> is inventory day — all 6 staff work.</li>
+      <li><strong class="text-black">2nd Wednesday of the month</strong> is also an all-hands day — Clare, Jem, and Von are all pulled in alongside Jha, Macky, and Joshua.</li>
+      <li><strong class="text-black">Macky &amp; Joshua</strong> (Machine Operators) — fixed 9:00 AM–6:00 PM, Mon–Fri only. Each week one of them does 3 days Printer / 2 days Checker and the other does the reverse; who's "heavy" alternates week to week to balance out over the month.</li>
+      <li>No one works more than <strong class="text-black">6 consecutive days</strong> — a rest day is inserted automatically before a 7th straight day.</li>
+      <li><strong class="text-black">Opening/Closing runs in blocks</strong> — up to 4 straight days on the same shift type before switching, instead of flipping day to day.</li>
+      <li>Overlap days (a 3rd sales person on Opening or Closing) are spread roughly weekly rather than bunched at month-end, so Clare/Jem/Von reach their guaranteed monthly day counts.</li>
+      <li>Days off are grouped into consecutive pairs where possible.</li>
+    </ul>
+  </details>
+</footer>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

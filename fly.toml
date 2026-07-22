@@ -1,0 +1,19 @@
+# Fly.io app config. `app` must be a globally-unique name — change it if
+# `fly launch`/`fly deploy` reports it's taken, e.g. "metro-depot-scheduler-2".
+app = "metro-depot-scheduler"
+primary_region = "sin"
+
+[[mounts]]
+  source = "data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb"

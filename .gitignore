@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+
+# runtime data — contains real employee PII/payroll data, never commit
+schedule.db
+static/uploads/*
+!static/uploads/.gitkeep
+
+venv/
+.venv/
+
+# per-developer local Claude Code permissions, not meant to be shared
+.claude/settings.local.json

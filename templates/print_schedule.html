@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>{{ business_name }} — {{ month_name }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: {
+            blue: '#1c33bb',
+            green: '#07c067',
+            tan: '#b88c53',
+          },
+        },
+        fontFamily: {
+          display: ['Fraunces', 'Georgia', 'serif'],
+          sans: ['Inter', 'sans-serif'],
+          mono: ['IBM Plex Mono', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* Chromium's print pipeline defaults to suppressing background colors
+     to save ink - without this, every chip/header would print as plain
+     white. This forces the exact on-screen colors through. */
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; color-adjust: exact; }
+  body { font-family: 'Inter', sans-serif; margin: 0; }
+  .print-page { padding: 8mm; }
+  .print-page:not(:last-child) { page-break-after: always; break-after: page; }
+  table { border-collapse: collapse; }
+</style>
+</head>
+<body class="bg-white text-black">
+
+{% for chunk in day_chunks %}
+<div class="print-page">
+  <header class="bg-brand-blue text-white px-5 py-3 rounded-t-xl grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+    <div class="flex items-center gap-2.5 min-w-0">
+      <span class="text-2xl text-brand-green leading-none">⟡</span>
+      <h1 class="font-display font-semibold text-base tracking-tight leading-tight truncate">{{ business_name }}</h1>
+    </div>
+    <p class="font-display font-semibold text-2xl tracking-tight text-center whitespace-nowrap">{{ month_name }}</p>
+    <p class="text-xs text-white/80 font-mono text-right">{{ chunk.range_label }}</p>
+  </header>
+
+  <section class="flex flex-wrap gap-x-4 gap-y-1.5 my-2.5 text-[11px] text-gray-600">
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-blue"></i>Opening</span>
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-gray-200 border border-black"></i>Closing</span>
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-tan"></i>Assist</span>
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-green"></i>Inventory Day</span>
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-[#8a6a3e]"></i>Printer</span>
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-black"></i>Checker</span>
+    <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-gray-300"></i>Off</span>
+  </section>
+
+  <div class="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+    <table class="w-full border-collapse">
+      <thead>
+        <tr class="bg-brand-blue text-white">
+          <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">Date</th>
+          {% for s in staff %}
+          <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">{{ s.name }}</th>
+          {% endfor %}
+          <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">Off Today</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for day in chunk.days %}
+        <tr class="{{ 'bg-green-50/40' if day.weekday == 'Sunday' else ('bg-gray-50' if day.weekday == 'Saturday' else '') }}">
+          <td class="px-3.5 py-2.5 align-top whitespace-nowrap">
+            <span class="font-mono font-medium text-[15px]">{{ day.day_num }}</span>
+            <span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">{{ day.weekday_short }}</span>
+          </td>
+          {% for s in staff %}
+          <td class="px-3.5 py-2.5 align-top">
+            {% set entry = day.entries_by_name.get(s.name) %}
+            {% if entry %}
+            <span class="inline-flex flex-col items-start gap-0.5 rounded-md px-2.5 py-1.5 text-xs leading-tight {{ chip_classes.get(entry.shift_label, 'bg-gray-50 text-black border-l-2 border-gray-300') }}">
+              <span class="font-semibold">{{ entry.shift_label }}</span>
+              <span class="font-mono text-[10px] opacity-70">{{ entry.time_range }}</span>
+            </span>
+            {% else %}
+            <span class="inline-block bg-gray-50 border border-gray-200 text-gray-400 text-xs rounded-md px-2 py-1">Off</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+          <td class="px-3.5 py-2.5 align-top">
+            {% if day.off %}
+              {% for n in day.off %}
+              <span class="inline-block bg-gray-50 border border-gray-200 rounded-md px-2 py-0.5 mr-1 mb-1 text-[11px] text-gray-500">{{ n }}</span>
+              {% endfor %}
+            {% else %}
+              <span class="text-gray-300">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+</body>
+</html>
