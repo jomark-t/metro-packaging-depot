@@ -3,10 +3,30 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+const CURRENT_USER = window.CURRENT_USER || { display_name: null, is_superuser: false, staff_name: null };
+const IS_SUPERUSER = !!CURRENT_USER.is_superuser;
+
+const userMenuBtn = document.getElementById("userMenuBtn");
+const userMenu = document.getElementById("userMenu");
+if (userMenuBtn && userMenu) {
+  userMenuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    userMenu.classList.toggle("hidden");
+  });
+  document.addEventListener("click", (e) => {
+    if (!userMenu.classList.contains("hidden") && !userMenu.contains(e.target)) {
+      userMenu.classList.add("hidden");
+    }
+  });
+}
+
 const monthSelect = document.getElementById("monthSelect");
 const yearSelect = document.getElementById("yearSelect");
 const generateBtn = document.getElementById("generateBtn");
 const downloadPdfBtn = document.getElementById("downloadPdfBtn");
+const snapshotSelect = document.getElementById("snapshotSelect");
+const createSnapshotBtn = document.getElementById("createSnapshotBtn");
+const restoreSnapshotBtn = document.getElementById("restoreSnapshotBtn");
 const summaryEl = document.getElementById("summary");
 const tableHeadRow = document.getElementById("tableHeadRow");
 const tableBody = document.getElementById("tableBody");
@@ -45,6 +65,7 @@ const CHIP_CLASSES = {
   Inventory: "bg-green-50 text-brand-green border-l-2 border-brand-green",
   Printer: "bg-[#e3d1ba] text-[#8a6a3e] border-l-2 border-[#8a6a3e]",
   Checker: "bg-gray-300 text-black border-l-2 border-black",
+  "Paid Time Off": "bg-purple-50 text-purple-700 border-l-2 border-purple-700",
 };
 
 function chipClasses(label) {
@@ -54,9 +75,10 @@ function chipClasses(label) {
 // Shifts a person can be manually reassigned to, keyed by staff category.
 // Mirrors EDITABLE_OPTIONS in app.py.
 const EDITABLE_OPTIONS = {
-  sales: ["Opening", "Closing", "Inventory", "Off"],
-  sales_pt: ["Opening", "Closing", "Assist", "Inventory", "Off"],
-  machine: ["Printer", "Checker", "Inventory", "Off"],
+  manager: ["Opening", "Closing", "Inventory", "Paid Time Off", "Off"],
+  sales: ["Opening", "Closing", "Inventory", "Paid Time Off", "Off"],
+  sales_pt: ["Opening", "Closing", "Assist", "Inventory", "Paid Time Off", "Off"],
+  machine: ["Printer", "Checker", "Inventory", "Paid Time Off", "Off"],
 };
 
 function cellDisplayHtml(label, timeRange) {
@@ -128,6 +150,7 @@ async function loadSchedule() {
   const month = monthSelect.value;
   const res = await fetch(`/api/schedule?year=${year}&month=${month}`);
   const data = await res.json();
+  loadSnapshots();
 
   if (!data.days || data.days.length === 0 || Object.values(data.staff_counts).every((c) => c === 0)) {
     scheduleTable.style.display = "none";
@@ -143,6 +166,74 @@ async function loadSchedule() {
 
   renderSummary(data.staff, data.staff_counts);
   renderTable(data.days, data.staff);
+}
+
+async function loadSnapshots() {
+  const year = yearSelect.value;
+  const month = monthSelect.value;
+  const res = await fetch(`/api/schedule/snapshots?year=${year}&month=${month}`);
+  const data = await res.json();
+
+  if (!data.snapshots.length) {
+    snapshotSelect.innerHTML = `<option value="">No snapshots</option>`;
+    restoreSnapshotBtn.disabled = true;
+    return;
+  }
+  snapshotSelect.innerHTML = data.snapshots.map((s) => `<option value="${s.id}">${s.label}</option>`).join("");
+  restoreSnapshotBtn.disabled = !IS_SUPERUSER;
+}
+
+async function createSnapshot() {
+  if (!IS_SUPERUSER) return;
+  createSnapshotBtn.disabled = true;
+  const original = createSnapshotBtn.textContent;
+  createSnapshotBtn.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/schedule/snapshot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ year: yearSelect.value, month: monthSelect.value }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.message || "Could not create a snapshot.");
+      return;
+    }
+    await loadSnapshots();
+    snapshotSelect.value = data.id;
+  } finally {
+    createSnapshotBtn.disabled = !IS_SUPERUSER;
+    createSnapshotBtn.textContent = original;
+  }
+}
+
+async function restoreSnapshot() {
+  if (!IS_SUPERUSER) return;
+  const snapshotId = snapshotSelect.value;
+  if (!snapshotId) return;
+  const label = snapshotSelect.options[snapshotSelect.selectedIndex].textContent;
+  const monthName = MONTH_NAMES[parseInt(monthSelect.value, 10) - 1];
+  const confirmed = window.confirm(
+    `Restore "${label}"?\n\n` +
+      `This replaces the entire current schedule for ${monthName} ${yearSelect.value} with what was saved in that snapshot - any changes made since won't be recoverable unless you snapshot first.`
+  );
+  if (!confirmed) return;
+
+  restoreSnapshotBtn.disabled = true;
+  const original = restoreSnapshotBtn.textContent;
+  restoreSnapshotBtn.textContent = "Restoring…";
+  try {
+    const res = await fetch(`/api/schedule/snapshot/${snapshotId}/restore`, { method: "POST" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.message || "Could not restore that snapshot.");
+      return;
+    }
+    await loadSchedule();
+  } finally {
+    restoreSnapshotBtn.disabled = !IS_SUPERUSER;
+    restoreSnapshotBtn.textContent = original;
+  }
 }
 
 function renderSummary(staff, counts) {
@@ -206,6 +297,14 @@ function renderTable(days, staff) {
 }
 
 async function generateSchedule() {
+  if (!IS_SUPERUSER) return;
+  const monthName = MONTH_NAMES[parseInt(monthSelect.value, 10) - 1];
+  const confirmed = window.confirm(
+    `Regenerate the schedule for ${monthName} ${yearSelect.value}?\n\n` +
+      "This replaces the entire saved schedule for that month, including any manual reassignments (Paid Time Off, edited shifts, etc.) - they'll be lost."
+  );
+  if (!confirmed) return;
+
   generateBtn.disabled = true;
   generateBtn.textContent = "Generating…";
   try {
@@ -216,7 +315,7 @@ async function generateSchedule() {
     });
     await loadSchedule();
   } finally {
-    generateBtn.disabled = false;
+    generateBtn.disabled = !IS_SUPERUSER;
     generateBtn.textContent = "Generate schedule";
   }
 }
@@ -249,6 +348,8 @@ async function downloadPdf() {
 
 generateBtn.addEventListener("click", generateSchedule);
 downloadPdfBtn.addEventListener("click", downloadPdf);
+createSnapshotBtn.addEventListener("click", createSnapshot);
+restoreSnapshotBtn.addEventListener("click", restoreSnapshot);
 monthSelect.addEventListener("change", loadSchedule);
 yearSelect.addEventListener("change", loadSchedule);
 tableBody.addEventListener("click", (e) => {
@@ -256,6 +357,14 @@ tableBody.addEventListener("click", (e) => {
   if (!td || td.querySelector("select")) return;
   openCellEditor(td);
 });
+
+if (!IS_SUPERUSER) {
+  generateBtn.disabled = true;
+  generateBtn.title = "Superuser only";
+  createSnapshotBtn.disabled = true;
+  createSnapshotBtn.title = "Superuser only";
+  restoreSnapshotBtn.title = "Superuser only";
+}
 
 initSelectors();
 loadSchedule();
@@ -434,8 +543,9 @@ function renderCupCounts(cupRows) {
     input.min = "0";
     input.value = row.quantity;
     input.dataset.date = row.date;
+    input.disabled = !IS_SUPERUSER;
     input.className =
-      "cup-input w-20 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue";
+      "cup-input w-20 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500";
     td.appendChild(input);
     qtyRow.appendChild(td);
   });
@@ -458,9 +568,11 @@ function computeRowTotals(row) {
   const philhealth = parseFloat(row.querySelector(".philhealth-input").value) || 0;
   const hmo = parseFloat(row.querySelector(".hmo-input").value) || 0;
   const errorDed = errorDeductionValue(row);
+  const cashAdvance = parseFloat(row.querySelector(".cash-advance-input").value) || 0;
 
   const otPay = otHours * currentOtRate;
-  const totalDeductions = sss + pagibig + philhealth + hmo + errorDed;
+  const absenceDed = parseFloat(row.dataset.absenceDeduction) || 0;
+  const totalDeductions = sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed;
   const basePay = parseFloat(row.dataset.basePay) || 0;
   const bonus = parseFloat(row.dataset.bonus) || 0;
   const netPay = basePay + otPay + bonus - totalDeductions;
@@ -473,7 +585,7 @@ function computeRowTotals(row) {
 function computeGrandTotals() {
   const totals = {
     days: 0, base: 0, bonus: 0, otHours: 0, otPay: 0,
-    sss: 0, pagibig: 0, philhealth: 0, hmo: 0, errorDed: 0, ded: 0, net: 0,
+    sss: 0, pagibig: 0, philhealth: 0, hmo: 0, errorDed: 0, cashAdvance: 0, absenceDed: 0, ded: 0, net: 0,
   };
 
   Array.from(payrollBody.querySelectorAll("tr")).forEach((row) => {
@@ -485,8 +597,10 @@ function computeGrandTotals() {
     const philhealth = parseFloat(row.querySelector(".philhealth-input").value) || 0;
     const hmo = parseFloat(row.querySelector(".hmo-input").value) || 0;
     const errorDed = errorDeductionValue(row);
+    const cashAdvance = parseFloat(row.querySelector(".cash-advance-input").value) || 0;
+    const absenceDed = parseFloat(row.dataset.absenceDeduction) || 0;
     const otPay = otHours * currentOtRate;
-    const ded = sss + pagibig + philhealth + hmo + errorDed;
+    const ded = sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed;
     const net = base + otPay + bonus - ded;
 
     totals.days += parseFloat(row.dataset.days) || 0;
@@ -499,6 +613,8 @@ function computeGrandTotals() {
     totals.philhealth += philhealth;
     totals.hmo += hmo;
     totals.errorDed += errorDed;
+    totals.cashAdvance += cashAdvance;
+    totals.absenceDed += absenceDed;
     totals.ded += ded;
     totals.net += net;
   });
@@ -517,6 +633,8 @@ function computeGrandTotals() {
   foot.querySelector(".totals-philhealth").textContent = formatMoney(totals.philhealth);
   foot.querySelector(".totals-hmo").textContent = formatMoney(totals.hmo);
   foot.querySelector(".totals-error-ded").textContent = formatMoney(totals.errorDed);
+  foot.querySelector(".totals-cash-advance").textContent = formatMoney(totals.cashAdvance);
+  foot.querySelector(".totals-absence-ded").textContent = formatMoney(totals.absenceDed);
   foot.querySelector(".totals-ded").textContent = formatMoney(totals.ded);
   foot.querySelector(".totals-net").textContent = formatMoney(totals.net);
 }
@@ -535,6 +653,8 @@ function renderPayrollFooter() {
       <td class="px-3 py-3 font-mono totals-philhealth whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-hmo whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-error-ded whitespace-nowrap"></td>
+      <td class="px-3 py-3 font-mono totals-cash-advance whitespace-nowrap"></td>
+      <td class="px-3 py-3 font-mono totals-absence-ded whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-ded whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono text-brand-blue totals-net whitespace-nowrap"></td>
     </tr>
@@ -545,7 +665,7 @@ function renderPayrollTable(staffList) {
   const headers = [
     "Name", "Role", "Days", "Base Pay", "Bonus",
     `OT Hrs`, `OT Pay (×₱${currentOtRate})`, "SSS", "Pag-IBIG", "PhilHealth", "HMO", "Printing Errors",
-    "Total Ded.", "Net Pay",
+    "Cash Advance", "Absence Ded.", "Total Ded.", "Net Pay",
   ];
   payrollHeadRow.innerHTML = headers
     .map((h) => `<th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3 py-2.5 whitespace-nowrap">${h}</th>`)
@@ -558,6 +678,7 @@ function renderPayrollTable(staffList) {
     tr.dataset.basePay = p.base_pay;
     tr.dataset.bonus = p.bonus;
     tr.dataset.days = p.days_worked;
+    tr.dataset.absenceDeduction = p.absence_deduction;
 
     const nameTd = document.createElement("td");
     nameTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
@@ -592,7 +713,8 @@ function renderPayrollTable(staffList) {
       input.min = "0";
       input.step = "0.01";
       input.value = value;
-      input.className = `${cls} w-24 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue`;
+      input.disabled = !IS_SUPERUSER;
+      input.className = `${cls} w-24 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500`;
       input.addEventListener("input", () => {
         computeRowTotals(tr);
         computeGrandTotals();
@@ -621,8 +743,9 @@ function renderPayrollTable(staffList) {
       input.min = "0";
       input.step = "0.01";
       input.value = p.error_deduction;
+      input.disabled = !IS_SUPERUSER;
       input.className =
-        "error-deduction-input w-24 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue";
+        "error-deduction-input w-24 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500";
       input.addEventListener("input", () => {
         computeRowTotals(tr);
         computeGrandTotals();
@@ -633,6 +756,13 @@ function renderPayrollTable(staffList) {
       errorDedTd.textContent = "—";
     }
     tr.appendChild(errorDedTd);
+
+    tr.appendChild(inputCell("cash-advance-input", p.cash_advance));
+
+    const absenceDedTd = document.createElement("td");
+    absenceDedTd.className = "px-3 py-2.5 align-top font-mono whitespace-nowrap";
+    absenceDedTd.textContent = p.monthly_salary ? formatMoney(p.absence_deduction) : "—";
+    tr.appendChild(absenceDedTd);
 
     const totalDedTd = document.createElement("td");
     totalDedTd.className = "px-3 py-2.5 align-top font-mono total-deductions-cell whitespace-nowrap";
@@ -652,6 +782,7 @@ function renderPayrollTable(staffList) {
 }
 
 async function savePayrollData() {
+  if (!IS_SUPERUSER) return;
   savePayrollBtn.disabled = true;
   const original = savePayrollBtn.textContent;
   savePayrollBtn.textContent = "Saving…";
@@ -670,6 +801,7 @@ async function savePayrollData() {
       philhealth: tr.querySelector(".philhealth-input").value,
       hmo: tr.querySelector(".hmo-input").value,
       error_deduction: errorDeductionValue(tr),
+      cash_advance: tr.querySelector(".cash-advance-input").value,
     }));
 
     const year = payrollYearSelect.value;
@@ -689,12 +821,13 @@ async function savePayrollData() {
   } catch (err) {
     payrollSaveStatus.textContent = "Could not save. Please try again.";
   } finally {
-    savePayrollBtn.disabled = false;
+    savePayrollBtn.disabled = !IS_SUPERUSER;
     savePayrollBtn.textContent = original;
   }
 }
 
 async function downloadPayslips() {
+  if (!IS_SUPERUSER) return;
   downloadPayslipsBtn.disabled = true;
   const original = downloadPayslipsBtn.innerHTML;
   downloadPayslipsBtn.textContent = "Preparing…";
@@ -716,7 +849,7 @@ async function downloadPayslips() {
     alert("Could not generate the payslips PDF.");
   } finally {
     downloadPayslipsBtn.innerHTML = original;
-    downloadPayslipsBtn.disabled = false;
+    downloadPayslipsBtn.disabled = !IS_SUPERUSER;
   }
 }
 
@@ -735,12 +868,23 @@ payrollYearSelect.addEventListener("change", loadPayroll);
 savePayrollBtn.addEventListener("click", savePayrollData);
 downloadPayslipsBtn.addEventListener("click", downloadPayslips);
 
+if (!IS_SUPERUSER) {
+  savePayrollBtn.disabled = true;
+  savePayrollBtn.title = "Superuser only";
+  downloadPayslipsBtn.disabled = true;
+  downloadPayslipsBtn.title = "Superuser only";
+}
+
 initPayrollSelectors();
 
 // ---------------------------------------------------------------------------
 // Employees
 // ---------------------------------------------------------------------------
 const employeesGrid = document.getElementById("employeesGrid");
+const employeesTabs = document.getElementById("employeesTabs");
+
+let employeesData = [];
+let selectedEmployeeName = null;
 
 function escapeHtml(str) {
   const div = document.createElement("div");
@@ -751,7 +895,11 @@ function escapeHtml(str) {
 async function loadEmployees() {
   const res = await fetch("/api/staff");
   const data = await res.json();
-  renderEmployees(data.staff);
+  employeesData = data.staff;
+  if (!selectedEmployeeName || !employeesData.some((s) => s.name === selectedEmployeeName)) {
+    selectedEmployeeName = employeesData[0]?.name ?? null;
+  }
+  renderEmployees();
 }
 
 function contributionBlockHtml(label, idClass, idValue, amountClass, amountValue) {
@@ -770,6 +918,18 @@ function contributionBlockHtml(label, idClass, idValue, amountClass, amountValue
   `;
 }
 
+function sectionHtml(title, innerHtml, headerExtraHtml) {
+  return `
+    <section class="border border-gray-200 rounded-lg p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">${title}</h3>
+        ${headerExtraHtml || ""}
+      </div>
+      ${innerHtml}
+    </section>
+  `;
+}
+
 function employeeCardHtml(s) {
   const photoSrc = s.photo_filename ? `/static/uploads/${s.photo_filename}` : "";
   const initial = (s.full_name || s.name || "?").trim().charAt(0).toUpperCase();
@@ -777,9 +937,94 @@ function employeeCardHtml(s) {
     ? `<img class="employee-photo w-full h-full object-cover" src="${escapeHtml(photoSrc)}" />`
     : `<span class="employee-photo-placeholder text-xl font-semibold text-gray-400">${escapeHtml(initial)}</span>`;
 
+  const basicInfoHtml = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+      <label class="block"><span class="text-gray-500">Employment</span>
+        <input class="employment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.employment)}" /></label>
+      <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
+        <input type="number" step="0.01" min="0" class="daily-rate-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.daily_rate ?? 0}" /></label>
+      <label class="block"><span class="text-gray-500">Fixed monthly salary (₱)</span>
+        <input type="number" step="0.01" min="0" class="monthly-salary-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.monthly_salary ?? ""}" placeholder="—" /></label>
+      <label class="block"><span class="text-gray-500">Monthly target (days)</span>
+        <input type="number" min="0" class="target-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.target ?? ""}" placeholder="—" /></label>
+      <label class="block"><span class="text-gray-500">Birthday</span>
+        <input type="date" class="birthday-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${escapeHtml(s.birthday)}" /></label>
+      <label class="block"><span class="text-gray-500">Phone</span>
+        <input class="phone-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.phone)}" /></label>
+      <label class="block col-span-2"><span class="text-gray-500">Email</span>
+        <input type="email" class="email-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.email)}" /></label>
+      <label class="block col-span-2 md:col-span-4"><span class="text-gray-500">Address</span>
+        <textarea class="address-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" rows="2">${escapeHtml(s.address)}</textarea></label>
+    </div>
+  `;
+
+  const governmentHtml = `
+    <div class="grid grid-cols-2 gap-3 text-xs">
+      ${contributionBlockHtml("SSS", "sss-id-input", s.sss_id, "sss-default-input", s.default_sss)}
+      ${contributionBlockHtml("Pag-IBIG", "pagibig-id-input", s.pagibig_id, "pagibig-default-input", s.default_pagibig)}
+      ${contributionBlockHtml("PhilHealth", "philhealth-id-input", s.philhealth_id, "philhealth-default-input", s.default_philhealth)}
+      ${contributionBlockHtml("HMO", "hmo-id-input", s.hmo_id, "hmo-default-input", s.default_hmo)}
+    </div>
+  `;
+
+  const bankHtml = `
+    <div class="grid grid-cols-2 gap-3 text-xs">
+      <label class="block col-span-2"><span class="text-gray-500">Bank name</span>
+        <input class="bank-name-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.bank_name)}" /></label>
+      <label class="block"><span class="text-gray-500">Account name</span>
+        <input class="bank-account-name-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.bank_account_name)}" /></label>
+      <label class="block"><span class="text-gray-500">Account number</span>
+        <input class="bank-account-number-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${escapeHtml(s.bank_account_number)}" /></label>
+    </div>
+  `;
+
+  const ptoHtml = `
+    <label class="block text-xs mb-3 max-w-[200px]"><span class="text-gray-500">Entitlement (days/yr)</span>
+      <input type="number" min="0" class="pto-entitlement-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.pto_entitlement ?? ""}" placeholder="—" /></label>
+    <p class="pto-summary text-sm text-gray-600 mb-2">Loading…</p>
+    <div class="pto-table-wrap"></div>
+  `;
+
+  const isSelf = !IS_SUPERUSER && CURRENT_USER.staff_name === s.name;
+  let loginHtml;
+  if (IS_SUPERUSER) {
+    loginHtml = `
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input type="checkbox" class="login-enabled-input rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${s.login_enabled ? "checked" : ""} />
+        Eligible to log in
+      </label>
+      <div class="flex items-center gap-2 mt-3 flex-wrap">
+        <input type="password" class="login-pin-input w-40 border border-gray-300 rounded-md px-2 py-1.5 text-sm font-mono" placeholder="${s.has_pin ? "•••• (set)" : "Set a PIN"}" />
+        <button type="button" class="save-login-btn text-xs bg-brand-blue text-white font-semibold rounded-md px-3 py-1.5 hover:brightness-110 transition">Save</button>
+        <span class="login-save-status text-xs text-gray-500"></span>
+      </div>
+      <p class="text-[11px] text-gray-400 mt-2">Leave the PIN blank to keep it unchanged, or type a new one (4+ characters) to set/reset it.</p>
+    `;
+  } else if (isSelf && s.login_enabled) {
+    loginHtml = `
+      <label class="inline-flex items-center gap-2 text-sm text-gray-500">
+        <input type="checkbox" class="rounded border-gray-300" checked disabled />
+        Eligible to log in
+      </label>
+      <div class="flex items-center gap-2 mt-3 flex-wrap">
+        <input type="password" class="login-pin-input w-40 border border-gray-300 rounded-md px-2 py-1.5 text-sm font-mono" placeholder="New PIN" />
+        <button type="button" class="save-login-btn text-xs bg-brand-blue text-white font-semibold rounded-md px-3 py-1.5 hover:brightness-110 transition">Change my PIN</button>
+        <span class="login-save-status text-xs text-gray-500"></span>
+      </div>
+    `;
+  } else {
+    loginHtml = `
+      <label class="inline-flex items-center gap-2 text-sm text-gray-500">
+        <input type="checkbox" class="rounded border-gray-300" ${s.login_enabled ? "checked" : ""} disabled />
+        Eligible to log in
+      </label>
+      <p class="text-[11px] text-gray-400 mt-2">Only the superuser can change login access.</p>
+    `;
+  }
+
   return `
     <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm" data-name="${escapeHtml(s.name)}">
-      <div class="flex items-start gap-4 mb-4">
+      <div class="flex items-start gap-4 mb-5">
         <div class="relative shrink-0">
           <div class="employee-photo-wrap w-16 h-16 rounded-full overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center">
             ${photoInner}
@@ -796,42 +1041,19 @@ function employeeCardHtml(s) {
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-3 text-xs mb-1">
-        <label class="block"><span class="text-gray-500">Employment</span>
-          <input class="employment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.employment)}" /></label>
-        <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
-          <input type="number" step="0.01" min="0" class="daily-rate-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.daily_rate ?? 0}" /></label>
-        <label class="block"><span class="text-gray-500">Monthly target (days)</span>
-          <input type="number" min="0" class="target-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.target ?? ""}" placeholder="—" /></label>
-        <label class="block"><span class="text-gray-500">Birthday</span>
-          <input type="date" class="birthday-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${escapeHtml(s.birthday)}" /></label>
-        <label class="block"><span class="text-gray-500">Phone</span>
-          <input class="phone-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.phone)}" /></label>
-        <label class="block"><span class="text-gray-500">Email</span>
-          <input type="email" class="email-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.email)}" /></label>
-        <label class="block col-span-2"><span class="text-gray-500">Address</span>
-          <textarea class="address-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" rows="2">${escapeHtml(s.address)}</textarea></label>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        ${sectionHtml("Basic Information", basicInfoHtml)}
+        ${sectionHtml("Government (auto-filled each cutoff)", governmentHtml)}
+        ${sectionHtml("Bank", bankHtml)}
+        ${sectionHtml(
+          "Paid Time Off",
+          ptoHtml,
+          '<select class="pto-year-select text-xs border border-gray-300 rounded-md px-2 py-1"></select>'
+        )}
+        <div class="lg:col-span-2">${sectionHtml("Login Access", loginHtml)}</div>
       </div>
 
-      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1.5 mt-3">Government contributions (auto-filled each cutoff)</p>
-      <div class="grid grid-cols-2 gap-3 text-xs mb-4">
-        ${contributionBlockHtml("SSS", "sss-id-input", s.sss_id, "sss-default-input", s.default_sss)}
-        ${contributionBlockHtml("Pag-IBIG", "pagibig-id-input", s.pagibig_id, "pagibig-default-input", s.default_pagibig)}
-        ${contributionBlockHtml("PhilHealth", "philhealth-id-input", s.philhealth_id, "philhealth-default-input", s.default_philhealth)}
-        ${contributionBlockHtml("HMO", "hmo-id-input", s.hmo_id, "hmo-default-input", s.default_hmo)}
-      </div>
-
-      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1.5 mt-3">Bank details</p>
-      <div class="grid grid-cols-2 gap-3 text-xs mb-4">
-        <label class="block col-span-2"><span class="text-gray-500">Bank name</span>
-          <input class="bank-name-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.bank_name)}" /></label>
-        <label class="block"><span class="text-gray-500">Account name</span>
-          <input class="bank-account-name-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.bank_account_name)}" /></label>
-        <label class="block"><span class="text-gray-500">Account number</span>
-          <input class="bank-account-number-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${escapeHtml(s.bank_account_number)}" /></label>
-      </div>
-
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 mt-5">
         <button class="save-employee-btn bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition">Save</button>
         <span class="employee-save-status text-xs text-gray-500"></span>
       </div>
@@ -839,15 +1061,120 @@ function employeeCardHtml(s) {
   `;
 }
 
-function renderEmployees(staffList) {
-  employeesGrid.innerHTML = staffList.map(employeeCardHtml).join("");
+async function loadEmployeePto(name, card, year) {
+  const summaryEl = card.querySelector(".pto-summary");
+  const tableWrap = card.querySelector(".pto-table-wrap");
+  summaryEl.textContent = "Loading…";
+  tableWrap.innerHTML = "";
+
+  const res = await fetch(`/api/staff/${encodeURIComponent(name)}/pto?year=${year}`);
+  const data = await res.json();
+
+  const availableClass = data.available < 0 ? "text-red-600 font-semibold" : "text-brand-blue font-semibold";
+  summaryEl.innerHTML =
+    `<span class="${availableClass}">${data.available}</span> of ${data.entitlement} available ` +
+    `<span class="text-gray-400">(${data.used_count} used in ${data.year})</span>`;
+
+  if (data.used_dates.length === 0) {
+    tableWrap.innerHTML = `<p class="text-xs text-gray-400 italic">No Paid Time Off used in ${data.year}.</p>`;
+    return;
+  }
+
+  const rows = data.used_dates
+    .map((d) => {
+      const dt = new Date(`${d}T00:00:00`);
+      const weekday = dt.toLocaleDateString("en-US", { weekday: "short" });
+      const label = dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      return `<tr class="border-t border-gray-100"><td class="px-2 py-1.5 font-mono">${label}</td><td class="px-2 py-1.5 text-gray-500">${weekday}</td></tr>`;
+    })
+    .join("");
+  tableWrap.innerHTML = `
+    <table class="w-full text-xs border border-gray-200 rounded-md overflow-hidden">
+      <thead><tr class="bg-gray-50 text-gray-500 text-left"><th class="px-2 py-1.5">Date</th><th class="px-2 py-1.5">Day</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderEmployees() {
+  employeesTabs.innerHTML = employeesData
+    .map((s) => {
+      const active = s.name === selectedEmployeeName;
+      const classes = active
+        ? "bg-brand-blue text-white"
+        : "bg-white text-gray-600 border border-gray-300 hover:border-gray-400";
+      return `<button type="button" class="employee-tab-btn font-semibold text-sm rounded-lg px-4 py-2 transition ${classes}" data-name="${escapeHtml(s.name)}">${escapeHtml(s.name)}</button>`;
+    })
+    .join("");
+  employeesTabs.querySelectorAll(".employee-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selectedEmployeeName = btn.dataset.name;
+      renderEmployees();
+    });
+  });
+
+  const selected = employeesData.find((s) => s.name === selectedEmployeeName);
+  employeesGrid.innerHTML = selected ? employeeCardHtml(selected) : "";
 
   employeesGrid.querySelectorAll("[data-name]").forEach((card) => {
     const name = card.dataset.name;
     card.querySelector(".save-employee-btn").addEventListener("click", () => saveEmployee(card, name));
     const photoInput = card.querySelector(".photo-input");
     photoInput.addEventListener("change", () => uploadEmployeePhoto(card, name, photoInput));
+
+    const yearSelect = card.querySelector(".pto-year-select");
+    const currentYear = new Date().getFullYear();
+    for (let y = currentYear + 1; y >= currentYear - 2; y--) {
+      const opt = document.createElement("option");
+      opt.value = y;
+      opt.textContent = y;
+      if (y === currentYear) opt.selected = true;
+      yearSelect.appendChild(opt);
+    }
+    yearSelect.addEventListener("change", () => loadEmployeePto(name, card, yearSelect.value));
+    loadEmployeePto(name, card, currentYear);
+
+    const saveLoginBtn = card.querySelector(".save-login-btn");
+    if (saveLoginBtn) {
+      saveLoginBtn.addEventListener("click", () => saveStaffLogin(card, name));
+    }
   });
+}
+
+async function saveStaffLogin(card, name) {
+  const statusEl = card.querySelector(".login-save-status");
+  const btn = card.querySelector(".save-login-btn");
+  const pinInput = card.querySelector(".login-pin-input");
+  const enabledInput = card.querySelector(".login-enabled-input");
+
+  const payload = {};
+  if (enabledInput) payload.login_enabled = enabledInput.checked;
+  if (pinInput && pinInput.value) payload.pin = pinInput.value;
+
+  if (!("login_enabled" in payload) && !payload.pin) {
+    statusEl.textContent = "Enter a PIN to change it.";
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = "";
+  try {
+    const res = await fetch(`/api/staff/${encodeURIComponent(name)}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = data.message || "Could not save.";
+      btn.disabled = false;
+      return;
+    }
+    await loadEmployees();
+  } catch (err) {
+    statusEl.textContent = "Could not save. Please try again.";
+    btn.disabled = false;
+  }
 }
 
 async function saveEmployee(card, name) {
@@ -861,7 +1188,9 @@ async function saveEmployee(card, name) {
       role: card.querySelector(".role-input").value,
       employment: card.querySelector(".employment-input").value,
       daily_rate: card.querySelector(".daily-rate-input").value,
+      monthly_salary: card.querySelector(".monthly-salary-input").value,
       target: card.querySelector(".target-input").value,
+      pto_entitlement: card.querySelector(".pto-entitlement-input").value,
       phone: card.querySelector(".phone-input").value,
       email: card.querySelector(".email-input").value,
       birthday: card.querySelector(".birthday-input").value,

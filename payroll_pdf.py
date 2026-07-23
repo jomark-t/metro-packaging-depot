@@ -77,10 +77,16 @@ def _payslip_rows(person, ot_rate):
     """Returns (rows, deductions_start) - deductions_start is the row
     index where the SSS/Pag-IBIG/PhilHealth/HMO block begins, so the
     caller can draw a separator line above it."""
-    rows = [
-        ("Days worked", f"{person['days_worked']} d &times; {_money(person['daily_rate'])}"),
-        ("Base pay", _money(person["base_pay"])),
-    ]
+    if person.get("monthly_salary"):
+        rows = [
+            ("Monthly salary", _money(person["monthly_salary"])),
+            ("Base pay (half-month)", _money(person["base_pay"])),
+        ]
+    else:
+        rows = [
+            ("Days worked", f"{person['days_worked']} d &times; {_money(person['daily_rate'])}"),
+            ("Base pay", _money(person["base_pay"])),
+        ]
     if person["has_bonus"]:
         rows.append(("Cup bonus", _money(person["bonus"])))
     rows.append((f"OT ({person['ot_hours']:g} h &times; {_money(ot_rate)})", _money(person["ot_pay"])))
@@ -92,6 +98,10 @@ def _payslip_rows(person, ot_rate):
     rows.append(("HMO", f"-{_money(person['hmo'])}"))
     if person["has_bonus"] and person.get("error_deduction"):
         rows.append(("Printing errors", f"-{_money(person['error_deduction'])}"))
+    if person.get("cash_advance"):
+        rows.append(("Cash advance", f"-{_money(person['cash_advance'])}"))
+    if person.get("absence_deduction"):
+        rows.append(("Absence deduction", f"-{_money(person['absence_deduction'])}"))
     rows.append(("NET PAY", _money(person["net_pay"])))
     return rows, deductions_start
 

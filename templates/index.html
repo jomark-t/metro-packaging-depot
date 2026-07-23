@@ -49,7 +49,7 @@
     <span class="text-3xl text-brand-green leading-none">⟡</span>
     <div>
       <h1 class="font-display font-semibold text-xl tracking-tight">{{ business_name }}</h1>
-      <p class="text-xs text-white/70">Monthly schedule generator</p>
+      <p class="text-xs text-white/70">Payroll and HRMS</p>
     </div>
     <div class="ml-2 inline-flex bg-white/10 rounded-lg p-1 gap-1">
       <button id="tabScheduleBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
@@ -58,30 +58,66 @@
     </div>
   </div>
 
-  <div id="scheduleControls" class="flex items-center gap-2 flex-wrap">
-    <select id="monthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
-    <select id="yearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
-    <button id="generateBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
-      Generate schedule
-    </button>
-    <button id="downloadPdfBtn" class="bg-white text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-white/90 active:bg-white/80 transition disabled:opacity-60 flex items-center gap-1.5">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Download PDF
-    </button>
-  </div>
+  <div class="flex items-center gap-4 flex-wrap">
+    <div id="scheduleControls" class="flex items-center gap-2 flex-wrap">
+      <select id="monthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+      <select id="yearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+    </div>
 
-  <div id="payrollControls" class="flex items-center gap-2 flex-wrap" style="display:none">
-    <select id="payrollMonthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
-    <select id="payrollYearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
-    <div class="inline-flex bg-white/10 rounded-lg p-1 gap-1">
-      <button id="payday10Btn" class="payday-btn px-3 py-1.5 rounded-md text-sm font-medium transition">10th</button>
-      <button id="payday25Btn" class="payday-btn px-3 py-1.5 rounded-md text-sm font-medium transition">25th</button>
+    <div id="payrollControls" class="flex items-center gap-2 flex-wrap" style="display:none">
+      <select id="payrollMonthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+      <select id="payrollYearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
+      <div class="inline-flex bg-white/10 rounded-lg p-1 gap-1">
+        <button id="payday10Btn" class="payday-btn px-3 py-1.5 rounded-md text-sm font-medium transition">10th</button>
+        <button id="payday25Btn" class="payday-btn px-3 py-1.5 rounded-md text-sm font-medium transition">25th</button>
+      </div>
+    </div>
+
+    <span class="w-px h-8 bg-white/25"></span>
+
+    <div class="relative">
+      <button id="userMenuBtn" type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/10 transition">
+        <div class="text-right leading-tight">
+          <p class="text-sm font-semibold">{{ current_user.display_name }}</p>
+          <p class="text-[11px] text-white/60">{{ "Superuser" if current_user.is_superuser else "Viewer" }}</p>
+        </div>
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div id="userMenu" class="hidden absolute right-0 mt-2 w-36 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+        <form method="POST" action="{{ url_for('logout') }}">
+          <button type="submit" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Log out</button>
+        </form>
+      </div>
     </div>
   </div>
 </header>
 
 <main class="max-w-[1500px] mx-auto px-6 py-7">
   <div id="scheduleView">
+    <div class="flex items-center gap-3 mb-5 flex-wrap">
+      <button id="generateBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
+        Generate schedule
+      </button>
+      <span class="w-px h-6 bg-gray-300 mx-1"></span>
+      <button id="downloadPdfBtn" class="bg-white text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 border border-gray-200 hover:bg-gray-50 transition disabled:opacity-60 flex items-center gap-1.5">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download PDF
+      </button>
+      <span class="w-px h-6 bg-gray-300 mx-1"></span>
+      <button id="createSnapshotBtn" class="bg-brand-blue text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-110 active:brightness-95 transition disabled:opacity-60" title="Save the current month's schedule as a snapshot">
+        Save Snapshot
+      </button>
+      <span class="w-px h-6 bg-gray-300 mx-1"></span>
+      <div class="flex items-center gap-0 border border-gray-300 rounded-lg overflow-hidden bg-white">
+        <select id="snapshotSelect" class="bg-white text-gray-700 text-sm font-medium pl-3 pr-2 py-2 border-0 focus:outline-none focus:ring-2 focus:ring-brand-blue max-w-[220px]">
+          <option value="">No snapshots</option>
+        </select>
+        <button id="restoreSnapshotBtn" class="bg-gray-50 text-brand-blue font-semibold text-sm px-4 py-2 border-l border-gray-300 hover:bg-gray-100 transition disabled:opacity-40 disabled:hover:bg-gray-50" disabled title="Restore the selected snapshot">
+          Restore
+        </button>
+      </div>
+    </div>
+
     <section id="summary" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6"></section>
 
     <section class="flex flex-wrap gap-x-5 gap-y-2 mb-3 text-xs text-gray-600">
@@ -91,6 +127,7 @@
       <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-green"></i>Inventory Day</span>
       <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-[#8a6a3e]"></i>Printer</span>
       <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-black"></i>Checker</span>
+      <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-purple-700"></i>Paid Time Off</span>
       <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-gray-300"></i>Off</span>
     </section>
 
@@ -157,7 +194,8 @@
       Profile, contact details, wage rate, and standing payroll deductions
       per employee. Each card saves independently.
     </p>
-    <div id="employeesGrid" class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-10"></div>
+    <div id="employeesTabs" class="flex flex-wrap gap-2 mb-5"></div>
+    <div id="employeesGrid" class="max-w-6xl mb-10"></div>
   </div>
 </main>
 
@@ -167,21 +205,26 @@
     <ul class="list-disc pl-5 mt-3 space-y-1.5 leading-relaxed">
       <li><strong class="text-black">Store hours:</strong> Mon–Sat 8:00 AM–8:00 PM, Sun 8:00 AM–5:00 PM.</li>
       <li><strong class="text-black">Sales shifts:</strong> Opening 8:00 AM–5:00 PM, Closing 11:00 AM–8:00 PM.</li>
-      <li><strong class="text-black">Clare</strong> (Store Manager) — guaranteed 24 duty days/month.</li>
-      <li><strong class="text-black">Jem &amp; Von</strong> (Sales) — guaranteed 21 duty days/month each.</li>
+      <li><strong class="text-black">Clare</strong> (Branch Manager) — fixed Monday–Saturday, Sunday off. Alternates a full week on Opening then a full week on Closing (continuing seamlessly across month boundaries), and covers one of the two Opening/Closing slots those days. Fixed ₱18,000/month salary, not a daily rate — see Payroll notes below.</li>
+      <li><strong class="text-black">Jem &amp; Von</strong> (Sales) — guaranteed 21 duty days/month each, filling whichever Opening/Closing slot Clare isn't already covering that day.</li>
       <li><strong class="text-black">Jha</strong> (Part-time Sales) — permanent Wed 8AM–5PM (Opening), Fri 8AM–12NN assist, and most Sundays (always keeps at least 2 Sundays off a month to rest).</li>
-      <li><strong class="text-black">Sundays</strong> are capped at 2 people total on Opening (8AM–5PM).</li>
-      <li><strong class="text-black">1st Sunday of the month</strong> is inventory day — all 6 staff work.</li>
-      <li><strong class="text-black">2nd Wednesday of the month</strong> is also an all-hands day — Clare, Jem, and Von are all pulled in alongside Jha, Macky, and Joshua.</li>
+      <li><strong class="text-black">Sundays</strong> are capped at 2 people total on Opening (8AM–5PM); Clare doesn't work regular Sundays.</li>
+      <li><strong class="text-black">1st Sunday of the month</strong> is inventory day — all 6 staff work, including Clare. The following Monday is automatically her compensatory day off in lieu of that Sunday.</li>
+      <li><strong class="text-black">2nd Wednesday of the month</strong> is also an all-hands day — Jem and Von are both pulled in alongside Clare (already working her normal Wed shift), Jha, Macky, and Joshua.</li>
       <li><strong class="text-black">Macky &amp; Joshua</strong> (Machine Operators) — fixed 9:00 AM–6:00 PM, Mon–Fri only. Each week one of them does 3 days Printer / 2 days Checker and the other does the reverse; who's "heavy" alternates week to week to balance out over the month.</li>
-      <li>No one works more than <strong class="text-black">6 consecutive days</strong> — a rest day is inserted automatically before a 7th straight day.</li>
+      <li>No one works more than <strong class="text-black">6 consecutive days</strong> — a rest day is inserted automatically before a 7th straight day (Jem/Von; Clare's fixed Sunday-off already keeps her under this, aside from the inventory-day exception above).</li>
       <li><strong class="text-black">Opening/Closing runs in blocks</strong> — up to 4 straight days on the same shift type before switching, instead of flipping day to day.</li>
-      <li>Overlap days (a 3rd sales person on Opening or Closing) are spread roughly weekly rather than bunched at month-end, so Clare/Jem/Von reach their guaranteed monthly day counts.</li>
+      <li>Overlap days (a 3rd sales person on Opening or Closing) are spread roughly weekly rather than bunched at month-end, so Jem/Von reach their guaranteed monthly day counts.</li>
+      <li><strong class="text-black">Payroll — Clare:</strong> fixed ₱18,000/month, split evenly across the two semi-monthly cutoffs. Each unreported Mon–Sat day deducts ₱18,000&divide;26; that's waived 1-for-1 by any extra Sunday actually worked that cutoff (the mandatory inventory Sunday doesn't count toward this, since it's already balanced by her automatic Monday off).</li>
+      <li><strong class="text-black">Paid Time Off</strong> counts as a full paid day in payroll, same as a normal worked day.</li>
       <li>Days off are grouped into consecutive pairs where possible.</li>
     </ul>
   </details>
 </footer>
 
+<script>
+  window.CURRENT_USER = {{ current_user | tojson }};
+</script>
 <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

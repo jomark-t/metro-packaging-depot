@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{ business_name }} — Log in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: {
+            blue: '#1c33bb',
+            green: '#07c067',
+            tan: '#b88c53',
+          },
+        },
+        fontFamily: {
+          display: ['Fraunces', 'Georgia', 'serif'],
+          sans: ['Inter', 'sans-serif'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; }
+</style>
+</head>
+<body class="bg-brand-blue min-h-screen flex items-center justify-center px-4">
+
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-6">
+      <span class="text-4xl text-brand-green leading-none">⟡</span>
+      <h1 class="font-display font-semibold text-2xl text-white mt-2">{{ business_name }}</h1>
+      <p class="text-sm text-white/70">Payroll and HRMS</p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-lg p-6">
+      {% if error %}
+      <p class="bg-red-50 text-red-700 text-sm rounded-lg px-3 py-2 mb-4">{{ error }}</p>
+      {% endif %}
+
+      {% if candidates %}
+      <form method="POST" class="space-y-4">
+        <label class="block">
+          <span class="text-xs text-gray-500 uppercase tracking-wide">Log in as</span>
+          <select name="user_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue">
+            {% for c in candidates %}
+            <option value="{{ c.id }}">{{ c.display_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="block">
+          <span class="text-xs text-gray-500 uppercase tracking-wide">PIN</span>
+          <input type="password" name="pin" required autofocus class="w-full border border-gray-300 rounded-lg px-3 py-2 mt-1 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-brand-blue" />
+        </label>
+        <button type="submit" class="w-full bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2.5 hover:brightness-95 active:brightness-90 transition">
+          Log in
+        </button>
+      </form>
+      {% else %}
+      <p class="text-sm text-gray-600">No accounts are set up to log in yet.</p>
+      {% endif %}
+    </div>
+  </div>
+
+</body>
+</html>
