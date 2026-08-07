@@ -45,16 +45,43 @@
 <body class="bg-[#F3F4F8] text-black">
 
 <header class="bg-brand-blue text-white px-6 py-5 flex items-center justify-between flex-wrap gap-4">
-  <div class="flex items-center gap-3 flex-wrap">
+  {# w-full/min-w-0 on small screens so the tab strip below can size
+     itself against the viewport instead of its own content width #}
+  <div class="flex items-center gap-3 flex-wrap w-full sm:w-auto min-w-0">
     <span class="text-3xl text-brand-green leading-none">⟡</span>
     <div>
       <h1 class="font-display font-semibold text-xl tracking-tight">{{ business_name }}</h1>
       <p class="text-xs text-white/70">Payroll and HRMS</p>
     </div>
-    <div class="ml-2 inline-flex bg-white/10 rounded-lg p-1 gap-1">
-      <button id="tabScheduleBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
-      <button id="tabPayrollBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
-      <button id="tabEmployeesBtn" class="tab-btn px-3 py-1.5 rounded-md text-sm font-medium transition">Employees</button>
+    {# On a phone the tabs take their own full-width row and scroll
+       sideways; a manager has six and they don't fit at 375px. From `sm`
+       up they sit inline next to the logo as before. #}
+    <div class="sm:ml-2 flex basis-full sm:basis-auto min-w-0 overflow-x-auto bg-white/10 rounded-lg p-1 gap-1">
+      <button id="tabDashboardBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
+      <button id="tabScheduleBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
+      {# Time Off is for people who take it or approve it - an outside
+         viewer has neither a schedule nor a say. #}
+      {% if current_user.staff_name or current_user.is_manager %}
+      <button id="tabLeaveBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">
+        Time Off<span id="pendingLeaveBadge" class="ml-1.5 hidden bg-brand-green text-black text-[10px] font-bold rounded-full px-1.5 py-0.5"></span>
+      </button>
+      {% endif %}
+      {# Payroll opens to managers and to any outside account explicitly
+         granted it; the figures are read-only for everyone but the
+         superuser, and the API enforces the same rule. #}
+      {% if current_user.can_view_payroll %}
+      <button id="tabPayrollBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
+      {% endif %}
+      {# Employee records (addresses, bank details, IDs) stay manager-only. #}
+      {% if current_user.is_manager %}
+      <button id="tabEmployeesBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Employees</button>
+      {% endif %}
+      {# The audit trail spans everyone's pay and login changes, including
+         the managers' own - superuser only. #}
+      {% if current_user.is_superuser %}
+      <button id="tabActivityBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Activity</button>
+      <button id="tabAdminBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Admin</button>
+      {% endif %}
     </div>
   </div>
 
@@ -79,11 +106,16 @@
       <button id="userMenuBtn" type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/10 transition">
         <div class="text-right leading-tight">
           <p class="text-sm font-semibold">{{ current_user.display_name }}</p>
-          <p class="text-[11px] text-white/60">{{ "Superuser" if current_user.is_superuser else "Viewer" }}</p>
+          <p class="text-[11px] text-white/60">{% if current_user.is_superuser %}Superuser{% elif current_user.is_manager %}Manager{% else %}Viewer{% endif %}</p>
         </div>
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
-      <div id="userMenu" class="hidden absolute right-0 mt-2 w-36 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+      <div id="userMenu" class="hidden absolute right-0 mt-2 w-40 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+        {# Managers change their PIN from their Employees card; staff
+           without that tab need a way to do it from here. #}
+        {% if current_user.staff_name and not current_user.is_manager %}
+        <button id="changePinBtn" type="button" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Change PIN</button>
+        {% endif %}
         <form method="POST" action="{{ url_for('logout') }}">
           <button type="submit" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Log out</button>
         </form>
@@ -93,6 +125,77 @@
 </header>
 
 <main class="max-w-[1500px] mx-auto px-6 py-7">
+  <div id="dashboardView" style="display:none">
+    <p id="dashboardDate" class="text-sm text-gray-600 mb-5"></p>
+
+    {# Manager cards: on duty, pending approvals, cutoff, attention. #}
+    <div id="dashManager" style="display:none">
+      <section class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-5">
+        <div class="flex items-baseline justify-between gap-3 flex-wrap mb-4">
+          <h2 class="font-display font-semibold text-base">On duty today</h2>
+          <button id="dashOpenSchedule" class="text-xs text-brand-blue font-medium hover:underline">Open schedule →</button>
+        </div>
+        <div id="dashOnDuty" class="flex flex-wrap gap-3"></div>
+        <p id="dashOffToday" class="text-xs text-gray-400 mt-3"></p>
+      </section>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+        <section class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+          <div class="flex items-baseline justify-between gap-2 mb-3">
+            <h2 class="font-display font-semibold text-base">Waiting on you</h2>
+            <span id="dashPendingCount" class="text-[11px] bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2 py-0.5"></span>
+          </div>
+          <ul id="dashPendingList" class="space-y-2.5"></ul>
+        </section>
+
+        <section id="dashCutoffCard" class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+          <h2 class="font-display font-semibold text-base mb-1">Current cutoff</h2>
+          <p id="dashCutoffPeriod" class="text-xs text-gray-500 mb-4"></p>
+          <p class="text-xs text-gray-500 uppercase tracking-wide font-mono">Net so far</p>
+          <p id="dashCutoffNet" class="font-mono text-3xl font-semibold text-brand-blue mb-3"></p>
+          <div class="flex items-center gap-2 text-xs">
+            <span id="dashCutoffDot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+            <span id="dashCutoffStatus" class="text-gray-600"></span>
+          </div>
+        </section>
+
+        <section class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+          <h2 class="font-display font-semibold text-base mb-3">Needs a look</h2>
+          <ul id="dashAttention" class="space-y-2 text-sm"></ul>
+        </section>
+      </div>
+
+      <section id="dashSummary" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-10"></section>
+    </div>
+
+    {# Staff cards: next shift, the week ahead, month tracking. #}
+    <div id="dashStaff" style="display:none">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4 max-w-4xl">
+        <div id="dashNextShift" class="bg-brand-blue text-white rounded-xl p-5"></div>
+        <div class="bg-white border border-gray-200 rounded-xl px-4 py-3.5 shadow-sm">
+          <p class="text-[11px] text-gray-500 mb-2.5">This month</p>
+          <span id="dashMyDays" class="font-mono text-2xl text-brand-blue font-medium"></span>
+          <span id="dashMyTarget" class="text-[11px] text-gray-500 ml-1"></span>
+        </div>
+        <div class="bg-white border border-gray-200 rounded-xl px-4 py-3.5 shadow-sm">
+          <p class="text-[11px] text-gray-500 mb-2.5">Paid Time Off</p>
+          <span id="dashMyPto" class="font-mono text-2xl text-brand-blue font-medium"></span>
+          <span id="dashMyPtoTotal" class="text-[11px] text-gray-500 ml-1"></span>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-4 max-w-4xl">
+        <h2 class="font-display font-semibold text-base mb-3">Next 7 days</h2>
+        <ul id="dashUpcoming" class="divide-y divide-gray-100"></ul>
+      </div>
+
+      <div class="flex items-center gap-3 flex-wrap mb-10">
+        <button id="dashRequestLeave" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition">Request time off</button>
+        <button id="dashTeamSchedule" class="bg-white border border-gray-200 text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-gray-50 transition">Team schedule</button>
+      </div>
+    </div>
+  </div>
+
   <div id="scheduleView">
     <div class="flex items-center gap-3 mb-5 flex-wrap">
       <button id="generateBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
@@ -131,7 +234,12 @@
       <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-gray-300"></i>Off</span>
     </section>
 
-    <p class="text-xs text-gray-500 mb-2">Click any shift to reassign it.</p>
+    <div class="flex items-baseline justify-between gap-3 flex-wrap mb-2">
+      <p class="text-xs text-gray-500">
+        {% if current_user.is_manager %}Click any shift to reassign it.{% else %}Read-only — only the store manager can change the schedule. Use the Time Off tab to request leave.{% endif %}
+      </p>
+      <p id="lastEditedLabel" class="text-xs text-gray-500"></p>
+    </div>
 
     <div class="bg-white border border-gray-200 rounded-xl overflow-auto shadow-sm">
       <table id="scheduleTable" class="w-full min-w-[900px] border-collapse">
@@ -146,6 +254,170 @@
       <p class="mb-4 text-sm">No schedule generated for this month yet.</p>
       <button class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95" onclick="generateSchedule()">Generate now</button>
     </div>
+
+    {# Lives inside the Schedule tab: it explains the table above it, and
+       used to sit in a global footer showing under every tab. #}
+    <details class="bg-white border border-gray-200 rounded-xl px-5 py-4 mt-6 mb-10 text-sm text-gray-600">
+        <summary class="cursor-pointer font-display font-semibold text-black text-[15px]">Scheduling rules used</summary>
+        <ul class="list-disc pl-5 mt-3 space-y-1.5 leading-relaxed">
+          <li><strong class="text-black">Store hours:</strong> Mon–Sat 8:00 AM–8:00 PM, Sun 8:00 AM–5:00 PM.</li>
+          <li><strong class="text-black">Sales shifts:</strong> Opening 8:00 AM–5:00 PM, Closing 11:00 AM–8:00 PM.</li>
+          <li><strong class="text-black">Managers</strong> — fixed Monday–Saturday, Sunday off. Alternate a full week on Opening then a full week on Closing (continuing seamlessly across month boundaries), covering one of the two slots those days. Two or more managers are staggered so they never both open the same week. Paid a fixed monthly salary rather than a daily rate — see Payroll notes below.</li>
+          <li><strong class="text-black">Sales staff</strong> — work to their monthly target (21 days each for Jem and Von), filling whichever Opening/Closing slots the manager and part-timers aren't already covering. Anyone without a target set is treated as full-time Mon–Sat.</li>
+          <li><strong class="text-black">Part-time sales</strong> — permanent Wed 8AM–5PM (Opening), Fri 8AM–12NN assist, plus a share of the Sundays. A single part-timer works most Sundays but always keeps at least 2 a month to rest; several take turns instead.</li>
+          <li><strong class="text-black">Sundays</strong> are capped at 2 people total on Opening (8AM–5PM); managers don't work regular Sundays.</li>
+          <li><strong class="text-black">1st Sunday of the month</strong> is inventory day — all 6 staff work, including Clare. The following Monday is automatically her compensatory day off in lieu of that Sunday.</li>
+          <li><strong class="text-black">2nd Wednesday of the month</strong> is also an all-hands day — Jem and Von are both pulled in alongside Clare (already working her normal Wed shift), Jha, Macky, and Joshua.</li>
+          <li><strong class="text-black">Machine Operators</strong> — fixed 9:00 AM–6:00 PM, Mon–Fri only. Exactly one Printer works each day and everyone else that day is a Checker. Printer days are shared out a week at a time, weighted toward whoever has printed least so far: with the usual two operators that means one does 3 days Printer / 2 Checker and the other the reverse, alternating week to week.</li>
+          <li>No one works more than <strong class="text-black">6 consecutive days</strong> — a rest day is inserted automatically before a 7th straight day (Jem/Von; Clare's fixed Sunday-off already keeps her under this, aside from the inventory-day exception above).</li>
+          <li><strong class="text-black">Opening/Closing runs in blocks</strong> — up to 4 straight days on the same shift type before switching, instead of flipping day to day.</li>
+          <li>Overlap days (an extra sales person on Opening or Closing) are spread roughly weekly rather than bunched at month-end, so everyone reaches their guaranteed monthly day counts.</li>
+          <li><strong class="text-black">Hiring and archiving</strong> are picked up automatically — staff are scheduled by their category, not by name, so regenerating a month includes anyone new and drops anyone archived.</li>
+          <li><strong class="text-black">Payroll — Clare:</strong> fixed ₱18,000/month, split evenly across the two semi-monthly cutoffs. Each unreported Mon–Sat day deducts ₱18,000&divide;26; that's waived 1-for-1 by any extra Sunday actually worked that cutoff (the mandatory inventory Sunday doesn't count toward this, since it's already balanced by her automatic Monday off).</li>
+          <li><strong class="text-black">Paid Time Off</strong> counts as a full paid day in payroll, same as a normal worked day.</li>
+          <li>Days off are grouped into consecutive pairs where possible.</li>
+        </ul>
+      </details>
+
+  </div>
+
+  <div id="leaveView" style="display:none">
+    <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,380px)_1fr] gap-6 mb-10 items-start">
+      <section class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <h2 class="font-display font-semibold text-base mb-1">Request time off</h2>
+        <p id="leaveBalanceLine" class="text-xs text-gray-500 mb-4">&nbsp;</p>
+
+        <div id="leaveStaffPickerWrap" class="mb-3" style="display:none">
+          <label class="block text-xs"><span class="text-gray-500">For</span>
+            <select id="leaveStaffSelect" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select>
+          </label>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 mb-3">
+          <label class="block text-xs"><span class="text-gray-500">From</span>
+            <input type="date" id="leaveStartInput" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+          <label class="block text-xs"><span class="text-gray-500">To</span>
+            <input type="date" id="leaveEndInput" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        </div>
+
+        <label class="block text-xs mb-3"><span class="text-gray-500">Type</span>
+          <select id="leaveTypeSelect" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm">
+            <option>Paid Time Off</option>
+            <option>Unpaid Leave</option>
+            <option>Sick Leave</option>
+          </select>
+        </label>
+
+        <label class="block text-xs mb-4"><span class="text-gray-500">Reason (optional)</span>
+          <textarea id="leaveReasonInput" rows="2" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></textarea></label>
+
+        <div class="flex items-center gap-3 flex-wrap">
+          <button id="submitLeaveBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
+            Submit request
+          </button>
+          <span id="leaveSubmitStatus" class="text-xs text-gray-500"></span>
+        </div>
+        <p class="text-[11px] text-gray-400 mt-3">
+          Approved Paid Time Off is written straight onto the schedule as a
+          paid day. Unpaid and sick days clear the shift instead.
+        </p>
+      </section>
+
+      <section class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <h2 id="leaveListTitle" class="font-display font-semibold text-base">My requests</h2>
+          <select id="leaveStatusFilter" class="text-xs border border-gray-300 rounded-md px-2 py-1.5">
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="denied">Denied</option>
+          </select>
+        </div>
+        <div id="leaveRequestsWrap" class="overflow-auto"></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="adminView" style="display:none">
+    <div class="flex items-start justify-between gap-4 flex-wrap mb-5">
+      <p class="text-sm text-gray-600 max-w-2xl">
+        Login accounts for people who aren't on the payroll — co-owners and
+        the like. They're <strong>read-only everywhere</strong>: they can see
+        the Dashboard and the Schedule, and nothing they do can change a
+        record. Tick <em>Can view payroll</em> to also give someone the
+        Payroll tab, still read-only.
+      </p>
+      <button id="addAdminUserBtn" class="bg-brand-blue text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-110 active:brightness-95 transition shrink-0">
+        + Add person
+      </button>
+    </div>
+
+    <div id="addAdminUserForm" class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-6 max-w-3xl" style="display:none">
+      <h2 class="font-display font-semibold text-base mb-1">Add person</h2>
+      <p class="text-xs text-gray-500 mb-4">
+        They'll pick their name on the login screen and enter this PIN, so
+        set one you can pass on to them. They can't change it themselves —
+        reset it here if they forget.
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <label class="block"><span class="text-gray-500">Name *</span>
+          <input id="newAdminName" maxlength="40" placeholder="e.g. Ana Tandog" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">PIN * (4+ characters)</span>
+          <input id="newAdminPin" type="password" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        <label class="block"><span class="text-gray-500">Note</span>
+          <input id="newAdminNote" placeholder="e.g. co-owner" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+      </div>
+      <label class="inline-flex items-center gap-2 text-sm mt-3">
+        <input type="checkbox" id="newAdminPayroll" class="rounded border-gray-300 text-brand-blue focus:ring-brand-blue" />
+        Can view payroll (read-only)
+      </label>
+      <div class="flex items-center gap-3 mt-4 flex-wrap">
+        <button id="saveNewAdminBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition disabled:opacity-60">Add person</button>
+        <button id="cancelNewAdminBtn" class="text-sm text-gray-500 hover:text-black transition">Cancel</button>
+        <span id="newAdminStatus" class="text-xs text-gray-500"></span>
+      </div>
+    </div>
+
+    <div id="adminUserList" class="max-w-3xl mb-6"></div>
+
+    <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm max-w-3xl mb-10">
+      <h2 class="font-display font-semibold text-base mb-2">Who can do what</h2>
+      <table class="w-full text-xs">
+        <thead><tr class="text-left text-gray-400 uppercase tracking-wide font-mono">
+          <th class="py-1.5">Role</th><th class="py-1.5">Sees</th><th class="py-1.5">Can change</th>
+        </tr></thead>
+        <tbody class="divide-y divide-gray-100 text-sm">
+          <tr><td class="py-2 font-medium">Superuser <span class="text-gray-400 font-normal">(you)</span></td>
+            <td class="py-2 text-gray-600">Everything</td><td class="py-2 text-gray-600">Everything</td></tr>
+          <tr><td class="py-2 font-medium">Manager</td>
+            <td class="py-2 text-gray-600">Everything except Activity and Admin</td>
+            <td class="py-2 text-gray-600">The schedule and employee records</td></tr>
+          <tr><td class="py-2 font-medium">Staff</td>
+            <td class="py-2 text-gray-600">Their own dashboard, the schedule, their leave</td>
+            <td class="py-2 text-gray-600">Request their own leave; their own PIN</td></tr>
+          <tr><td class="py-2 font-medium">Outside viewer</td>
+            <td class="py-2 text-gray-600">Dashboard and Schedule <span class="text-gray-400">(+ Payroll if ticked)</span></td>
+            <td class="py-2 text-gray-600">Nothing</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="activityView" style="display:none">
+    <div class="flex items-start justify-between gap-4 flex-wrap mb-5">
+      <p class="text-sm text-gray-600 max-w-2xl">
+        Every change made in the app — schedule edits, payroll saves, employee
+        and login changes — with who made it and what the value was before.
+        Append-only: entries are never edited or removed.
+      </p>
+      <div class="flex items-center gap-2 flex-wrap shrink-0">
+        <input id="activitySearch" type="search" placeholder="Search action or target" class="border border-gray-300 rounded-md px-2 py-1.5 text-sm w-56" />
+        <select id="activityActor" class="border border-gray-300 rounded-md px-2 py-1.5 text-sm">
+          <option value="">Everyone</option>
+        </select>
+      </div>
+    </div>
+    <div id="activityList" class="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100 mb-10"></div>
   </div>
 
   <div id="payrollView" style="display:none">
@@ -187,40 +459,81 @@
       </button>
       <span id="payrollSaveStatus" class="text-xs text-gray-500"></span>
     </div>
+
+    <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-10">
+      <div class="flex items-center justify-between gap-3 flex-wrap mb-1">
+        <h2 class="font-display font-semibold text-base">13th month pay</h2>
+        <select id="thirteenthYearSelect" class="text-sm border border-gray-300 rounded-md px-2 py-1.5"></select>
+      </div>
+      <p class="text-xs text-gray-500 mb-4">
+        Total <strong>basic</strong> salary earned in the calendar year &divide; 12.
+        Overtime, cup bonus and discretionary bonus are excluded by law;
+        absences reduce it. Only months that have a schedule are counted,
+        so mid-year this shows what's been earned so far.
+      </p>
+      <div class="overflow-auto">
+        <table id="thirteenthTable" class="w-full min-w-[700px] border-collapse">
+          <thead>
+            <tr id="thirteenthHeadRow" class="bg-brand-blue text-white"></tr>
+          </thead>
+          <tbody id="thirteenthBody" class="divide-y divide-gray-100"></tbody>
+          <tfoot id="thirteenthFoot"></tfoot>
+        </table>
+      </div>
+      <p id="thirteenthNote" class="text-xs text-gray-400 mt-3"></p>
+    </div>
   </div>
 
   <div id="employeesView" style="display:none">
-    <p class="text-sm text-gray-600 mb-5">
-      Profile, contact details, wage rate, and standing payroll deductions
-      per employee. Each card saves independently.
-    </p>
+    <div class="flex items-start justify-between gap-4 flex-wrap mb-5">
+      <p class="text-sm text-gray-600 max-w-2xl">
+        Profile, contact details, wage rate, and standing payroll deductions
+        per employee. Each card saves independently.
+      </p>
+      <button id="addEmployeeBtn" class="bg-brand-blue text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-110 active:brightness-95 transition shrink-0">
+        + Add employee
+      </button>
+    </div>
+
+    <div id="addEmployeeForm" class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-6 max-w-4xl" style="display:none">
+      <h2 class="font-display font-semibold text-base mb-1">Add employee</h2>
+      <p class="text-xs text-gray-500 mb-4">
+        The short name is the schedule column header — keep it brief and
+        unique. Category decides how they're scheduled, so pick it carefully:
+        it's the one field you can't change afterwards.
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+        <label class="block"><span class="text-gray-500">Short name *</span>
+          <input id="newStaffName" maxlength="20" placeholder="e.g. Ana" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Full name *</span>
+          <input id="newStaffFullName" placeholder="e.g. Ana Reyes" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Category *</span>
+          <select id="newStaffCategory" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select></label>
+        <label class="block"><span class="text-gray-500">Job title</span>
+          <input id="newStaffRole" placeholder="defaults to the category" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Employment</span>
+          <input id="newStaffEmployment" value="Permanent" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
+          <input type="number" min="0" step="0.01" id="newStaffDailyRate" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        <label class="block"><span class="text-gray-500">Fixed monthly salary (₱)</span>
+          <input type="number" min="0" step="0.01" id="newStaffMonthlySalary" placeholder="leave blank if daily-rate" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        <label class="block"><span class="text-gray-500">Monthly target (days)</span>
+          <input type="number" min="0" id="newStaffTarget" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        <label class="block"><span class="text-gray-500">PTO entitlement (days/yr)</span>
+          <input type="number" min="0" id="newStaffPto" value="5" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+      </div>
+      <div class="flex items-center gap-3 mt-4 flex-wrap">
+        <button id="saveNewStaffBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition disabled:opacity-60">Add employee</button>
+        <button id="cancelNewStaffBtn" class="text-sm text-gray-500 hover:text-black transition">Cancel</button>
+        <span id="newStaffStatus" class="text-xs text-gray-500"></span>
+      </div>
+    </div>
+
     <div id="employeesTabs" class="flex flex-wrap gap-2 mb-5"></div>
     <div id="employeesGrid" class="max-w-6xl mb-10"></div>
   </div>
 </main>
 
-<footer class="max-w-[1500px] mx-auto px-6 pb-10">
-  <details class="bg-white border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-600">
-    <summary class="cursor-pointer font-display font-semibold text-black text-[15px]">Scheduling rules used</summary>
-    <ul class="list-disc pl-5 mt-3 space-y-1.5 leading-relaxed">
-      <li><strong class="text-black">Store hours:</strong> Mon–Sat 8:00 AM–8:00 PM, Sun 8:00 AM–5:00 PM.</li>
-      <li><strong class="text-black">Sales shifts:</strong> Opening 8:00 AM–5:00 PM, Closing 11:00 AM–8:00 PM.</li>
-      <li><strong class="text-black">Clare</strong> (Branch Manager) — fixed Monday–Saturday, Sunday off. Alternates a full week on Opening then a full week on Closing (continuing seamlessly across month boundaries), and covers one of the two Opening/Closing slots those days. Fixed ₱18,000/month salary, not a daily rate — see Payroll notes below.</li>
-      <li><strong class="text-black">Jem &amp; Von</strong> (Sales) — guaranteed 21 duty days/month each, filling whichever Opening/Closing slot Clare isn't already covering that day.</li>
-      <li><strong class="text-black">Jha</strong> (Part-time Sales) — permanent Wed 8AM–5PM (Opening), Fri 8AM–12NN assist, and most Sundays (always keeps at least 2 Sundays off a month to rest).</li>
-      <li><strong class="text-black">Sundays</strong> are capped at 2 people total on Opening (8AM–5PM); Clare doesn't work regular Sundays.</li>
-      <li><strong class="text-black">1st Sunday of the month</strong> is inventory day — all 6 staff work, including Clare. The following Monday is automatically her compensatory day off in lieu of that Sunday.</li>
-      <li><strong class="text-black">2nd Wednesday of the month</strong> is also an all-hands day — Jem and Von are both pulled in alongside Clare (already working her normal Wed shift), Jha, Macky, and Joshua.</li>
-      <li><strong class="text-black">Macky &amp; Joshua</strong> (Machine Operators) — fixed 9:00 AM–6:00 PM, Mon–Fri only. Each week one of them does 3 days Printer / 2 days Checker and the other does the reverse; who's "heavy" alternates week to week to balance out over the month.</li>
-      <li>No one works more than <strong class="text-black">6 consecutive days</strong> — a rest day is inserted automatically before a 7th straight day (Jem/Von; Clare's fixed Sunday-off already keeps her under this, aside from the inventory-day exception above).</li>
-      <li><strong class="text-black">Opening/Closing runs in blocks</strong> — up to 4 straight days on the same shift type before switching, instead of flipping day to day.</li>
-      <li>Overlap days (a 3rd sales person on Opening or Closing) are spread roughly weekly rather than bunched at month-end, so Jem/Von reach their guaranteed monthly day counts.</li>
-      <li><strong class="text-black">Payroll — Clare:</strong> fixed ₱18,000/month, split evenly across the two semi-monthly cutoffs. Each unreported Mon–Sat day deducts ₱18,000&divide;26; that's waived 1-for-1 by any extra Sunday actually worked that cutoff (the mandatory inventory Sunday doesn't count toward this, since it's already balanced by her automatic Monday off).</li>
-      <li><strong class="text-black">Paid Time Off</strong> counts as a full paid day in payroll, same as a normal worked day.</li>
-      <li>Days off are grouped into consecutive pairs where possible.</li>
-    </ul>
-  </details>
-</footer>
 
 <script>
   window.CURRENT_USER = {{ current_user | tojson }};

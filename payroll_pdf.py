@@ -89,6 +89,8 @@ def _payslip_rows(person, ot_rate):
         ]
     if person["has_bonus"]:
         rows.append(("Cup bonus", _money(person["bonus"])))
+    if person.get("manual_bonus"):
+        rows.append(("Bonus", _money(person["manual_bonus"])))
     rows.append((f"OT ({person['ot_hours']:g} h &times; {_money(ot_rate)})", _money(person["ot_pay"])))
 
     deductions_start = len(rows)
@@ -96,10 +98,16 @@ def _payslip_rows(person, ot_rate):
     rows.append(("Pag-IBIG", f"-{_money(person['pagibig'])}"))
     rows.append(("PhilHealth", f"-{_money(person['philhealth'])}"))
     rows.append(("HMO", f"-{_money(person['hmo'])}"))
-    if person["has_bonus"] and person.get("error_deduction"):
+    if person.get("error_deduction"):
         rows.append(("Printing errors", f"-{_money(person['error_deduction'])}"))
     if person.get("cash_advance"):
-        rows.append(("Cash advance", f"-{_money(person['cash_advance'])}"))
+        label = "Cash advance"
+        # show what's left to repay after this deduction, so the stub
+        # answers "how much do I still owe?" without anyone asking
+        remaining = person.get("advance_outstanding_after")
+        if remaining:
+            label = f"Cash advance (bal. {_money(remaining)})"
+        rows.append((label, f"-{_money(person['cash_advance'])}"))
     if person.get("absence_deduction"):
         rows.append(("Absence deduction", f"-{_money(person['absence_deduction'])}"))
     rows.append(("NET PAY", _money(person["net_pay"])))
