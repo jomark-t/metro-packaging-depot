@@ -230,14 +230,20 @@
 
   <div id="scheduleView">
     <div class="flex items-center gap-3 mb-5 flex-wrap">
+      {# Generating and snapshotting are superuser-only at the API, so the
+         controls aren't rendered at all for anyone else rather than shown
+         greyed out. Download PDF is open to everyone. #}
+      {% if current_user.is_superuser %}
       <button id="generateBtn" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition disabled:opacity-60">
         Generate schedule
       </button>
       <span class="w-px h-6 bg-gray-300 mx-1"></span>
+      {% endif %}
       <button id="downloadPdfBtn" class="bg-white text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 border border-gray-200 hover:bg-gray-50 transition disabled:opacity-60 flex items-center gap-1.5">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Download PDF
       </button>
+      {% if current_user.is_superuser %}
       <span class="w-px h-6 bg-gray-300 mx-1"></span>
       <button id="createSnapshotBtn" class="bg-brand-blue text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-110 active:brightness-95 transition disabled:opacity-60" title="Save the current month's schedule as a snapshot">
         Save Snapshot
@@ -251,9 +257,14 @@
           Restore
         </button>
       </div>
+      {% endif %}
     </div>
 
+    {# Per-person day totals are branch information: the people who run the
+       place and the owners, not the team. Staff see the roster itself. #}
+    {% if current_user.sees_branch %}
     <section id="summary" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6"></section>
+    {% endif %}
 
     <section class="flex flex-wrap gap-x-5 gap-y-2 mb-3 text-xs text-gray-600">
       <span class="flex items-center gap-1.5"><i class="w-2.5 h-2.5 rounded-full inline-block bg-brand-blue"></i>Opening</span>
@@ -284,7 +295,9 @@
 
     <div id="emptyState" class="text-center py-16 text-gray-500" style="display:none;">
       <p class="mb-4 text-sm">No schedule generated for this month yet.</p>
+      {% if current_user.is_superuser %}
       <button class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95" onclick="generateSchedule()">Generate now</button>
+      {% endif %}
     </div>
 
     {# Lives inside the Schedule tab: it explains the table above it, and

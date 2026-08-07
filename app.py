@@ -1688,6 +1688,9 @@ def index():
         "is_manager": is_manager(),
         "is_outside_viewer": is_outside_viewer(),
         "can_view_payroll": can_view_payroll(),
+        # branch-wide figures (per-person day totals) - the people running
+        # the place and the owners, not the team
+        "sees_branch": is_manager() or is_outside_viewer(),
         "staff_name": session.get("staff_name"),
     }
     return render_template(

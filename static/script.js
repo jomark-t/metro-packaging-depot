@@ -205,7 +205,7 @@ async function loadSchedule() {
   if (!data.days || data.days.length === 0 || Object.values(data.staff_counts).every((c) => c === 0)) {
     scheduleTable.style.display = "none";
     emptyState.style.display = "block";
-    summaryEl.innerHTML = "";
+    if (summaryEl) summaryEl.innerHTML = "";
     downloadPdfBtn.disabled = true;
     return;
   }
@@ -232,6 +232,8 @@ function renderLastEdited(lastEdited) {
 }
 
 async function loadSnapshots() {
+  // the snapshot controls only exist for the superuser
+  if (!snapshotSelect || !restoreSnapshotBtn) return;
   const year = yearSelect.value;
   const month = monthSelect.value;
   const res = await fetch(`/api/schedule/snapshots?year=${year}&month=${month}`);
@@ -300,6 +302,7 @@ async function restoreSnapshot() {
 }
 
 function renderSummary(staff, counts) {
+  if (!summaryEl) return; // day-count cards are branch-only
   summaryEl.innerHTML = "";
   staff.forEach((s) => {
     const card = document.createElement("div");
@@ -413,10 +416,12 @@ async function downloadPdf() {
   }
 }
 
-generateBtn.addEventListener("click", generateSchedule);
+// Generate/snapshot/restore aren't rendered for anyone but the superuser,
+// so these are all conditional now.
+if (generateBtn) generateBtn.addEventListener("click", generateSchedule);
+if (createSnapshotBtn) createSnapshotBtn.addEventListener("click", createSnapshot);
+if (restoreSnapshotBtn) restoreSnapshotBtn.addEventListener("click", restoreSnapshot);
 downloadPdfBtn.addEventListener("click", downloadPdf);
-createSnapshotBtn.addEventListener("click", createSnapshot);
-restoreSnapshotBtn.addEventListener("click", restoreSnapshot);
 monthSelect.addEventListener("change", loadSchedule);
 yearSelect.addEventListener("change", loadSchedule);
 tableBody.addEventListener("click", (e) => {
@@ -425,14 +430,6 @@ tableBody.addEventListener("click", (e) => {
   if (!td || td.querySelector("select")) return;
   openCellEditor(td);
 });
-
-if (!IS_SUPERUSER) {
-  generateBtn.disabled = true;
-  generateBtn.title = "Superuser only";
-  createSnapshotBtn.disabled = true;
-  createSnapshotBtn.title = "Superuser only";
-  restoreSnapshotBtn.title = "Superuser only";
-}
 
 initSelectors();
 loadSchedule();
