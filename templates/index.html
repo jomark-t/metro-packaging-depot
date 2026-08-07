@@ -44,25 +44,62 @@
 </head>
 <body class="bg-[#F3F4F8] text-black">
 
-<header class="bg-brand-blue text-white px-6 py-5 flex items-center justify-between flex-wrap gap-4">
-  {# w-full/min-w-0 on small screens so the tab strip below can size
-     itself against the viewport instead of its own content width #}
-  <div class="flex items-center gap-3 flex-wrap w-full sm:w-auto min-w-0">
-    <span class="text-3xl text-brand-green leading-none">⟡</span>
-    <div>
-      <h1 class="font-display font-semibold text-xl tracking-tight">{{ business_name }}</h1>
-      <p class="text-xs text-white/70">Payroll and HRMS</p>
+{# Mobile: brand + account + hamburger on one row, tabs collapse into a
+   stacked menu, month/year controls get their own row. From `sm` up the
+   wrappers dissolve (sm:contents) and everything sits on a single row
+   exactly as before. #}
+<header class="bg-brand-blue text-white px-4 sm:px-6 py-4 sm:py-5 sm:flex sm:items-center sm:flex-wrap sm:gap-4">
+
+  <div class="flex items-center justify-between gap-3 sm:contents">
+    <div class="flex items-center gap-3 min-w-0 sm:order-1">
+      <span class="text-3xl text-brand-green leading-none shrink-0">⟡</span>
+      <div class="min-w-0">
+        {# wraps to two lines on a phone rather than truncating the name;
+           the subtitle is dead weight at that width #}
+        <h1 class="font-display font-semibold text-base sm:text-xl tracking-tight leading-tight sm:truncate">{{ business_name }}</h1>
+        <p class="hidden sm:block text-xs text-white/70">Payroll and HRMS</p>
+      </div>
     </div>
-    {# On a phone the tabs take their own full-width row and scroll
-       sideways; a manager has six and they don't fit at 375px. From `sm`
-       up they sit inline next to the logo as before. #}
-    <div class="sm:ml-2 flex basis-full sm:basis-auto min-w-0 overflow-x-auto bg-white/10 rounded-lg p-1 gap-1">
-      <button id="tabDashboardBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
-      <button id="tabScheduleBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
+
+    <div class="flex items-center gap-1 shrink-0 sm:contents">
+      {# On a phone the account lives at the bottom of the hamburger menu
+         instead, so the top row is just the name of the place and the
+         menu button. #}
+      <div class="relative hidden sm:block sm:order-4">
+        <button id="userMenuBtn" type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/10 transition">
+          <div class="text-right leading-tight">
+            <p class="text-sm font-semibold">{{ current_user.display_name }}</p>
+            <p class="text-[11px] text-white/60">{% if current_user.is_superuser %}Superuser{% elif current_user.is_manager %}Manager{% else %}Viewer{% endif %}</p>
+          </div>
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="userMenu" class="hidden absolute right-0 mt-2 w-40 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-30">
+          {# Managers change their PIN from their Employees card; staff
+             without that tab need a way to do it from here. #}
+          {% if current_user.staff_name and not current_user.is_manager %}
+          <button type="button" class="change-pin-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Change PIN</button>
+          {% endif %}
+          <form method="POST" action="{{ url_for('logout') }}">
+            <button type="submit" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Log out</button>
+          </form>
+        </div>
+      </div>
+
+      <button id="navToggle" type="button" aria-label="Menu" aria-expanded="false"
+              class="sm:hidden p-2 -mr-1 rounded-lg hover:bg-white/10 transition">
+        <svg id="navIconOpen" xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        <svg id="navIconClose" xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <nav id="navTabs" class="hidden sm:flex sm:order-2 flex-col sm:flex-row mt-3 sm:mt-0 bg-white/10 rounded-lg p-1 gap-1">
+      <button id="tabDashboardBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
+      <button id="tabScheduleBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
       {# Time Off is for people who take it or approve it - an outside
          viewer has neither a schedule nor a say. #}
       {% if current_user.staff_name or current_user.is_manager %}
-      <button id="tabLeaveBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">
+      <button id="tabLeaveBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">
         Time Off<span id="pendingLeaveBadge" class="ml-1.5 hidden bg-brand-green text-black text-[10px] font-bold rounded-full px-1.5 py-0.5"></span>
       </button>
       {% endif %}
@@ -70,22 +107,36 @@
          granted it; the figures are read-only for everyone but the
          superuser, and the API enforces the same rule. #}
       {% if current_user.can_view_payroll %}
-      <button id="tabPayrollBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
+      <button id="tabPayrollBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
       {% endif %}
       {# Employee records (addresses, bank details, IDs) stay manager-only. #}
       {% if current_user.is_manager %}
-      <button id="tabEmployeesBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Employees</button>
+      <button id="tabEmployeesBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
       {% endif %}
       {# The audit trail spans everyone's pay and login changes, including
          the managers' own - superuser only. #}
       {% if current_user.is_superuser %}
-      <button id="tabActivityBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Activity</button>
-      <button id="tabAdminBtn" class="tab-btn shrink-0 whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition">Admin</button>
+      <button id="tabActivityBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Activity</button>
+      <button id="tabAdminBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Admin</button>
       {% endif %}
-    </div>
-  </div>
 
-  <div class="flex items-center gap-4 flex-wrap">
+      {# Phone-only footer for this menu - who you are and how to leave.
+         On desktop the same actions live in the account dropdown. #}
+      <div class="sm:hidden border-t border-white/15 mt-1 pt-1">
+        <p class="px-3 pt-1.5 pb-1 text-[11px] text-white/60">
+          Signed in as <span class="font-semibold text-white">{{ current_user.display_name }}</span>
+          · {% if current_user.is_superuser %}Superuser{% elif current_user.is_manager %}Manager{% else %}Viewer{% endif %}
+        </p>
+        {% if current_user.staff_name and not current_user.is_manager %}
+        <button type="button" class="change-pin-btn w-full text-left px-3 py-2 rounded-md text-sm font-medium text-white/70 hover:bg-white/10 transition">Change PIN</button>
+        {% endif %}
+        <form method="POST" action="{{ url_for('logout') }}">
+          <button type="submit" class="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-white/70 hover:bg-white/10 transition">Log out</button>
+        </form>
+      </div>
+  </nav>
+
+  <div class="flex items-center gap-2 sm:gap-4 flex-wrap mt-3 sm:mt-0 sm:order-3 sm:ml-auto">
     <div id="scheduleControls" class="flex items-center gap-2 flex-wrap">
       <select id="monthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
       <select id="yearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
@@ -100,32 +151,13 @@
       </div>
     </div>
 
-    <span class="w-px h-8 bg-white/25"></span>
-
-    <div class="relative">
-      <button id="userMenuBtn" type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/10 transition">
-        <div class="text-right leading-tight">
-          <p class="text-sm font-semibold">{{ current_user.display_name }}</p>
-          <p class="text-[11px] text-white/60">{% if current_user.is_superuser %}Superuser{% elif current_user.is_manager %}Manager{% else %}Viewer{% endif %}</p>
-        </div>
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-      <div id="userMenu" class="hidden absolute right-0 mt-2 w-40 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-        {# Managers change their PIN from their Employees card; staff
-           without that tab need a way to do it from here. #}
-        {% if current_user.staff_name and not current_user.is_manager %}
-        <button id="changePinBtn" type="button" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Change PIN</button>
-        {% endif %}
-        <form method="POST" action="{{ url_for('logout') }}">
-          <button type="submit" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Log out</button>
-        </form>
-      </div>
-    </div>
+    <span class="hidden sm:inline-block w-px h-8 bg-white/25"></span>
   </div>
 </header>
 
 <main class="max-w-[1500px] mx-auto px-6 py-7">
   <div id="dashboardView" style="display:none">
+    <h1 id="dashGreeting" class="font-display font-semibold text-2xl tracking-tight mb-0.5"></h1>
     <p id="dashboardDate" class="text-sm text-gray-600 mb-5"></p>
 
     {# Manager cards: on duty, pending approvals, cutoff, attention. #}

@@ -26,8 +26,9 @@ if (userMenuBtn && userMenu) {
 
 // Staff without the Employees tab still need to be able to change their
 // own PIN - same self-service endpoint their Employees card used to hit.
-const changePinBtn = document.getElementById("changePinBtn");
-if (changePinBtn) {
+// There are two of these: the desktop account dropdown and the phone's
+// hamburger menu.
+document.querySelectorAll(".change-pin-btn").forEach((changePinBtn) => {
   changePinBtn.addEventListener("click", async () => {
     const pin = window.prompt("Enter your new PIN (at least 4 characters):");
     if (!pin) return;
@@ -46,6 +47,25 @@ if (changePinBtn) {
     });
     const data = await res.json().catch(() => ({}));
     alert(res.ok ? "PIN changed. Use it the next time you log in." : data.message || "Could not change your PIN.");
+  });
+});
+
+// Mobile nav: the tab strip collapses behind a hamburger below `sm`.
+// Tailwind's `sm:flex` wins over the `hidden` class at desktop widths, so
+// toggling `hidden` here only ever affects the phone layout.
+const navToggle = document.getElementById("navToggle");
+const navTabs = document.getElementById("navTabs");
+if (navToggle && navTabs) {
+  const setNavOpen = (open) => {
+    navTabs.classList.toggle("hidden", !open);
+    document.getElementById("navIconOpen").classList.toggle("hidden", open);
+    document.getElementById("navIconClose").classList.toggle("hidden", !open);
+    navToggle.setAttribute("aria-expanded", String(open));
+  };
+  navToggle.addEventListener("click", () => setNavOpen(navTabs.classList.contains("hidden")));
+  // picking a destination closes the menu, the way a phone nav should
+  navTabs.addEventListener("click", (e) => {
+    if (e.target.closest(".tab-btn")) setNavOpen(false);
   });
 }
 
@@ -659,6 +679,13 @@ async function loadDashboard() {
   if (!res.ok) return;
   const data = await res.json();
 
+  // Greeting uses the viewer's own clock, not the server's - Fly runs UTC
+  // and "good evening" in Manila would land eight hours out.
+  const hour = new Date().getHours();
+  const partOfDay = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  const firstName = (CURRENT_USER.display_name || "").split(" ")[0];
+  document.getElementById("dashGreeting").textContent =
+    firstName ? `Good ${partOfDay}, ${firstName}` : `Good ${partOfDay}`;
   document.getElementById("dashboardDate").textContent = data.today_label;
   const managerBlock = document.getElementById("dashManager");
   const staffBlock = document.getElementById("dashStaff");
