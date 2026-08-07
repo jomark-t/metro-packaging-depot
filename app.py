@@ -452,6 +452,18 @@ def roster_by_name(include_archived=True):
     return {s["name"]: s for s in roster(include_archived)}
 
 
+def hide_targets(rows):
+    """Monthly day targets are management information - they invite
+    comparison between staff and they're really a scheduling input, not
+    something the team needs on their screens. Blank them out of any
+    payload going to someone who isn't a manager, rather than merely
+    hiding them in the page: the numbers shouldn't leave the server at
+    all. Callers pass a list of roster dicts and get copies back."""
+    if is_manager():
+        return rows
+    return [{**r, "target": None} for r in rows]
+
+
 def roster_for_month(db, year, month):
     """Active staff, plus anyone archived who still has shifts that month
     so their history keeps its column in the table and the PDF."""
@@ -2456,7 +2468,10 @@ def _dashboard_manager(db, today, include_money=True, can_decide=True):
         }
 
     # --- anything worth a second look -------------------------------
+    # The over/under-target lines quote the targets themselves, so they're
+    # manager-only for the same reason the numbers are.
     attention = []
+    show_targets = is_manager()
     month_start = today.replace(day=1)
     month_end = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
     cur.execute(
@@ -2465,7 +2480,7 @@ def _dashboard_manager(db, today, include_money=True, can_decide=True):
         (month_start.isoformat(), month_end.isoformat()),
     )
     days_by_name = {r["name"]: r["days"] for r in cur.fetchall()}
-    for s in roster:
+    for s in roster if show_targets else []:
         target = s["target"]
         if not target:
             continue
@@ -2503,7 +2518,7 @@ def _dashboard_manager(db, today, include_money=True, can_decide=True):
         "can_decide": can_decide,
         "cutoff": cutoff,
         "attention": attention,
-        "roster": roster,
+        "roster": hide_targets(roster),
         "days_by_name": days_by_name,
     }
 
@@ -2569,7 +2584,9 @@ def _dashboard_staff(db, staff_name, today):
         "next_shift": next_shift,
         "upcoming": upcoming,
         "days_worked": days_worked,
-        "target": row["target"],
+        # even their own target is management information - the card just
+        # reads "21 days" for staff
+        "target": row["target"] if is_manager() else None,
         "pto_entitlement": entitlement,
         "pto_available": entitlement - pto_used,
     }
@@ -2913,7 +2930,7 @@ def api_schedule():
         {
             "days": days,
             "staff_counts": staff_counts,
-            "staff": month_roster,
+            "staff": hide_targets(month_roster),
             "last_edited": fetch_schedule_edit(db.cursor(), year, month),
         }
     )
