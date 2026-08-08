@@ -448,6 +448,8 @@ const tabActivityBtn = document.getElementById("tabActivityBtn");
 const activityView = document.getElementById("activityView");
 const tabAdminBtn = document.getElementById("tabAdminBtn");
 const adminView = document.getElementById("adminView");
+const tabMyPayBtn = document.getElementById("tabMyPayBtn");
+const myPayView = document.getElementById("myPayView");
 const scheduleControls = document.getElementById("scheduleControls");
 const payrollControls = document.getElementById("payrollControls");
 const scheduleView = document.getElementById("scheduleView");
@@ -466,6 +468,7 @@ if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, contr
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
+if (tabMyPayBtn) TABS.mypay = { btn: tabMyPayBtn, view: myPayView, controls: null };
 const loadedOnce = { payroll: false, employees: false, leave: false, activity: false };
 
 function showTab(tab) {
@@ -494,6 +497,9 @@ function showTab(tab) {
   if (tab === "admin") {
     loadAdminUsers();
   }
+  if (tab === "mypay") {
+    loadMyPay();
+  }
   if (tab === "activity") {
     // always refresh - the point of the log is to show what just happened
     loadedOnce.activity = true;
@@ -508,6 +514,7 @@ if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payrol
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
+if (tabMyPayBtn) tabMyPayBtn.addEventListener("click", () => showTab("mypay"));
 
 // Staff land on the dashboard - "when am I next in" is why they opened the
 // app. Managers land on the schedule, which is what they came to work on.
@@ -699,6 +706,125 @@ const dashRequestLeave = document.getElementById("dashRequestLeave");
 if (dashRequestLeave) dashRequestLeave.addEventListener("click", () => showTab("leave"));
 const dashTeamSchedule = document.getElementById("dashTeamSchedule");
 if (dashTeamSchedule) dashTeamSchedule.addEventListener("click", () => showTab("schedule"));
+const dashMyPay = document.getElementById("dashMyPay");
+if (dashMyPay) dashMyPay.addEventListener("click", () => showTab("mypay"));
+
+// ---------------------------------------------------------------------------
+// My Pay (a staff member's own payslip)
+// ---------------------------------------------------------------------------
+const myPayMonth = document.getElementById("myPayMonth");
+const myPayYear = document.getElementById("myPayYear");
+let myPayPayday = 10;
+
+function initMyPay() {
+  MONTH_NAMES.forEach((name, i) => {
+    const opt = document.createElement("option");
+    opt.value = i + 1;
+    opt.textContent = name;
+    myPayMonth.appendChild(opt);
+  });
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear; y >= currentYear - 2; y--) {
+    const opt = document.createElement("option");
+    opt.value = y;
+    opt.textContent = y;
+    myPayYear.appendChild(opt);
+  }
+
+  // default to the cutoff we're currently inside, same rule as Payroll
+  const def = defaultPayrollPeriod();
+  myPayMonth.value = def.month;
+  myPayYear.value = def.year;
+  myPayPayday = def.payday;
+
+  myPayMonth.addEventListener("change", loadMyPay);
+  myPayYear.addEventListener("change", loadMyPay);
+  document.getElementById("myPay10Btn").addEventListener("click", () => {
+    myPayPayday = 10;
+    loadMyPay();
+  });
+  document.getElementById("myPay25Btn").addEventListener("click", () => {
+    myPayPayday = 25;
+    loadMyPay();
+  });
+}
+
+function renderMyPaydayButtons() {
+  [["myPay10Btn", 10], ["myPay25Btn", 25]].forEach(([id, value]) => {
+    const btn = document.getElementById(id);
+    const active = myPayPayday === value;
+    btn.classList.toggle("bg-brand-blue", active);
+    btn.classList.toggle("text-white", active);
+    btn.classList.toggle("text-gray-600", !active);
+  });
+}
+
+async function loadMyPay() {
+  renderMyPaydayButtons();
+  const res = await fetch(
+    `/api/payroll/mine?year=${myPayYear.value}&month=${myPayMonth.value}&payday=${myPayPayday}`
+  );
+  const linesEl = document.getElementById("myPayLines");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    linesEl.innerHTML = `<li class="py-2 text-gray-500">${escapeHtml(err.message || "Could not load your payslip.")}</li>`;
+    document.getElementById("myPayNet").textContent = "—";
+    return;
+  }
+  const data = await res.json();
+  const p = data.row;
+
+  const fmt = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  document.getElementById("myPayName").textContent = p.full_name;
+  document.getElementById("myPayPeriod").textContent =
+    `${fmt(data.period_start)} – ${fmt(data.period_end)} · paid ${fmt(data.pay_date)}`;
+
+  const statusEl = document.getElementById("myPayStatus");
+  statusEl.innerHTML = data.final
+    ? `<span class="text-brand-green font-medium">● Final</span> <span class="text-gray-500">— this cutoff has been closed.</span>`
+    : `<span class="text-amber-600 font-medium">● Running total</span> <span class="text-gray-500">— this cutoff isn't closed yet, so figures can still change.</span>`;
+
+  // earnings first, then deductions, matching the printed payslip
+  const lines = [];
+  if (p.monthly_salary) {
+    lines.push(["Monthly salary", formatMoney(p.monthly_salary), false]);
+    lines.push(["Base pay (half-month)", formatMoney(p.base_pay), false]);
+  } else {
+    lines.push([`Days worked (× ${formatMoney(p.daily_rate)})`, String(p.days_worked), false]);
+    lines.push(["Base pay", formatMoney(p.base_pay), false]);
+  }
+  if (p.has_bonus) lines.push(["Cup bonus", formatMoney(p.bonus), false]);
+  if (p.manual_bonus) lines.push(["Bonus", formatMoney(p.manual_bonus), false]);
+  if (p.ot_hours) lines.push([`Overtime (${p.ot_hours} h × ${formatMoney(data.ot_rate)})`, formatMoney(p.ot_pay), false]);
+
+  [["SSS", p.sss], ["Pag-IBIG", p.pagibig], ["PhilHealth", p.philhealth], ["HMO", p.hmo],
+   ["Printing errors", p.error_deduction], ["Absence deduction", p.absence_deduction]].forEach(
+    ([label, value]) => {
+      if (value) lines.push([label, `−${formatMoney(value)}`, true]);
+    }
+  );
+  if (p.cash_advance) {
+    const left = p.advance_outstanding_after;
+    lines.push([
+      `Cash advance${left ? ` (${formatMoney(left)} left after this)` : " (cleared)"}`,
+      `−${formatMoney(p.cash_advance)}`,
+      true,
+    ]);
+  }
+
+  linesEl.innerHTML = lines
+    .map(
+      ([label, value, isDeduction]) => `
+      <li class="flex items-baseline justify-between gap-4 py-1.5">
+        <span class="${isDeduction ? "text-gray-500" : "text-black"}">${escapeHtml(label)}</span>
+        <span class="font-mono whitespace-nowrap ${isDeduction ? "text-red-600" : "text-black"}">${escapeHtml(value)}</span>
+      </li>`
+    )
+    .join("");
+  document.getElementById("myPayNet").textContent = formatMoney(p.net_pay);
+}
+
+if (myPayMonth) initMyPay();
 
 // ---------------------------------------------------------------------------
 // Admin (outside accounts)

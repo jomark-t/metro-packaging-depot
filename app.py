@@ -2970,6 +2970,54 @@ def api_payroll():
     return jsonify(compute_payroll(db, start, end, pay_date))
 
 
+@app.route("/api/payroll/mine")
+@login_required
+def api_my_payroll():
+    """One staff member's own figures for a cutoff, and nobody else's.
+
+    Deliberately not a filtered view of /api/payroll: that route is
+    manager-gated and returns the whole team, so reusing it would mean
+    trusting the client to discard the rest. Here the other rows never
+    leave the server."""
+    staff_name = session.get("staff_name")
+    if not staff_name:
+        # the superuser and outside viewers have no payslip of their own
+        return jsonify({"status": "error", "message": "This account has no payroll record"}), 400
+
+    payday = int(request.args.get("payday") or 10)
+    if payday not in (10, 25):
+        return jsonify({"status": "error", "message": "payday must be 10 or 25"}), 400
+    year = int(request.args.get("year") or date.today().year)
+    month = int(request.args.get("month") or date.today().month)
+
+    start, end, pay_date = payroll_period_range(year, month, payday)
+    db = get_db()
+    payroll = compute_payroll(db, start, end, pay_date)
+    row = next((p for p in payroll["staff"] if p["name"] == staff_name), None)
+    if row is None:
+        return jsonify({"status": "error", "message": "No payroll record found"}), 404
+
+    cur = db.cursor()
+    cur.execute(
+        """SELECT COUNT(*) AS c FROM payroll_extras
+           JOIN staff ON staff.id = payroll_extras.staff_id
+           WHERE pay_date=%s AND staff.name=%s""",
+        (pay_date.isoformat(), staff_name),
+    )
+    return jsonify(
+        {
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "pay_date": pay_date.isoformat(),
+            # until the cutoff is saved these are a running estimate, and
+            # the view says so rather than implying a final figure
+            "final": cur.fetchone()["c"] > 0,
+            "ot_rate": OT_HOURLY_RATE,
+            "row": row,
+        }
+    )
+
+
 @app.route("/api/payroll/13th-month")
 @payroll_view_required
 def api_thirteenth_month():

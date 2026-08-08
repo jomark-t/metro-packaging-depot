@@ -108,6 +108,10 @@
          superuser, and the API enforces the same rule. #}
       {% if current_user.can_view_payroll %}
       <button id="tabPayrollBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
+      {# Staff who don't see the whole payroll get their own payslip
+         instead. Clare has the full tab, so she doesn't need this. #}
+      {% elif current_user.staff_name %}
+      <button id="tabMyPayBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Pay</button>
       {% endif %}
       {# Employee records (addresses, bank details, IDs) stay manager-only. #}
       {% if current_user.is_manager %}
@@ -224,6 +228,9 @@
       <div class="flex items-center gap-3 flex-wrap mb-10">
         <button id="dashRequestLeave" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition">Request time off</button>
         <button id="dashTeamSchedule" class="bg-white border border-gray-200 text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-gray-50 transition">Team schedule</button>
+        {% if current_user.staff_name and not current_user.can_view_payroll %}
+        <button id="dashMyPay" class="bg-white border border-gray-200 text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-gray-50 transition">My pay</button>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -380,6 +387,42 @@
         </div>
         <div id="leaveRequestsWrap" class="overflow-auto"></div>
       </section>
+    </div>
+  </div>
+
+  <div id="myPayView" style="display:none">
+    <div class="max-w-xl">
+      <div class="flex items-end gap-2 flex-wrap mb-4">
+        <label class="block text-xs"><span class="text-gray-500">Month</span>
+          <select id="myPayMonth" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select></label>
+        <label class="block text-xs"><span class="text-gray-500">Year</span>
+          <select id="myPayYear" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select></label>
+        <div class="inline-flex bg-white border border-gray-300 rounded-lg p-1 gap-1">
+          <button id="myPay10Btn" class="mypay-payday px-3 py-1.5 rounded-md text-sm font-medium text-gray-600 transition">10th</button>
+          <button id="myPay25Btn" class="mypay-payday px-3 py-1.5 rounded-md text-sm font-medium text-gray-600 transition">25th</button>
+        </div>
+      </div>
+
+      <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="bg-brand-blue text-white px-5 py-4">
+          <p class="text-[10px] uppercase tracking-wide text-white/60 font-mono">Payslip</p>
+          <p id="myPayName" class="font-display font-semibold text-lg leading-tight"></p>
+          <p id="myPayPeriod" class="text-xs text-white/70 mt-0.5"></p>
+        </div>
+        <div id="myPayStatus" class="px-5 py-2 text-xs border-b border-gray-200"></div>
+        <div class="px-5 py-4">
+          <ul id="myPayLines" class="text-sm divide-y divide-gray-100"></ul>
+          <div class="flex items-baseline justify-between mt-4 pt-3 border-t-2 border-brand-blue">
+            <span class="font-display font-semibold text-brand-blue">NET PAY</span>
+            <span id="myPayNet" class="font-mono text-2xl font-semibold text-brand-blue"></span>
+          </div>
+        </div>
+      </div>
+
+      <p class="text-[11px] text-gray-400 mt-3 mb-10">
+        Computed from the schedule. If something looks wrong, raise it with
+        the branch manager — this page is read-only.
+      </p>
     </div>
   </div>
 
