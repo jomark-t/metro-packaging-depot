@@ -113,6 +113,10 @@
       {% elif current_user.staff_name %}
       <button id="tabMyPayBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Pay</button>
       {% endif %}
+      {# Their own record, read-only. Managers use the Employees tab. #}
+      {% if current_user.staff_name and not current_user.is_manager %}
+      <button id="tabMyInfoBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Details</button>
+      {% endif %}
       {# Employee records (addresses, bank details, IDs) stay manager-only. #}
       {% if current_user.is_manager %}
       <button id="tabEmployeesBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
@@ -387,6 +391,53 @@
         </div>
         <div id="leaveRequestsWrap" class="overflow-auto"></div>
       </section>
+    </div>
+  </div>
+
+  <div id="myInfoView" style="display:none">
+    <div class="max-w-4xl">
+      <div class="flex items-start gap-4 mb-5">
+        <div class="shrink-0">
+          <div id="myInfoPhoto" class="w-16 h-16 rounded-full overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center"></div>
+        </div>
+        <div class="min-w-0">
+          <p id="myInfoName" class="font-display font-semibold text-xl leading-tight"></p>
+          <p id="myInfoRole" class="text-sm text-gray-500"></p>
+        </div>
+      </div>
+
+      <p class="text-xs text-gray-500 mb-5">
+        Your own record, as the branch holds it. It's read-only here — if
+        anything is wrong or out of date, tell the branch manager and
+        they'll correct it.
+      </p>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-10">
+        <section class="border border-gray-200 bg-white rounded-xl p-4 shadow-sm">
+          <h3 class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-3">Basic Information</h3>
+          <dl id="myInfoBasic" class="text-sm divide-y divide-gray-100"></dl>
+        </section>
+
+        <section class="border border-gray-200 bg-white rounded-xl p-4 shadow-sm">
+          <h3 class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-3">Government</h3>
+          <dl id="myInfoGov" class="text-sm divide-y divide-gray-100"></dl>
+          <p class="text-[11px] text-gray-400 mt-2">The amounts are what's deducted each cutoff.</p>
+        </section>
+
+        <section class="border border-gray-200 bg-white rounded-xl p-4 shadow-sm">
+          <h3 class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-3">Bank</h3>
+          <dl id="myInfoBank" class="text-sm divide-y divide-gray-100"></dl>
+        </section>
+
+        <section class="border border-gray-200 bg-white rounded-xl p-4 shadow-sm">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <h3 class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Paid Time Off</h3>
+            <select id="myInfoPtoYear" class="text-xs border border-gray-300 rounded-md px-2 py-1"></select>
+          </div>
+          <p id="myInfoPtoSummary" class="text-sm text-gray-600 mb-2"></p>
+          <div id="myInfoPtoDates"></div>
+        </section>
+      </div>
     </div>
   </div>
 

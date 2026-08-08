@@ -1757,10 +1757,12 @@ def api_staff_create():
         return jsonify({"status": "error", "message": "Short name must be 20 characters or fewer"}), 400
     if not re.fullmatch(r"[A-Za-z0-9 '\-]+", name):
         return jsonify({"status": "error", "message": "Short name can only use letters, numbers, spaces, - and '"}), 400
-    # /api/staff/new is this very route - a person called "new" would be
-    # unreachable at /api/staff/<name>
-    if name.lower() == "new":
-        return jsonify({"status": "error", "message": "'new' is reserved - pick a different short name"}), 400
+    # these are routes of their own (/api/staff/new, /api/staff/me), so a
+    # person with either short name would be unreachable at /api/staff/<name>
+    if name.lower() in ("new", "me"):
+        return jsonify(
+            {"status": "error", "message": f"'{name}' is reserved - pick a different short name"}
+        ), 400
     if category not in STAFF_CATEGORIES:
         return jsonify({"status": "error", "message": "Pick a valid category"}), 400
     if not full_name:
@@ -1916,6 +1918,68 @@ def api_staff_update(name):
             record_audit(cur, "Updated employee", name, changed)
         db.commit()
     return jsonify({"status": "ok"})
+
+
+# What a staff member may see of their own record. An allow-list rather
+# than a deny-list on purpose: a column added to `staff` later stays
+# invisible here until someone deliberately adds it. Notably absent is
+# `target` - monthly day targets are management information (see
+# hide_targets) - along with anything about other people.
+MY_DETAILS_FIELDS = (
+    "full_name", "role", "employment", "birthday", "phone", "email", "address",
+    "photo_filename", "daily_rate", "monthly_salary",
+    "sss_id", "pagibig_id", "philhealth_id", "hmo_id",
+    "default_sss", "default_pagibig", "default_philhealth", "default_hmo",
+    "bank_name", "bank_account_name", "bank_account_number", "pto_entitlement",
+)
+
+
+@app.route("/api/staff/me")
+@login_required
+def api_my_details():
+    """The logged-in staff member's own record, read-only.
+
+    Not a filtered /api/staff: that route is manager-gated and returns
+    everybody's addresses and bank accounts, so the whole team's details
+    would be sitting in one person's browser."""
+    staff_name = session.get("staff_name")
+    if not staff_name:
+        return jsonify({"status": "error", "message": "This account has no employee record"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        f"SELECT id, name, {', '.join(MY_DETAILS_FIELDS)} FROM staff WHERE name=%s",
+        (staff_name,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No employee record found"}), 404
+
+    details = {f: row[f] for f in MY_DETAILS_FIELDS}
+    details["name"] = row["name"]
+
+    year = int(request.args.get("year") or date.today().year)
+    entitlement = row["pto_entitlement"] or 0
+    cur.execute(
+        """SELECT date FROM schedule
+           WHERE staff_id=%s AND shift_label='Paid Time Off' AND date LIKE %s ORDER BY date""",
+        (row["id"], f"{year}-%"),
+    )
+    used_dates = [r["date"] for r in cur.fetchall()]
+
+    return jsonify(
+        {
+            "details": details,
+            "pto": {
+                "year": year,
+                "entitlement": entitlement,
+                "used_count": len(used_dates),
+                "available": entitlement - len(used_dates),
+                "used_dates": used_dates,
+            },
+        }
+    )
 
 
 @app.route("/api/staff/<name>/advances")

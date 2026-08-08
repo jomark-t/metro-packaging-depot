@@ -450,6 +450,8 @@ const tabAdminBtn = document.getElementById("tabAdminBtn");
 const adminView = document.getElementById("adminView");
 const tabMyPayBtn = document.getElementById("tabMyPayBtn");
 const myPayView = document.getElementById("myPayView");
+const tabMyInfoBtn = document.getElementById("tabMyInfoBtn");
+const myInfoView = document.getElementById("myInfoView");
 const scheduleControls = document.getElementById("scheduleControls");
 const payrollControls = document.getElementById("payrollControls");
 const scheduleView = document.getElementById("scheduleView");
@@ -469,6 +471,7 @@ if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesVie
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
 if (tabMyPayBtn) TABS.mypay = { btn: tabMyPayBtn, view: myPayView, controls: null };
+if (tabMyInfoBtn) TABS.myinfo = { btn: tabMyInfoBtn, view: myInfoView, controls: null };
 const loadedOnce = { payroll: false, employees: false, leave: false, activity: false };
 
 function showTab(tab) {
@@ -500,6 +503,9 @@ function showTab(tab) {
   if (tab === "mypay") {
     loadMyPay();
   }
+  if (tab === "myinfo") {
+    loadMyDetails();
+  }
   if (tab === "activity") {
     // always refresh - the point of the log is to show what just happened
     loadedOnce.activity = true;
@@ -515,6 +521,7 @@ if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("em
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
 if (tabMyPayBtn) tabMyPayBtn.addEventListener("click", () => showTab("mypay"));
+if (tabMyInfoBtn) tabMyInfoBtn.addEventListener("click", () => showTab("myinfo"));
 
 // Staff land on the dashboard - "when am I next in" is why they opened the
 // app. Managers land on the schedule, which is what they came to work on.
@@ -708,6 +715,105 @@ const dashTeamSchedule = document.getElementById("dashTeamSchedule");
 if (dashTeamSchedule) dashTeamSchedule.addEventListener("click", () => showTab("schedule"));
 const dashMyPay = document.getElementById("dashMyPay");
 if (dashMyPay) dashMyPay.addEventListener("click", () => showTab("mypay"));
+
+// ---------------------------------------------------------------------------
+// My Details (a staff member's own record, read-only)
+// ---------------------------------------------------------------------------
+const myInfoPtoYear = document.getElementById("myInfoPtoYear");
+
+// definition list rows; blank values read "—" rather than vanishing, so a
+// missing bank account is visibly missing rather than silently absent
+function infoRows(pairs) {
+  return pairs
+    .map(
+      ([label, value]) => `
+      <div class="flex items-baseline justify-between gap-4 py-1.5">
+        <dt class="text-gray-500 shrink-0">${escapeHtml(label)}</dt>
+        <dd class="text-right ${value ? "" : "text-gray-300"}">${value ? escapeHtml(String(value)) : "—"}</dd>
+      </div>`
+    )
+    .join("");
+}
+
+function renderMyDetails(d, pto) {
+  const initial = (d.full_name || d.name || "?").trim().charAt(0).toUpperCase();
+  document.getElementById("myInfoPhoto").innerHTML = d.photo_filename
+    ? `<img class="w-full h-full object-cover" src="/static/uploads/${escapeHtml(d.photo_filename)}" alt="" />`
+    : `<span class="text-xl font-semibold text-gray-400">${escapeHtml(initial)}</span>`;
+  document.getElementById("myInfoName").textContent = d.full_name || d.name;
+  document.getElementById("myInfoRole").textContent = [d.role, d.employment].filter(Boolean).join(" · ");
+
+  const rate = d.monthly_salary
+    ? `${formatMoney(d.monthly_salary)} / month`
+    : d.daily_rate
+    ? `${formatMoney(d.daily_rate)} / day`
+    : "";
+  document.getElementById("myInfoBasic").innerHTML = infoRows([
+    ["Employment", d.employment],
+    ["Pay rate", rate],
+    ["Birthday", d.birthday],
+    ["Phone", d.phone],
+    ["Email", d.email],
+    ["Address", d.address],
+  ]);
+
+  document.getElementById("myInfoGov").innerHTML = infoRows([
+    ["SSS no.", d.sss_id],
+    ["SSS amount", d.default_sss ? formatMoney(d.default_sss) : ""],
+    ["Pag-IBIG no.", d.pagibig_id],
+    ["Pag-IBIG amount", d.default_pagibig ? formatMoney(d.default_pagibig) : ""],
+    ["PhilHealth no.", d.philhealth_id],
+    ["PhilHealth amount", d.default_philhealth ? formatMoney(d.default_philhealth) : ""],
+    ["HMO no.", d.hmo_id],
+    ["HMO amount", d.default_hmo ? formatMoney(d.default_hmo) : ""],
+  ]);
+
+  document.getElementById("myInfoBank").innerHTML = infoRows([
+    ["Bank", d.bank_name],
+    ["Account name", d.bank_account_name],
+    ["Account number", d.bank_account_number],
+  ]);
+
+  const availableClass = pto.available <= 0 ? "text-red-600" : "text-brand-blue";
+  document.getElementById("myInfoPtoSummary").innerHTML =
+    `<span class="${availableClass} font-semibold">${pto.available}</span> of ${pto.entitlement} available ` +
+    `<span class="text-gray-400">(${pto.used_count} used in ${pto.year})</span>`;
+
+  const datesEl = document.getElementById("myInfoPtoDates");
+  datesEl.innerHTML = pto.used_dates.length
+    ? `<ul class="text-xs divide-y divide-gray-100 border border-gray-200 rounded-md">${pto.used_dates
+        .map((iso) => {
+          const dt = new Date(`${iso}T00:00:00`);
+          return `<li class="px-2 py-1.5 flex justify-between">
+                    <span class="font-mono">${dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
+                    <span class="text-gray-500">${dt.toLocaleDateString(undefined, { weekday: "short" })}</span>
+                  </li>`;
+        })
+        .join("")}</ul>`
+    : `<p class="text-xs text-gray-400 italic">No Paid Time Off used in ${pto.year}.</p>`;
+}
+
+async function loadMyDetails() {
+  const res = await fetch(`/api/staff/me?year=${myInfoPtoYear.value || new Date().getFullYear()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    document.getElementById("myInfoName").textContent = err.message || "Could not load your details.";
+    return;
+  }
+  const data = await res.json();
+  renderMyDetails(data.details, data.pto);
+}
+
+if (myInfoPtoYear) {
+  const thisYear = new Date().getFullYear();
+  for (let y = thisYear; y >= thisYear - 2; y--) {
+    const opt = document.createElement("option");
+    opt.value = y;
+    opt.textContent = y;
+    myInfoPtoYear.appendChild(opt);
+  }
+  myInfoPtoYear.addEventListener("change", loadMyDetails);
+}
 
 // ---------------------------------------------------------------------------
 // My Pay (a staff member's own payslip)

@@ -28,9 +28,15 @@
 </script>
 <style>
   body { font-family: 'Inter', sans-serif; }
+  /* 100dvh tracks the *visible* viewport as mobile browser chrome and the
+     on-screen keyboard come and go; 100vh doesn't, which leaves the card
+     partly under the address bar. min-h-screen stays as the fallback. */
+  @supports (min-height: 100dvh) {
+    body { min-height: 100dvh; }
+  }
 </style>
 </head>
-<body class="bg-brand-blue min-h-screen flex items-center justify-center px-4">
+<body class="bg-brand-blue min-h-screen flex items-center justify-center px-4 py-8">
 
   <div class="w-full max-w-sm">
     <div class="text-center mb-6">
@@ -39,16 +45,21 @@
       <p class="text-sm text-white/70">Payroll and HRMS</p>
     </div>
 
-    <div class="bg-white rounded-xl shadow-lg p-6">
+    <div class="bg-white rounded-xl shadow-lg p-5 sm:p-6">
       {% if error %}
       <p class="bg-red-50 text-red-700 text-sm rounded-lg px-3 py-2 mb-4">{{ error }}</p>
       {% endif %}
 
       {% if candidates %}
+      {# text-base on the controls is deliberate: iOS Safari zooms the whole
+         page when a focused field is under 16px, and py-3 gets the tap
+         targets to roughly 44px. No autofocus - the name picker defaults to
+         the first account, so most people need to change it, and popping
+         the keyboard straight away hides it behind the keyboard. #}
       <form method="POST" class="space-y-4">
         <label class="block">
           <span class="text-xs text-gray-500 uppercase tracking-wide">Log in as</span>
-          <select name="user_id" required class="w-full border border-gray-300 rounded-lg px-3 py-2 mt-1 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue">
+          <select name="user_id" required class="w-full border border-gray-300 rounded-lg px-3 py-3 mt-1 text-base focus:outline-none focus:ring-2 focus:ring-brand-blue">
             {% for c in candidates %}
             <option value="{{ c.id }}">{{ c.display_name }}</option>
             {% endfor %}
@@ -56,9 +67,11 @@
         </label>
         <label class="block">
           <span class="text-xs text-gray-500 uppercase tracking-wide">PIN</span>
-          <input type="password" name="pin" required autofocus class="w-full border border-gray-300 rounded-lg px-3 py-2 mt-1 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-brand-blue" />
+          <input type="password" name="pin" required
+                 autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-3 mt-1 text-base font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-brand-blue" />
         </label>
-        <button type="submit" class="w-full bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2.5 hover:brightness-95 active:brightness-90 transition">
+        <button type="submit" class="w-full bg-brand-green text-black font-semibold text-base rounded-lg px-4 py-3 hover:brightness-95 active:brightness-90 transition">
           Log in
         </button>
       </form>
