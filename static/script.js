@@ -105,12 +105,12 @@ function initSelectors() {
 
 // Tailwind utility classes per shift label - chip background/text/border
 // Sales shifts use soft/light badges; machine-op days use bold solid
-// badges so Printer/Checker read as clearly distinct from Assist/Closing
+// badges so Printer/Checker read as clearly distinct from Half Day/Closing
 // and from each other.
 const CHIP_CLASSES = {
   Opening: "bg-blue-50 text-brand-blue border-l-2 border-brand-blue",
   Closing: "bg-gray-100 text-black border-l-2 border-black",
-  Assist: "bg-[#F4EBDF] text-brand-tan border-l-2 border-brand-tan",
+  "Half Day": "bg-[#F4EBDF] text-brand-tan border-l-2 border-brand-tan",
   Inventory: "bg-green-50 text-brand-green border-l-2 border-brand-green",
   Printer: "bg-[#e3d1ba] text-[#8a6a3e] border-l-2 border-[#8a6a3e]",
   Checker: "bg-gray-300 text-black border-l-2 border-black",
@@ -124,10 +124,10 @@ function chipClasses(label) {
 // Shifts a person can be manually reassigned to, keyed by staff category.
 // Mirrors EDITABLE_OPTIONS in app.py.
 const EDITABLE_OPTIONS = {
-  manager: ["Opening", "Closing", "Inventory", "Paid Time Off", "Off"],
-  sales: ["Opening", "Closing", "Inventory", "Paid Time Off", "Off"],
-  sales_pt: ["Opening", "Closing", "Assist", "Inventory", "Paid Time Off", "Off"],
-  machine: ["Printer", "Checker", "Inventory", "Paid Time Off", "Off"],
+  manager: ["Opening", "Closing", "Half Day", "Inventory", "Paid Time Off", "Off"],
+  sales: ["Opening", "Closing", "Half Day", "Inventory", "Paid Time Off", "Off"],
+  sales_pt: ["Opening", "Closing", "Half Day", "Inventory", "Paid Time Off", "Off"],
+  machine: ["Printer", "Checker", "Half Day", "Inventory", "Paid Time Off", "Off"],
 };
 
 function cellDisplayHtml(label, timeRange) {
@@ -903,6 +903,16 @@ async function loadMyPay() {
   if (p.manual_bonus) lines.push(["Bonus", formatMoney(p.manual_bonus), false]);
   if (p.ot_hours) lines.push([`Overtime (${p.ot_hours} h × ${formatMoney(data.ot_rate)})`, formatMoney(p.ot_pay), false]);
 
+  // undertime keeps its own line rather than being netted off the overtime
+  // above - Art. 88 forbids offsetting one against the other
+  if (p.undertime_hours) {
+    lines.push([
+      `Undertime (${p.undertime_hours} h × ${formatMoney(p.undertime_rate)})`,
+      `−${formatMoney(p.undertime_deduction)}`,
+      true,
+    ]);
+  }
+
   [["SSS", p.sss], ["Pag-IBIG", p.pagibig], ["PhilHealth", p.philhealth], ["HMO", p.hmo],
    ["Printing errors", p.error_deduction], ["Absence deduction", p.absence_deduction]].forEach(
     ([label, value]) => {
@@ -1562,13 +1572,19 @@ function computeRowTotals(row) {
   const cashAdvance = parseFloat(row.querySelector(".cash-advance-input").value) || 0;
 
   const otPay = otHours * currentOtRate;
+  // undertime is docked at this person's own hourly rate, not the flat OT
+  // rate, so it rides along on the row rather than a global constant
+  const undertimeHours = parseFloat(row.querySelector(".undertime-hours-input").value) || 0;
+  const undertimeDed = undertimeHours * (parseFloat(row.dataset.undertimeRate) || 0);
   const absenceDed = parseFloat(row.dataset.absenceDeduction) || 0;
-  const totalDeductions = sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed;
+  const totalDeductions =
+    sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed + undertimeDed;
   const basePay = parseFloat(row.dataset.basePay) || 0;
   const bonus = parseFloat(row.dataset.bonus) || 0;
   const netPay = basePay + otPay + bonus + manualBonus - totalDeductions;
 
   row.querySelector(".ot-pay-cell").textContent = formatMoney(otPay);
+  row.querySelector(".undertime-pay-cell").textContent = formatMoney(undertimeDed);
   row.querySelector(".total-deductions-cell").textContent = formatMoney(totalDeductions);
   row.querySelector(".net-pay-cell").textContent = formatMoney(netPay);
 
@@ -1589,6 +1605,7 @@ function computeRowTotals(row) {
 function computeGrandTotals() {
   const totals = {
     days: 0, base: 0, bonus: 0, manualBonus: 0, otHours: 0, otPay: 0,
+    undertimeHours: 0, undertimeDed: 0,
     sss: 0, pagibig: 0, philhealth: 0, hmo: 0, errorDed: 0, cashAdvance: 0, absenceDed: 0, ded: 0, net: 0,
   };
 
@@ -1605,7 +1622,10 @@ function computeGrandTotals() {
     const cashAdvance = parseFloat(row.querySelector(".cash-advance-input").value) || 0;
     const absenceDed = parseFloat(row.dataset.absenceDeduction) || 0;
     const otPay = otHours * currentOtRate;
-    const ded = sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed;
+    const undertimeHours = parseFloat(row.querySelector(".undertime-hours-input").value) || 0;
+    const undertimeDed = undertimeHours * (parseFloat(row.dataset.undertimeRate) || 0);
+    const ded =
+      sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed + undertimeDed;
     const net = base + otPay + bonus + manualBonus - ded;
 
     totals.days += parseFloat(row.dataset.days) || 0;
@@ -1614,6 +1634,8 @@ function computeGrandTotals() {
     totals.manualBonus += manualBonus;
     totals.otHours += otHours;
     totals.otPay += otPay;
+    totals.undertimeHours += undertimeHours;
+    totals.undertimeDed += undertimeDed;
     totals.sss += sss;
     totals.pagibig += pagibig;
     totals.philhealth += philhealth;
@@ -1635,6 +1657,8 @@ function computeGrandTotals() {
   foot.querySelector(".totals-manual-bonus").textContent = formatMoney(totals.manualBonus);
   foot.querySelector(".totals-ot-hours").textContent = totals.otHours;
   foot.querySelector(".totals-ot-pay").textContent = formatMoney(totals.otPay);
+  foot.querySelector(".totals-undertime-hours").textContent = totals.undertimeHours;
+  foot.querySelector(".totals-undertime-ded").textContent = formatMoney(totals.undertimeDed);
   foot.querySelector(".totals-sss").textContent = formatMoney(totals.sss);
   foot.querySelector(".totals-pagibig").textContent = formatMoney(totals.pagibig);
   foot.querySelector(".totals-philhealth").textContent = formatMoney(totals.philhealth);
@@ -1656,6 +1680,8 @@ function renderPayrollFooter() {
       <td class="px-3 py-3 font-mono totals-manual-bonus whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-ot-hours"></td>
       <td class="px-3 py-3 font-mono totals-ot-pay whitespace-nowrap"></td>
+      <td class="px-3 py-3 font-mono totals-undertime-hours"></td>
+      <td class="px-3 py-3 font-mono totals-undertime-ded whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-sss whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-pagibig whitespace-nowrap"></td>
       <td class="px-3 py-3 font-mono totals-philhealth whitespace-nowrap"></td>
@@ -1672,7 +1698,8 @@ function renderPayrollFooter() {
 function renderPayrollTable(staffList) {
   const headers = [
     "Name", "Role", "Days", "Base Pay", "Cup Bonus", "Bonus",
-    `OT Hrs`, `OT Pay (×₱${currentOtRate})`, "SSS", "Pag-IBIG", "PhilHealth", "HMO", "Printing Errors",
+    `OT Hrs`, `OT Pay (×₱${currentOtRate})`, "Undertime Hrs", "Undertime Ded.",
+    "SSS", "Pag-IBIG", "PhilHealth", "HMO", "Printing Errors",
     "Cash Advance", "Absence Ded.", "Total Ded.", "Net Pay",
   ];
   payrollHeadRow.innerHTML = headers
@@ -1742,6 +1769,16 @@ function renderPayrollTable(staffList) {
     otPayTd.textContent = formatMoney(p.ot_pay);
     tr.appendChild(otPayTd);
 
+    // undertime sits next to OT but stays a separate deduction - the two
+    // are never netted against each other (Art. 88)
+    tr.dataset.undertimeRate = p.undertime_rate || 0;
+    tr.appendChild(inputCell("undertime-hours-input", p.undertime_hours));
+
+    const undertimeTd = document.createElement("td");
+    undertimeTd.className = "px-3 py-2.5 align-top font-mono undertime-pay-cell whitespace-nowrap";
+    undertimeTd.textContent = formatMoney(p.undertime_deduction);
+    tr.appendChild(undertimeTd);
+
     tr.appendChild(inputCell("sss-input", p.sss));
     tr.appendChild(inputCell("pagibig-input", p.pagibig));
     tr.appendChild(inputCell("philhealth-input", p.philhealth));
@@ -1796,6 +1833,7 @@ async function savePayrollData() {
     const staff = Array.from(payrollBody.querySelectorAll("tr")).map((tr) => ({
       name: tr.dataset.name,
       ot_hours: tr.querySelector(".ot-hours-input").value,
+      undertime_hours: tr.querySelector(".undertime-hours-input").value,
       sss: tr.querySelector(".sss-input").value,
       pagibig: tr.querySelector(".pagibig-input").value,
       philhealth: tr.querySelector(".philhealth-input").value,

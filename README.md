@@ -134,14 +134,19 @@ Semi-monthly, computed from the generated schedule.
 - **Cutoffs:** the 10th payout covers the 25th of the prior month through
   the 9th; the 25th covers the 10th through the 24th.
 - **Base pay** = days worked in the cutoff × the daily rate, or half the
-  monthly salary for fixed-salary staff. An **Assist** shift counts as a
-  half day.
+  monthly salary for fixed-salary staff. A **Half Day** shift counts as
+  0.5.
 - **Cup bonus:** enter the store-wide daily cup total for every day in the
   cutoff. The first 1,000 cups/day are quota; beyond that whoever held
   **Printer** earns ₱0.15 per qualified cup and **Checker** ₱0.10, read
   from the schedule.
 - **Bonus** — a discretionary amount, entered by hand, for anyone.
 - **OT hours** at a flat ₱50/hr.
+- **Undertime hours** — hand-entered per cutoff for someone who left
+  early, docked at that person's own hourly rate (daily rate ÷ 8, or
+  monthly ÷ 26 ÷ 8). It is never netted against overtime: Art. 88 of the
+  Labor Code forbids offsetting the two, so they stay separate lines on
+  the payslip. Undertime also reduces basic earned for 13th month.
 - **SSS / Pag-IBIG / PhilHealth / HMO** auto-fill from each employee's
   standing default the first time a cutoff is opened; edit per cutoff as
   needed. No statutory contribution table is built in.

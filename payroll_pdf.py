@@ -94,6 +94,13 @@ def _payslip_rows(person, ot_rate):
     rows.append((f"OT ({person['ot_hours']:g} h &times; {_money(ot_rate)})", _money(person["ot_pay"])))
 
     deductions_start = len(rows)
+    # undertime prints as its own deduction rather than being netted off
+    # the OT line above - Art. 88 forbids offsetting the two
+    if person.get("undertime_hours"):
+        rows.append((
+            f"Undertime ({person['undertime_hours']:g} h &times; {_money(person['undertime_rate'])})",
+            f"-{_money(person['undertime_deduction'])}",
+        ))
     rows.append(("SSS", f"-{_money(person['sss'])}"))
     rows.append(("Pag-IBIG", f"-{_money(person['pagibig'])}"))
     rows.append(("PhilHealth", f"-{_money(person['philhealth'])}"))

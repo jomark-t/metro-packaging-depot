@@ -96,21 +96,32 @@ STAFF_CATEGORIES = {
 CUP_BONUS_RATE = {"Printer": 0.15, "Checker": 0.10}
 OT_HOURLY_RATE = 50
 
+# Paid hours in a full shift (8AM-5PM less the unpaid lunch hour), used to
+# turn a daily rate into the hourly rate undertime is docked at. Unlike
+# OT_HOURLY_RATE this is derived per person rather than flat, so it tracks
+# whatever each employee is actually paid.
+#
+# Undertime is deliberately *not* netted against overtime: Art. 88 of the
+# Labor Code forbids offsetting undertime on one day against overtime on
+# another, so the two stay separate lines all the way to the payslip.
+PAID_HOURS_PER_DAY = 8
+
 # Only cups printed above this daily quota count toward the bonus - e.g.
 # a 3500-cup day only has 2500 bonus-qualified cups.
 DAILY_CUP_QUOTA = 1000
 
-# Fraction of a full day's rate a shift counts for in payroll. Assist is
-# Jha's 8AM-12NN Friday helper shift - a half day. Everything else not
-# listed here counts as a full day.
-SHIFT_DAY_FRACTION = {"Assist": 0.5}
+# Fraction of a full day's rate a shift counts for in payroll. Half Day
+# is the generator's standing Friday shift for a part-timer, and is also
+# assignable by hand to anyone (see EDITABLE_OPTIONS). Everything else
+# not listed here counts as a full day.
+SHIFT_DAY_FRACTION = {"Half Day": 0.5}
 
 # Single source of truth for each shift's time range, shared by the
 # generator and the manual-edit API below.
 SHIFT_TIME_RANGES = {
     "Opening": "8:00 AM - 5:00 PM",
     "Closing": "11:00 AM - 8:00 PM",
-    "Assist": "8:00 AM - 12:00 PM",
+    "Half Day": "8:00 AM - 12:00 PM",
     "Inventory": "8:00 AM - 5:00 PM",
     "Printer": "9:00 AM - 6:00 PM",
     "Checker": "9:00 AM - 6:00 PM",
@@ -123,7 +134,7 @@ SHIFT_TIME_RANGES = {
 CHIP_CLASSES = {
     "Opening": "bg-blue-50 text-brand-blue border-l-2 border-brand-blue",
     "Closing": "bg-gray-100 text-black border-l-2 border-black",
-    "Assist": "bg-[#F4EBDF] text-brand-tan border-l-2 border-brand-tan",
+    "Half Day": "bg-[#F4EBDF] text-brand-tan border-l-2 border-brand-tan",
     "Inventory": "bg-green-50 text-brand-green border-l-2 border-brand-green",
     "Printer": "bg-[#e3d1ba] text-[#8a6a3e] border-l-2 border-[#8a6a3e]",
     "Checker": "bg-gray-300 text-black border-l-2 border-black",
@@ -150,10 +161,10 @@ PDF_SCALE = 0.64
 # Shifts a person can be manually reassigned to via the edit dropdown,
 # keyed by staff category.
 EDITABLE_OPTIONS = {
-    "manager": ["Opening", "Closing", "Inventory", "Paid Time Off", "Off"],
-    "sales": ["Opening", "Closing", "Inventory", "Paid Time Off", "Off"],
-    "sales_pt": ["Opening", "Closing", "Assist", "Inventory", "Paid Time Off", "Off"],
-    "machine": ["Printer", "Checker", "Inventory", "Paid Time Off", "Off"],
+    "manager": ["Opening", "Closing", "Half Day", "Inventory", "Paid Time Off", "Off"],
+    "sales": ["Opening", "Closing", "Half Day", "Inventory", "Paid Time Off", "Off"],
+    "sales_pt": ["Opening", "Closing", "Half Day", "Inventory", "Paid Time Off", "Off"],
+    "machine": ["Printer", "Checker", "Half Day", "Inventory", "Paid Time Off", "Off"],
 }
 
 
@@ -227,6 +238,12 @@ def init_db():
             detail TEXT
         )"""
     )
+    # the "Assist" half-day shift was renamed "Half Day" - back-fill the
+    # rows already on the schedule, or they render unstyled and pay as a
+    # full day (SHIFT_DAY_FRACTION is keyed by label). Idempotent, so it
+    # is a no-op on every restart after the first.
+    cur.execute("UPDATE schedule SET shift_label='Half Day' WHERE shift_label='Assist'")
+
     # point-in-time backups of a month's schedule, so a bad regenerate or
     # edit can be undone. data is the staff-name-keyed row list (not
     # staff_id) so a restore doesn't depend on ids staying stable.
@@ -240,6 +257,16 @@ def init_db():
             data JSONB NOT NULL
         )"""
     )
+    # the same rename inside the snapshots' JSON payload - restoring an
+    # old backup would otherwise put "Assist" rows back on the schedule.
+    # Done as a text replace over the whole document: the shift label is
+    # the only place that exact quoted value occurs.
+    cur.execute(
+        """UPDATE schedule_snapshots
+           SET data = REPLACE(data::text, '"Assist"', '"Half Day"')::jsonb
+           WHERE data::text LIKE '%"Assist"%'"""
+    )
+
     # who last touched a given month's schedule, and how - one row per
     # month, overwritten on each edit (the full history lives in the
     # snapshots table, this is just the "last edited by" line in the UI)
@@ -341,6 +368,7 @@ def init_db():
     # the cup bonus, which only machine operators earn and which is
     # computed from cup counts rather than typed in
     cur.execute("ALTER TABLE payroll_extras ADD COLUMN IF NOT EXISTS manual_bonus REAL NOT NULL DEFAULT 0")
+    cur.execute("ALTER TABLE payroll_extras ADD COLUMN IF NOT EXISTS undertime_hours REAL NOT NULL DEFAULT 0")
     # login accounts. staff_name is NULL for the superuser (not a staff
     # member with a schedule/payroll record - just the app owner). Staff
     # logins are managed from their Employees card (login-eligible tick +
@@ -674,7 +702,7 @@ def generate_schedule(year, month):
             if wd == 2:  # Wednesday - covers the Opening slot
                 add(d, name, "Opening", SHIFT_TIME_RANGES["Opening"])
             elif wd == 4:  # Friday - assist only, doesn't cover a slot
-                add(d, name, "Assist", SHIFT_TIME_RANGES["Assist"])
+                add(d, name, "Half Day", SHIFT_TIME_RANGES["Half Day"])
             elif wd == 6 and pt_sunday_cover.get(d) == name:
                 add(d, name, "Opening", SHIFT_TIME_RANGES["Opening"])
 
@@ -1191,6 +1219,16 @@ def cash_advance_balances(cur, staff_ids=None):
     return balances
 
 
+def _undertime_hourly_rate(staff_row):
+    """What one hour of undertime costs this person. Daily-rate staff get
+    their own rate over an 8-hour paid day; fixed-salary staff get the same
+    26-day divisor the absence deduction already uses, so an hour missed
+    is priced consistently however someone is paid."""
+    if staff_row.get("monthly_salary"):
+        return staff_row["monthly_salary"] / 26 / PAID_HOURS_PER_DAY
+    return (staff_row.get("daily_rate") or 0) / PAID_HOURS_PER_DAY
+
+
 def compute_payroll(db, start, end, pay_date):
     """Days worked and cup-bonus come from the generated schedule + saved
     cup counts; OT hours and benefit deductions are manually entered per
@@ -1225,7 +1263,8 @@ def compute_payroll(db, start, end, pay_date):
     cup_counts = {r["date"]: r["quantity"] for r in cur.fetchall()}
 
     cur.execute(
-        "SELECT staff_id, ot_hours, sss, pagibig, philhealth, hmo, error_deduction, cash_advance, manual_bonus "
+        "SELECT staff_id, ot_hours, undertime_hours, sss, pagibig, philhealth, hmo, "
+        "error_deduction, cash_advance, manual_bonus "
         "FROM payroll_extras WHERE pay_date=%s",
         (pay_date.isoformat(),),
     )
@@ -1274,6 +1313,7 @@ def compute_payroll(db, start, end, pay_date):
         extras = extras_by_staff.get(sid)
         if extras is not None:
             ot_hours = extras.get("ot_hours") or 0
+            undertime_hours = extras.get("undertime_hours") or 0
             sss = extras.get("sss") or 0
             pagibig = extras.get("pagibig") or 0
             philhealth = extras.get("philhealth") or 0
@@ -1283,6 +1323,7 @@ def compute_payroll(db, start, end, pay_date):
             manual_bonus = extras.get("manual_bonus") or 0
         else:
             ot_hours = 0
+            undertime_hours = 0
             sss = s.get("default_sss") or 0
             pagibig = s.get("default_pagibig") or 0
             philhealth = s.get("default_philhealth") or 0
@@ -1294,7 +1335,12 @@ def compute_payroll(db, start, end, pay_date):
             cash_advance = round(min(installments.get(sid, 0) or outstanding_before, outstanding_before), 2)
             manual_bonus = 0
         ot_pay = ot_hours * OT_HOURLY_RATE
-        total_deductions = sss + pagibig + philhealth + hmo + error_deduction + cash_advance + absence_deduction
+        undertime_rate = _undertime_hourly_rate(s)
+        undertime_deduction = undertime_hours * undertime_rate
+        total_deductions = (
+            sss + pagibig + philhealth + hmo + error_deduction + cash_advance
+            + absence_deduction + undertime_deduction
+        )
         net_pay = base_pay + ot_pay + bonus + manual_bonus - total_deductions
 
         results.append(
@@ -1312,6 +1358,9 @@ def compute_payroll(db, start, end, pay_date):
                 "manual_bonus": manual_bonus,
                 "ot_hours": ot_hours,
                 "ot_pay": round(ot_pay, 2),
+                "undertime_hours": undertime_hours,
+                "undertime_rate": round(undertime_rate, 2),
+                "undertime_deduction": round(undertime_deduction, 2),
                 "sss": sss,
                 "pagibig": pagibig,
                 "philhealth": philhealth,
@@ -1359,10 +1408,10 @@ def compute_thirteenth_month(db, year):
     """13th month pay = total *basic* salary earned in the calendar year
     divided by 12 (PD 851). Basic salary only - overtime, cup bonus,
     discretionary bonus and allowances are all excluded by law, and
-    deductions for absences reduce it.
+    deductions for absences and undertime reduce it.
 
     Daily-rate staff: days actually worked that year x their daily rate,
-    read straight off the schedule (an Assist half-day counts as 0.5,
+    read straight off the schedule (a Half Day counts as 0.5,
     same as in the semi-monthly payroll).
 
     Fixed-salary staff (the manager): her monthly salary for each month
@@ -1396,11 +1445,25 @@ def compute_thirteenth_month(db, year):
         dates_worked[r["staff_id"]].add(d)
         months_with_data.add(d.month)
 
+    # undertime reduces basic salary actually earned, so it reduces the
+    # 13th month too - same reasoning as the absence deduction below.
+    # Summed by pay date rather than work date, which is the only stamp
+    # payroll_extras carries; the January cutoffs therefore land in the
+    # year they were paid, matching how absences are already counted.
+    cur.execute(
+        """SELECT staff_id, SUM(undertime_hours) AS hours FROM payroll_extras
+           WHERE pay_date BETWEEN %s AND %s GROUP BY staff_id""",
+        (year_start.isoformat(), year_end.isoformat()),
+    )
+    undertime_by_staff = {r["staff_id"]: float(r["hours"] or 0) for r in cur.fetchall()}
+
     results = []
     for s in staff_rows:
         sid = s["id"]
         worked = days_worked[sid]
         months_counted = len(months_with_data)
+        undertime_hours = undertime_by_staff.get(sid, 0.0)
+        undertime_deduction = undertime_hours * _undertime_hourly_rate(s)
 
         if s.get("monthly_salary"):
             per_day_rate = s["monthly_salary"] / 26
@@ -1414,6 +1477,7 @@ def compute_thirteenth_month(db, year):
         else:
             absence_deduction = 0.0
             basic_earned = worked * (s["daily_rate"] or 0)
+        basic_earned -= undertime_deduction
 
         results.append(
             {
@@ -1425,6 +1489,8 @@ def compute_thirteenth_month(db, year):
                 "days_worked": int(worked) if worked == int(worked) else worked,
                 "months_counted": months_counted,
                 "absence_deduction": round(absence_deduction, 2),
+                "undertime_hours": round(undertime_hours, 2),
+                "undertime_deduction": round(undertime_deduction, 2),
                 "basic_earned": round(basic_earned, 2),
                 "thirteenth_month": round(basic_earned / 12, 2),
             }
@@ -3107,8 +3173,8 @@ def api_payroll_save():
     # entry can show which numbers moved - payroll is the place where
     # "who changed this and what was it before?" actually matters
     cur.execute(
-        """SELECT staff.name, ot_hours, sss, pagibig, philhealth, hmo, error_deduction,
-                  cash_advance, manual_bonus
+        """SELECT staff.name, ot_hours, undertime_hours, sss, pagibig, philhealth, hmo,
+                  error_deduction, cash_advance, manual_bonus
            FROM payroll_extras JOIN staff ON staff.id = payroll_extras.staff_id
            WHERE pay_date=%s""",
         (pay_date,),
@@ -3123,7 +3189,7 @@ def api_payroll_save():
         )
 
     PAYROLL_FIELDS = (
-        "ot_hours", "sss", "pagibig", "philhealth", "hmo",
+        "ot_hours", "undertime_hours", "sss", "pagibig", "philhealth", "hmo",
         "error_deduction", "cash_advance", "manual_bonus",
     )
     changes = {}
@@ -3146,16 +3212,18 @@ def api_payroll_save():
         cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
         staff_id = cur.fetchone()["id"]
         cur.execute(
-            """INSERT INTO payroll_extras (staff_id, pay_date, ot_hours, sss, pagibig, philhealth, hmo, error_deduction, cash_advance, manual_bonus)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """INSERT INTO payroll_extras (staff_id, pay_date, ot_hours, undertime_hours, sss, pagibig, philhealth, hmo, error_deduction, cash_advance, manual_bonus)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT(staff_id, pay_date) DO UPDATE SET
-                 ot_hours=excluded.ot_hours, sss=excluded.sss, pagibig=excluded.pagibig,
+                 ot_hours=excluded.ot_hours, undertime_hours=excluded.undertime_hours,
+                 sss=excluded.sss, pagibig=excluded.pagibig,
                  philhealth=excluded.philhealth, hmo=excluded.hmo, error_deduction=excluded.error_deduction,
                  cash_advance=excluded.cash_advance, manual_bonus=excluded.manual_bonus""",
             (
                 staff_id,
                 pay_date,
                 float(row.get("ot_hours") or 0),
+                max(0.0, float(row.get("undertime_hours") or 0)),
                 float(row.get("sss") or 0),
                 float(row.get("pagibig") or 0),
                 float(row.get("philhealth") or 0),
