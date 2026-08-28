@@ -108,9 +108,11 @@
          superuser, and the API enforces the same rule. #}
       {% if current_user.can_view_payroll %}
       <button id="tabPayrollBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
-      {# Staff who don't see the whole payroll get their own payslip
-         instead. Clare has the full tab, so she doesn't need this. #}
-      {% elif current_user.staff_name %}
+      {% endif %}
+      {# Anyone on the payroll also gets their own payslip on its own tab,
+         managers included - Clare asked for the same one-page view of her
+         pay that the staff have, next to the full table. #}
+      {% if current_user.staff_name %}
       <button id="tabMyPayBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Pay</button>
       {% endif %}
       {# Their own record, read-only. Managers use the Employees tab. #}
@@ -232,7 +234,7 @@
       <div class="flex items-center gap-3 flex-wrap mb-10">
         <button id="dashRequestLeave" class="bg-brand-green text-black font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition">Request time off</button>
         <button id="dashTeamSchedule" class="bg-white border border-gray-200 text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-gray-50 transition">Team schedule</button>
-        {% if current_user.staff_name and not current_user.can_view_payroll %}
+        {% if current_user.staff_name %}
         <button id="dashMyPay" class="bg-white border border-gray-200 text-brand-blue font-semibold text-sm rounded-lg px-4 py-2 hover:bg-gray-50 transition">My pay</button>
         {% endif %}
       </div>
@@ -470,9 +472,14 @@
         </div>
       </div>
 
+      {# Managers see this tab too, and "raise it with the branch manager"
+         reads oddly when they are the branch manager. Saving a cutoff is
+         superuser-only either way, so point them at the owner instead. #}
       <p class="text-[11px] text-gray-400 mt-3 mb-10">
-        Computed from the schedule. If something looks wrong, raise it with
-        the branch manager — this page is read-only.
+        Computed from the schedule. This page is read-only — if something
+        looks wrong, {% if current_user.is_manager %}check the figures on the
+        Payroll tab and raise it with the owner{% else %}raise it with the
+        branch manager{% endif %}.
       </p>
     </div>
   </div>
