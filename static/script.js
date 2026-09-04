@@ -2815,28 +2815,44 @@ function printCard(o) {
   if (o.needs_new_frame) chips.push(printChip("New frame", "bg-amber-50 text-amber-700 border-amber-200"));
   if (!o.is_paid && o.status === "done") chips.push(printChip("Unpaid", "bg-red-50 text-red-600 border-red-200"));
 
-  // the cup lines, as a table. Every line carries its own status pill and
-  // every pill is a button: moving a job along is the thing you do twenty
-  // times a day, and it should not need a form.
+  // The cup lines, as a table. Cup, lid and quantity are editable in place
+  // - they are ordinary text until you click into them. The last column
+  // does double duty: it carries the status while the line is in progress,
+  // and swaps to the unit price and amount the moment it is done, so money
+  // appears as work completes rather than sitting there all along.
   const head =
-    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th>` +
-    `${f.unit ? '<th class="r">Unit</th>' : ""}${f.amount ? '<th class="r">Amount</th>' : ""}</tr>`;
+    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th><th class="r"></th></tr>`;
+
   const rows = o.items
     .map((i) => {
-      const delivered = i.status === "partial" && i.qty_delivered
-        ? ` <span class="text-[10px] text-amber-700 font-mono">${Number(i.qty_delivered).toLocaleString("en-PH")} out</span>`
-        : "";
-      const line =
-        `<br /><button type="button" class="print-line-status print-chip ${PRINT_STATUS_TONE[i.status] || ""}"
+      const money =
+        `<span class="print-money">` +
+        (f.unit ? `<span class="pm-unit">${Number(i.unit_price).toFixed(2)}</span>` : "") +
+        (f.amount ? `<span class="pm-amount">${Number(i.amount).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : "") +
+        `</span>`;
+
+      const pill =
+        `<button type="button" class="print-line-status print-chip ${PRINT_STATUS_TONE[i.status] || ""}"
                  data-item="${i.id}" data-status="${i.status}" data-qty="${i.quantity}"
-                 title="Change status">${escapeHtml(PRINT_STATUS_LABEL[i.status] || i.status)}</button>${delivered}`;
+                 title="Change status">${escapeHtml(PRINT_STATUS_LABEL[i.status] || i.status)}</button>` +
+        (i.status === "partial" && i.qty_delivered
+          ? `<span class="block text-[10px] text-amber-700 font-mono mt-0.5">${Number(i.qty_delivered).toLocaleString("en-PH")} out</span>`
+          : "");
+
       return (
         `<tr data-item="${i.id}">` +
-        `<td class="font-medium text-gray-900">${escapeHtml(i.label || "")}${line}</td>` +
-        (f.lid ? `<td class="text-gray-500">${escapeHtml(i.lid_text || "—")}</td>` : "") +
-        `<td class="r">${Number(i.quantity).toLocaleString("en-PH")}</td>` +
-        (f.unit ? `<td class="r text-gray-500">${Number(i.unit_price).toFixed(2)}</td>` : "") +
-        (f.amount ? `<td class="r">${Number(i.amount).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>` : "") +
+        `<td><span class="print-edit font-medium text-gray-900" tabindex="0" role="button"
+                    data-item="${i.id}" data-field="label" title="Click to edit"
+                    >${escapeHtml(i.label || "")}</span></td>` +
+        (f.lid
+          ? `<td><span class="print-edit text-gray-500" tabindex="0" role="button"
+                       data-item="${i.id}" data-field="lid" title="Click to edit"
+                       >${escapeHtml(i.lid_text || "—")}</span></td>`
+          : "") +
+        `<td class="r"><span class="print-edit" tabindex="0" role="button"
+                    data-item="${i.id}" data-field="quantity" title="Click to edit"
+                    >${Number(i.quantity).toLocaleString("en-PH")}</span></td>` +
+        `<td class="r">${i.status === "done" ? money : pill}</td>` +
         `</tr>`
       );
     })
@@ -2881,7 +2897,7 @@ function printCard(o) {
       <div class="mt-auto flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
         <button class="print-paid-btn text-[11px] font-mono uppercase tracking-wide ${o.is_paid ? "text-green-700" : "text-red-600"}"
                 data-order="${o.id}" data-paid="${o.is_paid ? 1 : 0}">${o.is_paid ? "Paid" : "Unpaid"}</button>
-        ${f.amount ? `<span class="font-mono font-semibold text-sm ${o.is_paid ? "" : "text-red-600"}">${printMoney(o.total)}</span>` : ""}
+        ${f.amount ? `<span class="print-card-total font-mono font-semibold text-sm ${o.is_paid ? "" : "text-red-600"}">${printMoney(o.total)}</span>` : ""}
       </div>
     </article>`;
 }
@@ -2969,7 +2985,7 @@ function renderPrintBoard() {
             <h3 class="text-[13px] font-semibold">${escapeHtml(k)}</h3>
             <span class="text-[11px] font-mono text-gray-400">${group.length}</span>
             <span class="flex-1 h-px bg-gray-200"></span>
-            <span class="text-[11px] font-mono text-gray-400">${cups.toLocaleString("en-PH")} cups</span>
+            <span class="group-cups text-[11px] font-mono text-gray-400">${cups.toLocaleString("en-PH")} cups</span>
           </div>
           <div class="print-grid" data-cols="${printState.cols}">${group.map(printCard).join("")}</div>
         </section>`;
@@ -3085,6 +3101,15 @@ function wirePrintBoard() {
       openStatusPopover(pill);
     });
   });
+  document.querySelectorAll(".print-edit").forEach((cell) => {
+    cell.addEventListener("click", () => beginPrintCellEdit(cell));
+    cell.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        beginPrintCellEdit(cell);
+      }
+    });
+  });
   // paid is the one thing you flip constantly, so it's a click on the card
   // rather than a trip into a form
   document.querySelectorAll(".print-paid-btn").forEach((b) => {
@@ -3103,6 +3128,156 @@ function wirePrintBoard() {
       loadPrintQueue();
     });
   });
+}
+
+// Cup, lid and quantity read as ordinary text and turn into an input only
+// when you click them. Rendering permanent inputs looked tidy but clipped
+// the long cup names and threw away the thousands separators on quantity -
+// and the table is read far more often than it is edited.
+function beginPrintCellEdit(cell) {
+  if (cell.querySelector("input")) return;
+
+  const field = cell.dataset.field;
+  const original = printCellRaw(cell);
+
+  const input = document.createElement("input");
+  input.className = "print-cell-input" + (field === "quantity" ? " text-right" : "");
+  input.value = original;
+  if (field === "quantity") {
+    input.type = "number";
+    input.min = "0";
+    input.step = "1";
+  }
+
+  const shown = cell.textContent;
+  cell.textContent = "";
+  cell.appendChild(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const revert = () => {
+    cell.textContent = shown;
+  };
+  const finish = async (commit) => {
+    if (settled) return;
+    settled = true;
+    const value = input.value;
+    if (!commit || String(value).trim() === String(original).trim()) {
+      revert();
+      return;
+    }
+    await savePrintCell(cell, value, revert);
+  };
+
+  // both: change fires when the value was actually edited (Enter, or focus
+  // leaving), blur catches the case where it was not. `settled` makes the
+  // second one a no-op, so an edit can never be committed twice.
+  input.addEventListener("change", () => finish(true));
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+}
+
+// what the cell holds, without the display formatting
+function printCellRaw(cell) {
+  const field = cell.dataset.field;
+  const text = cell.textContent.trim();
+  if (field === "quantity") return text.replace(/[^0-9]/g, "");
+  return text === "—" ? "" : text;
+}
+
+// Save one edited cell. Deliberately does not reload the board: you are
+// usually on your way to the next field, and a redraw would take the focus
+// with it. The numbers that depend on this line are patched in place
+// instead, and the next real load reconciles everything.
+async function savePrintCell(cell, raw, revert) {
+  const itemId = cell.dataset.item;
+  const field = cell.dataset.field;
+  const value = field === "quantity" ? Number(raw || 0) : String(raw).trim();
+
+  if (field === "quantity" && (!Number.isFinite(value) || value < 0)) {
+    alert("Quantity must be a whole number, zero or more.");
+    revert();
+    return;
+  }
+  if (field === "label" && !value) {
+    alert("A line needs a cup.");
+    revert();
+    return;
+  }
+
+  const body = {};
+  body[field] = value;
+  const res = await fetch(`/api/print/items/${itemId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.message || "Could not save that.");
+    revert();
+    return;
+  }
+
+  cell.textContent =
+    field === "quantity"
+      ? Number(value).toLocaleString("en-PH")
+      : value || (field === "lid" ? "—" : "");
+  cell.classList.add("saved");
+  setTimeout(() => cell.classList.remove("saved"), 900);
+
+  // keep the in-memory copy in step, then repaint the figures this line
+  // feeds: its own amount, the card's cup count and total, and the group
+  // heading above it
+  for (const order of printOrders) {
+    const item = order.items.find((x) => String(x.id) === String(itemId));
+    if (!item) continue;
+    if (field === "quantity") item.quantity = value;
+    if (field === "label") item.label = value;
+    if (field === "lid") item.lid_text = value;
+    item.amount = Math.round(item.quantity * item.unit_price * 100) / 100;
+    order.quantity = order.items.reduce((n, x) => n + x.quantity, 0);
+    order.total = Math.round(order.items.reduce((n, x) => n + x.amount, 0) * 100) / 100;
+    repaintPrintTotals(order);
+    break;
+  }
+}
+
+// Rewrite the derived numbers around one order, without touching the inputs.
+function repaintPrintTotals(order) {
+  const card = document.querySelector(`article[data-order="${order.id}"]`);
+  if (card) {
+    const sub = card.querySelector("p.font-mono");
+    if (sub) sub.textContent = `${printShortDate(order.order_date)} · ${order.quantity.toLocaleString("en-PH")} cups`;
+    const total = card.querySelector(".print-card-total");
+    if (total) total.textContent = printMoney(order.total);
+    order.items.forEach((i) => {
+      const amt = card.querySelector(`tr[data-item="${i.id}"] .pm-amount`);
+      if (amt) {
+        amt.textContent = Number(i.amount).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+    });
+  }
+  // the group heading carries a cup total of its own
+  const section = card ? card.closest("section") : null;
+  if (section) {
+    const cards = [...section.querySelectorAll("article[data-order]")];
+    const cups = cards.reduce((n, el) => {
+      const o = printOrders.find((x) => String(x.id) === el.dataset.order);
+      return n + (o ? o.quantity : 0);
+    }, 0);
+    const spans = section.querySelectorAll(".group-cups");
+    spans.forEach((el) => (el.textContent = `${cups.toLocaleString("en-PH")} cups`));
+  }
 }
 
 async function loadPrintQueue() {

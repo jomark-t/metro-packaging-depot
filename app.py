@@ -3072,12 +3072,13 @@ def api_print_order_update(order_id):
 @app.route("/api/print/items/<int:item_id>", methods=["POST"])
 @manager_required
 def api_print_item_update(item_id):
-    """Move one cup line along: its status, or how many have gone out."""
+    """Edit one cup line: what it is, how many, what it costs, where it's up to."""
     data = request.get_json(force=True)
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        """SELECT i.id, i.quantity, c.name FROM print_order_items i
+        """SELECT i.id, i.quantity, i.qty_delivered, i.status, c.name
+           FROM print_order_items i
            JOIN print_orders o ON o.id = i.order_id
            JOIN print_clients c ON c.id = o.client_id
            WHERE i.id=%s""",
@@ -3088,6 +3089,40 @@ def api_print_item_update(item_id):
         return jsonify({"status": "error", "message": "That line no longer exists."}), 404
 
     fields = {}
+
+    for key, column in (("label", "item_text"), ("lid", "lid_text"), ("ink", "ink_color")):
+        if key in data:
+            fields[column] = (data[key] or "").strip() or None
+
+    if "label" in data and not fields.get("item_text"):
+        return jsonify({"status": "error", "message": "A line needs a cup."}), 400
+
+    # quantity is the awkward one: it can drop below what has already gone
+    # out, so the delivered count follows it down rather than being left
+    # describing an impossible delivery
+    quantity = row["quantity"]
+    if "quantity" in data:
+        try:
+            quantity = int(data["quantity"])
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Quantity must be a whole number."}), 400
+        if quantity < 0:
+            return jsonify({"status": "error", "message": "Quantity can't be negative."}), 400
+        fields["quantity"] = quantity
+        if row["qty_delivered"] > quantity:
+            fields["qty_delivered"] = quantity
+            if row["status"] != "cancelled":
+                fields["status"] = "done" if quantity else "not_started"
+
+    if "unit_price" in data:
+        try:
+            price = float(data["unit_price"])
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Price must be a number."}), 400
+        if price < 0:
+            return jsonify({"status": "error", "message": "Price can't be negative."}), 400
+        fields["unit_price"] = round(price, 2)
+
     if "status" in data:
         if data["status"] not in PRINT_STATUSES:
             return jsonify({"status": "error", "message": "Unknown status."}), 400
@@ -3095,23 +3130,23 @@ def api_print_item_update(item_id):
         # a line marked done has gone out in full; one reset to not started
         # has not gone out at all
         if data["status"] == "done":
-            fields["qty_delivered"] = row["quantity"]
+            fields["qty_delivered"] = quantity
         elif data["status"] == "not_started":
             fields["qty_delivered"] = 0
 
     if "qty_delivered" in data:
         delivered = int(data["qty_delivered"] or 0)
-        if delivered < 0 or delivered > row["quantity"]:
+        if delivered < 0 or delivered > quantity:
             return jsonify({
                 "status": "error",
-                "message": "Delivered must be between 0 and " + str(row["quantity"]) + ".",
+                "message": "Delivered must be between 0 and " + str(quantity) + ".",
             }), 400
         fields["qty_delivered"] = delivered
         # keep the badge and the number in step so they never contradict
         if "status" not in data:
             if delivered == 0:
                 fields["status"] = "not_started"
-            elif delivered >= row["quantity"]:
+            elif delivered >= quantity:
                 fields["status"] = "done"
             else:
                 fields["status"] = "partial"

@@ -78,6 +78,25 @@
     letter-spacing: .045em; padding: .14rem .38rem; border-radius: 6px;
     border: 1px solid transparent; white-space: nowrap; display: inline-block;
   }
+  /* text until you click it, then an input in the same spot */
+  .print-edit {
+    display: inline-block; border-radius: 4px; padding: .05rem .25rem; margin: -.05rem -.25rem;
+    border: 1px dashed transparent; cursor: text; min-width: 1.5rem;
+  }
+  .print-edit:hover { border-color: #d1d5db; background: #fff; }
+  .print-edit:focus-visible { outline: 2px solid #1c33bb; outline-offset: 1px; }
+  .print-edit.saved { border-color: #07c067; background: #e6f9f0; border-style: solid; }
+  .print-cell-input {
+    width: 100%; min-width: 4rem; background: #fff; border: 1px solid #1c33bb;
+    border-radius: 4px; padding: .05rem .25rem; font: inherit; color: #111827;
+  }
+  .print-cell-input:focus { outline: none; }
+  .print-cell-input[type="number"] { -moz-appearance: textfield; }
+  .print-cell-input[type="number"]::-webkit-outer-spin-button,
+  .print-cell-input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .print-money { display: inline-flex; gap: .5rem; align-items: baseline; justify-content: flex-end; }
+  .print-money .pm-unit { color: #9ca3af; font-size: .78rem; }
+  .print-money .pm-amount { color: #111827; font-weight: 500; }
   .print-lines td .print-line-status { margin-top: .18rem; cursor: pointer; }
   .print-lines td .print-line-status:hover { filter: brightness(.94); }
   .print-drawer-open { transform: none !important; }
