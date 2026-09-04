@@ -1657,6 +1657,65 @@ def _session_expired():
     return idle > timedelta(minutes=SESSION_IDLE_MINUTES)
 
 
+# ---------------------------------------------------------------------------
+# Development-only auto-login
+#
+# Set DEV_AUTO_LOGIN=<name> in .env to skip the PIN screen while working on
+# the app locally. Four things must ALL be true before it does anything, so
+# it cannot follow the code to production:
+#
+#   1. DEV_AUTO_LOGIN is set          - never set as a Fly secret
+#   2. app.debug is True              - production runs gunicorn, which does not
+#   3. no FLY_* in the environment    - belt and braces if debug ever leaks on
+#   4. the request came from this machine
+#
+# If you are reading this in a running production app, something is very
+# wrong - check the Fly secrets.
+# ---------------------------------------------------------------------------
+DEV_AUTO_LOGIN = os.environ.get("DEV_AUTO_LOGIN", "").strip()
+
+
+def _dev_login_allowed():
+    if not DEV_AUTO_LOGIN:
+        return False
+    if not app.debug:
+        return False
+    if os.environ.get("FLY_APP_NAME") or os.environ.get("FLY_MACHINE_ID"):
+        return False
+    return request.remote_addr in ("127.0.0.1", "::1", None)
+
+
+@app.before_request
+def _dev_auto_login():
+    """Sign in as DEV_AUTO_LOGIN when there is no session, locally only."""
+    if not _dev_login_allowed():
+        return None
+    if "user_id" in session and not _session_expired():
+        return None
+
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT * FROM app_users
+           WHERE display_name = %s OR staff_name = %s
+           ORDER BY is_superuser DESC LIMIT 1""",
+        (DEV_AUTO_LOGIN, DEV_AUTO_LOGIN),
+    )
+    user = cur.fetchone()
+    if user is None:
+        return None
+
+    session.clear()
+    session["user_id"] = user["id"]
+    session["display_name"] = user["display_name"]
+    session["is_superuser"] = user["is_superuser"]
+    session["staff_name"] = user["staff_name"]
+    session["last_seen"] = datetime.now().isoformat()
+    # skip the payroll PIN too - the point is to develop without prompts.
+    # Call POST /api/payroll/lock to put the lock back and exercise it.
+    session["payroll_unlocked_at"] = datetime.now().isoformat()
+    return None
+
+
 # How long a payroll unlock lasts. Well short of SESSION_IDLE_MINUTES on
 # purpose: the point is the shared computer in the shop, where the risk is
 # a manager walking away from an unlocked screen, not an abandoned session.
@@ -4062,4 +4121,13 @@ def api_schedule_pdf():
 init_db()
 
 if __name__ == "__main__":
+    if DEV_AUTO_LOGIN:
+        print(
+            f"\n{'!' * 60}\n"
+            f"DEV_AUTO_LOGIN is on - every request is signed in as {DEV_AUTO_LOGIN!r}\n"
+            f"and the payroll PIN is skipped. Local debug only; unset it in\n"
+            f".env before doing anything that matters.\n"
+            f"{'!' * 60}\n",
+            flush=True,
+        )
     app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
