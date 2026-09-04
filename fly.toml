@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for metro-packaging-depot on 2026-07-22T16:25:34Z
+# fly.toml app configuration file generated for metro-packaging-depot-if4yw on 2026-09-04T14:41:57Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'metro-packaging-depot'
+app = 'metro-packaging-depot-if4yw'
 primary_region = 'sin'
 
 [build]
