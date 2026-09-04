@@ -2730,6 +2730,16 @@ const PRINT_STATUS_TONE = {
   done: "bg-green-50 text-green-700 border-green-200",
   cancelled: "bg-gray-100 text-gray-400 border-gray-200",
 };
+// Heading pills carry a solid fill: the divider rule runs behind them, and
+// a transparent pill would let it strike through the label.
+const PRINT_GROUP_TONE = {
+  ongoing: "bg-blue-50 border-blue-200 text-brand-blue",
+  partial: "bg-amber-50 border-amber-200 text-amber-800",
+  not_started: "bg-white border-gray-200 text-gray-700",
+  done: "bg-green-50 border-green-200 text-green-800",
+  cancelled: "bg-gray-100 border-gray-200 text-gray-400",
+};
+
 const PRINT_STATUS_DOT = {
   ongoing: "#1c33bb", partial: "#c98a12", not_started: "#9ca3af",
   done: "#07c067", cancelled: "#d1d5db",
@@ -2993,17 +3003,24 @@ function renderPrintBoard() {
     .map((k) => {
       const group = buckets.get(k);
       const cups = group.reduce((s, o) => s + o.quantity, 0);
-      const dot =
-        printState.group === "status"
-          ? `<span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background:${PRINT_STATUS_DOT[printStatusFromLabel(k)] || "#9ca3af"}"></span>`
-          : "";
+      const groupStatus = printState.group === "status" ? printStatusFromLabel(k) : null;
+      const tone = groupStatus
+        ? PRINT_GROUP_TONE[groupStatus] || "bg-white border-gray-200 text-gray-700"
+        : "bg-white border-gray-200 text-gray-700";
+      const dot = groupStatus
+        ? `<span class="w-2 h-2 rounded-full shrink-0" style="background:${PRINT_STATUS_DOT[groupStatus] || "#9ca3af"}"></span>`
+        : "";
       return `
         <section class="flex flex-col gap-3">
-          <div class="flex items-center justify-center gap-2.5 bg-white border border-gray-200 rounded-lg py-2 px-4 shadow-sm">
-            ${dot}
-            <h3 class="font-display font-semibold text-lg leading-none tracking-tight">${escapeHtml(k)}</h3>
-            <span class="text-[11px] font-mono text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5 leading-none">${group.length}</span>
-            <span class="group-cups text-[11px] font-mono text-gray-400">${cups.toLocaleString("en-PH")} cups</span>
+          <div class="relative flex items-center justify-center">
+            <span class="absolute inset-x-0 top-1/2 h-px bg-gray-200"></span>
+            <span class="relative inline-flex items-center gap-2.5 rounded-full border px-4 py-1.5 ${tone}">
+              ${dot}
+              <h3 class="font-display font-semibold text-[15px] leading-none tracking-tight">${escapeHtml(k)}</h3>
+              <span class="text-[11px] font-mono leading-none opacity-60">${group.length}</span>
+              <span class="w-px h-3 bg-current opacity-20"></span>
+              <span class="group-cups text-[11px] font-mono leading-none opacity-60">${cups.toLocaleString("en-PH")} cups</span>
+            </span>
           </div>
           <div class="print-grid" data-cols="${printState.cols}">${group.map(printCard).join("")}</div>
         </section>`;
