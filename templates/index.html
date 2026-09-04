@@ -613,9 +613,10 @@
         <button class="print-view-btn" data-view="all">Everything <span class="text-xs font-mono opacity-60" data-n="all"></span></button>
       </div>
       <input id="printSearch" type="search" placeholder="Client, cup or ink…" class="ml-auto border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+      <button id="printControlsBtn" type="button" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm hover:border-gray-400 transition shrink-0">View options</button>
     </div>
 
-    <div class="flex flex-wrap items-center gap-2 mb-4 text-sm">
+    <div id="printControls" class="hidden flex flex-wrap items-center gap-2 mb-4 text-sm">
       <label class="flex items-center gap-1.5 border border-gray-300 rounded-lg px-2 py-1">
         <span class="text-xs text-gray-400">Group</span>
         <select id="printGroup" class="text-sm bg-transparent">

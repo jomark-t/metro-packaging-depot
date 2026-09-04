@@ -2736,7 +2736,7 @@ const PRINT_STATUS_DOT = {
 };
 
 const PRINT_DEFAULTS = {
-  view: "open", group: "status", sort: "age", cols: "2",
+  view: "open", group: "status", sort: "age", cols: "2", showControls: false,
   fields: { logo: true, lid: true, unit: true, ink: true, amount: true, progress: true, remark: true },
 };
 
@@ -2754,6 +2754,7 @@ function loadPrintPrefs() {
         group: saved.group || PRINT_DEFAULTS.group,
         sort: saved.sort || PRINT_DEFAULTS.sort,
         cols: saved.cols || PRINT_DEFAULTS.cols,
+        showControls: !!saved.showControls,
         fields: Object.assign({}, PRINT_DEFAULTS.fields, saved.fields || {}),
       };
     }
@@ -2813,7 +2814,7 @@ function printCard(o) {
     chips.push(printChip(o.due_date ? `Due ${printShortDate(o.due_date)}` : "Rush", "bg-red-50 text-red-600 border-red-200"));
   }
   if (o.needs_new_frame) chips.push(printChip("New frame", "bg-amber-50 text-amber-700 border-amber-200"));
-  if (!o.is_paid && o.status === "done") chips.push(printChip("Unpaid", "bg-red-50 text-red-600 border-red-200"));
+
 
   // The cup lines, as a table. Cup, lid and quantity are editable in place
   // - they are ordinary text until you click into them. The last column
@@ -2898,15 +2899,25 @@ function printCard(o) {
       </div>
       <table class="print-lines"><thead>${head}</thead><tbody>${rows}</tbody></table>
       ${extras.length ? `<div class="px-3 pt-2 flex flex-col gap-2">${extras.join("")}</div>` : ""}
-      <div class="mt-auto flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
-        <button class="print-paid-btn text-[11px] font-mono uppercase tracking-wide ${o.is_paid ? "text-green-700" : "text-red-600"}"
-                data-order="${o.id}" data-paid="${o.is_paid ? 1 : 0}">${o.is_paid ? "Paid" : "Unpaid"}</button>
-        ${
-          f.amount && o.status === "done"
-            ? `<span class="print-card-total font-mono font-semibold text-sm ${o.is_paid ? "" : "text-red-600"}">${printMoney(o.total)}</span>`
-            : `<span class="text-[11px] text-gray-300 font-mono">—</span>`
-        }
-      </div>
+      ${
+        // A footer only when there is something to put in it. An unfinished
+        // job has no total to show and nothing to bill, so the card simply
+        // ends after its lines. Paid says something; unpaid is the default
+        // state of every job and saying it on every card said nothing.
+        o.status === "done" || o.is_paid
+          ? `<div class="mt-auto flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
+               <button class="print-paid-btn text-[11px] font-mono uppercase tracking-wide ${
+                 o.is_paid ? "text-green-700" : "text-gray-400 hover:text-gray-700"
+               }" data-order="${o.id}" data-paid="${o.is_paid ? 1 : 0}"
+                       title="${o.is_paid ? "Mark as unpaid" : "Mark as paid"}">${o.is_paid ? "Paid" : "Mark paid"}</button>
+               ${
+                 f.amount && o.status === "done"
+                   ? `<span class="print-card-total font-mono font-semibold text-sm">${printMoney(o.total)}</span>`
+                   : ""
+               }
+             </div>`
+          : ""
+      }
     </article>`;
 }
 
@@ -2988,11 +2999,10 @@ function renderPrintBoard() {
           : "";
       return `
         <section class="flex flex-col gap-3">
-          <div class="flex items-center gap-2.5 pt-1">
+          <div class="flex items-center justify-center gap-2.5 bg-white border border-gray-200 rounded-lg py-2 px-4 shadow-sm">
             ${dot}
             <h3 class="font-display font-semibold text-lg leading-none tracking-tight">${escapeHtml(k)}</h3>
             <span class="text-[11px] font-mono text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5 leading-none">${group.length}</span>
-            <span class="flex-1 h-px bg-gray-200"></span>
             <span class="group-cups text-[11px] font-mono text-gray-400">${cups.toLocaleString("en-PH")} cups</span>
           </div>
           <div class="print-grid" data-cols="${printState.cols}">${group.map(printCard).join("")}</div>
@@ -3539,6 +3549,25 @@ if (tabPrintBtn) {
   });
 
   document.getElementById("printSearch").addEventListener("input", renderPrintBoard);
+
+  // Group / sort / layout are settings, not daily controls - they stay out
+  // of the way until asked for, and the board remembers if you like them
+  // open.
+  const controls = document.getElementById("printControls");
+  const controlsBtn = document.getElementById("printControlsBtn");
+  const applyControlsVisibility = () => {
+    controls.classList.toggle("hidden", !printState.showControls);
+    controlsBtn.classList.toggle("bg-blue-50", printState.showControls);
+    controlsBtn.classList.toggle("border-blue-200", printState.showControls);
+    controlsBtn.classList.toggle("text-brand-blue", printState.showControls);
+  };
+  controlsBtn.addEventListener("click", () => {
+    printState.showControls = !printState.showControls;
+    if (!printState.showControls) document.getElementById("printCustomize").classList.add("hidden");
+    savePrintPrefs();
+    applyControlsVisibility();
+  });
+  applyControlsVisibility();
 
   const czBtn = document.getElementById("printCzBtn");
   czBtn.addEventListener("click", () => {
