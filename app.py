@@ -1745,6 +1745,12 @@ def compute_staff_counts(days, roster_names):
     return counts
 
 
+@app.route("/favicon.ico")
+def favicon():
+    # browsers ask for this at the root regardless of the <link> tags
+    return redirect(url_for("static", filename="icons/favicon.ico"))
+
+
 @app.route("/")
 @login_required
 def index():
