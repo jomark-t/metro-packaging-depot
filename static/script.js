@@ -2786,6 +2786,32 @@ function inkColor(name) {
   return PRINT_INK[(name || "").trim().toLowerCase()] || "#9ca3af";
 }
 
+// Black or white lettering, whichever stays readable on the ink. Inks run
+// from white to near-black, so a fixed text colour is unreadable on one
+// end or the other.
+function inkTextColor(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "#111827";
+  const n = parseInt(m[1], 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminance > 0.42 ? "#111827" : "#ffffff";
+}
+
+// the ink chip: filled with the colour it names, so a glance down the
+// column tells you which screens the job needs
+function inkChip(item) {
+  const ink = item.ink_color || "";
+  const bg = ink ? inkColor(ink) : "transparent";
+  const fg = ink ? inkTextColor(bg) : "#9ca3af";
+  return `<span class="print-edit print-ink-chip${ink ? "" : " is-empty"}" tabindex="0" role="button"
+                data-item="${item.id}" data-field="ink" title="Click to change the ink"
+                style="background:${bg};color:${fg}">${escapeHtml(ink || "—")}</span>`;
+}
+
 // stable colour per client so a logo circle always looks the same
 function printClientHue(name) {
   let h = 0;
@@ -2819,7 +2845,12 @@ function printCard(o) {
   const f = printState.fields;
   const cups = o.quantity || 0;
 
-  const chips = [printChip(PRINT_STATUS_LABEL[o.status] || o.status, PRINT_STATUS_TONE[o.status] || "")];
+  // Only worth saying when the board is not already grouped by it - under
+  // an "Ongoing" heading, an Ongoing badge on every card says nothing.
+  const chips =
+    printState.group === "status"
+      ? []
+      : [printChip(PRINT_STATUS_LABEL[o.status] || o.status, PRINT_STATUS_TONE[o.status] || "")];
   if (o.is_rush) {
     chips.push(printChip(o.due_date ? `Due ${printShortDate(o.due_date)}` : "Rush", "bg-red-50 text-red-600 border-red-200"));
   }
@@ -2836,7 +2867,7 @@ function printCard(o) {
   // for - with headings, because by then the figures are the point.
   const allDone = o.status === "done";
   const head =
-    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th>` +
+    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}${f.ink ? "<th>Ink</th>" : ""}<th class="r">Qty</th>` +
     (allDone
       ? `${f.unit ? '<th class="r">Unit</th>' : ""}${f.amount ? '<th class="r">Amount</th>' : ""}`
       : `<th class="r"></th>`) +
@@ -2866,6 +2897,7 @@ function printCard(o) {
                        data-item="${i.id}" data-field="lid" title="Click to edit"
                        >${escapeHtml(i.lid_text || "—")}</span></td>`
           : "") +
+        (f.ink ? `<td>${inkChip(i)}</td>` : "") +
         `<td class="r"><span class="print-edit" tabindex="0" role="button"
                     data-item="${i.id}" data-field="quantity" title="Click to edit"
                     >${Number(i.quantity).toLocaleString("en-PH")}</span></td>` +
@@ -2880,28 +2912,12 @@ function printCard(o) {
     extras.push(`<p class="text-xs text-gray-500 bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>`);
   }
 
-  // the ink sits with the client name rather than as a stripe across the
-  // card: it names the job as much as the client does, and a coloured
-  // border on every card made the board noisy
-  const ink = o.items.length ? o.items[0].ink_color : "";
-  const inkTag = f.ink
-    ? `<span class="inline-flex items-center gap-1 text-[11px] text-gray-500 shrink-0">
-         <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${inkColor(ink)};box-shadow:inset 0 0 0 1px rgba(17,24,39,.25)"></span>
-         <span class="print-edit ${ink ? "" : "text-gray-300 italic"}" tabindex="0" role="button"
-               data-order="${o.id}" data-field="ink" title="Click to change the ink"
-               >${escapeHtml(ink || "add ink")}</span>
-       </span>`
-    : "";
-
   return `
     <article class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col hover:shadow-md hover:border-gray-300 transition" data-order="${o.id}">
       <div class="flex items-center gap-2.5 px-3 pt-3 pb-2">
         ${f.logo ? printLogo(o.client_name, false) : ""}
         <div class="min-w-0 flex-1">
-          <div class="flex items-baseline gap-2 min-w-0">
-            <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
-            ${inkTag}
-          </div>
+          <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left block max-w-full" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
           <p class="text-[11px] text-gray-400 font-mono">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
         </div>
         <div class="flex flex-wrap gap-1 justify-end shrink-0 max-w-[45%]">${chips.join("")}</div>
@@ -3234,7 +3250,6 @@ function printCellRaw(cell) {
 // instead, and the next real load reconciles everything.
 async function savePrintCell(cell, raw, revert) {
   const itemId = cell.dataset.item;
-  const orderId = cell.dataset.order;
   const field = cell.dataset.field;
   const value = field === "quantity" ? Number(raw || 0) : String(raw).trim();
 
@@ -3250,9 +3265,8 @@ async function savePrintCell(cell, raw, revert) {
   }
 
   const body = {};
-  const url = field === "ink" ? `/api/print/orders/${orderId}` : `/api/print/items/${itemId}`;
-  body[field === "ink" ? "ink_color" : field] = value;
-  const res = await fetch(url, {
+  body[field] = value;
+  const res = await fetch(`/api/print/items/${itemId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -3267,22 +3281,15 @@ async function savePrintCell(cell, raw, revert) {
   cell.textContent =
     field === "quantity"
       ? Number(value).toLocaleString("en-PH")
-      : value || (field === "lid" ? "—" : field === "ink" ? "add ink" : "");
+      : value || (field === "lid" || field === "ink" ? "—" : "");
   if (field === "ink") {
-    cell.classList.toggle("text-gray-300", !value);
-    cell.classList.toggle("italic", !value);
-    const dot = cell.previousElementSibling;
-    if (dot) dot.style.background = inkColor(value);
-    for (const order of printOrders) {
-      if (String(order.id) !== String(orderId)) continue;
-      order.items.forEach((i) => (i.ink_color = value || null));
-      break;
-    }
+    const bg = value ? inkColor(value) : "transparent";
+    cell.style.background = bg;
+    cell.style.color = value ? inkTextColor(bg) : "#9ca3af";
+    cell.classList.toggle("is-empty", !value);
   }
   cell.classList.add("saved");
   setTimeout(() => cell.classList.remove("saved"), 900);
-
-  if (field === "ink") return;
 
   // keep the in-memory copy in step, then repaint the figures this line
   // feeds: its own amount, the card's cup count and total, and the group
@@ -3293,6 +3300,7 @@ async function savePrintCell(cell, raw, revert) {
     if (field === "quantity") item.quantity = value;
     if (field === "label") item.label = value;
     if (field === "lid") item.lid_text = value;
+    if (field === "ink") item.ink_color = value || null;
     item.amount = Math.round(item.quantity * item.unit_price * 100) / 100;
     order.quantity = order.items.reduce((n, x) => n + x.quantity, 0);
     order.total = Math.round(order.items.reduce((n, x) => n + x.amount, 0) * 100) / 100;

@@ -3035,27 +3035,8 @@ def api_print_order_update(order_id):
     """Order-level edits: paid, rush, frame, due date, remarks."""
     data = request.get_json(force=True)
 
-    # Ink is stored per line but is one colour for the whole job in
-    # practice - that is how the sheet recorded it and how the card shows
-    # it - so setting it here writes every line of the order at once.
-    if "ink_color" in data:
-        ink = (data["ink_color"] or "").strip() or None
-        db = get_db()
-        cur = db.cursor()
-        cur.execute(
-            """SELECT o.id, c.name FROM print_orders o
-               JOIN print_clients c ON c.id = o.client_id WHERE o.id=%s""",
-            (order_id,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            return jsonify({"status": "error", "message": "That order no longer exists."}), 404
-        cur.execute("UPDATE print_order_items SET ink_color=%s WHERE order_id=%s", (ink, order_id))
-        record_audit(cur, "Updated print order", row["name"], {"ink_color": ink})
-        db.commit()
-        if len(data) == 1:
-            return jsonify({"status": "ok"})
-
+    # Ink is deliberately not settable here: a single order can print
+    # different colours on different cups, so it belongs to the line.
     fields = {}
     for key in ("is_paid", "is_rush", "needs_new_frame"):
         if key in data:
