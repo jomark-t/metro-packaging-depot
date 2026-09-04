@@ -393,6 +393,115 @@ def init_db():
     cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS note TEXT")
     cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
 
+    # ------------------------------------------------------------------
+    # Cup printing. Separate from everything above: this is the order book
+    # for the printing side of the business, not the payroll side. It
+    # shares the app and the login, nothing else.
+    # ------------------------------------------------------------------
+
+    # the cafes we print for. `name` is what shows everywhere; the sheet it
+    # came from spells several of them more than one way, so the importer
+    # merges on this table rather than creating a row per spelling.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_clients (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            contact_person TEXT,
+            phone TEXT,
+            email TEXT,
+            instagram TEXT,
+            facebook TEXT,
+            logo_filename TEXT,
+            is_discounted BOOLEAN NOT NULL DEFAULT FALSE,
+            status TEXT NOT NULL DEFAULT 'active',
+            notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+
+    # cups and lids as priced things. `kind` splits the two so a lid can be
+    # picked for a line without appearing as something to print on.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_products (
+            id SERIAL PRIMARY KEY,
+            family TEXT NOT NULL,
+            -- empty rather than NULL: lids carry no size, and in Postgres
+            -- two NULLs never conflict, so a nullable column here would let
+            -- the same lid be inserted twice under a UNIQUE constraint
+            size TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT 'cup',
+            moq INTEGER,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            UNIQUE(family, size, kind)
+        )"""
+    )
+
+    # the price grid. Print pricing splits at 1,000 pcs, which is why there
+    # are four print columns rather than one - the tier is chosen from the
+    # quantity on the line, not stored on it.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_product_prices (
+            product_id INTEGER PRIMARY KEY REFERENCES print_products(id) ON DELETE CASCADE,
+            cost REAL,
+            retail REAL,
+            wholesale REAL,
+            wholesale_lid REAL,
+            print_only_1k REAL,
+            lid_and_print_1k REAL,
+            print_only_sub1k REAL,
+            lid_and_print_sub1k REAL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+
+    # hand-agreed rates that beat the grid for one client and one product
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_client_prices (
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id) ON DELETE CASCADE,
+            product_id INTEGER NOT NULL REFERENCES print_products(id) ON DELETE CASCADE,
+            price REAL NOT NULL,
+            note TEXT,
+            UNIQUE(client_id, product_id)
+        )"""
+    )
+
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_orders (
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id),
+            order_date DATE NOT NULL,
+            due_date DATE,
+            is_rush BOOLEAN NOT NULL DEFAULT FALSE,
+            needs_new_frame BOOLEAN NOT NULL DEFAULT FALSE,
+            is_paid BOOLEAN NOT NULL DEFAULT FALSE,
+            remarks TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+
+    # one row per cup being printed. unit_price is captured at entry rather
+    # than looked up at read time: the grid changes, and an order printed in
+    # March must still total what it totalled in March.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_order_items (
+            id SERIAL PRIMARY KEY,
+            order_id INTEGER NOT NULL REFERENCES print_orders(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES print_products(id),
+            item_text TEXT,
+            lid_text TEXT,
+            ink_color TEXT,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            qty_delivered INTEGER NOT NULL DEFAULT 0,
+            unit_price REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'not_started',
+            notes TEXT
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS print_order_items_order_idx ON print_order_items(order_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS print_orders_date_idx ON print_orders(order_date DESC)")
+
     for s in STAFF:
         cur.execute("SELECT id FROM staff WHERE name=%s", (s["name"],))
         row = cur.fetchone()
@@ -2553,6 +2662,419 @@ def api_staff_photo(name):
     record_audit(cur, "Updated photo", name)
     db.commit()
     return jsonify({"status": "ok", "photo_filename": filename})
+
+
+# ---------------------------------------------------------------------------
+# Cup printing - the print queue
+# ---------------------------------------------------------------------------
+
+# Ongoing first, deliberately: the queue is a "what is on the press right
+# now" screen, so work already started outranks work not yet begun. Partial
+# sits with it (started, part-delivered), then everything waiting, then
+# what is finished.
+PRINT_STATUSES = ("ongoing", "partial", "not_started", "done", "cancelled")
+PRINT_OPEN_STATUSES = ("ongoing", "partial", "not_started")
+PRINT_STATUS_RANK = {s: i for i, s in enumerate(PRINT_STATUSES)}
+
+
+def _rollup_status(items):
+    """One status for a whole order, from its lines.
+
+    A card in the queue shows a single badge, so the mixed cases need a
+    rule: anything already running makes the order Ongoing, a mix of done
+    and not-yet makes it Partial, and only an all-done order is Done."""
+    if not items:
+        return "not_started"
+    statuses = {i["status"] for i in items}
+    if statuses == {"cancelled"}:
+        return "cancelled"
+    statuses.discard("cancelled")
+    if not statuses:
+        return "cancelled"
+    if "ongoing" in statuses:
+        return "ongoing"
+    if "partial" in statuses:
+        return "partial"
+    if statuses == {"done"}:
+        return "done"
+    if "done" in statuses:
+        return "partial"
+    return "not_started"
+
+
+def _print_order_rows(where="", params=()):
+    """Orders with their line items attached, in queue order.
+
+    One query per table rather than a join returning a row per cup: the
+    item lists are small, and this keeps the order fields from being
+    repeated once per line."""
+    cur = get_db().cursor()
+    cur.execute(
+        f"""SELECT o.id, o.order_date, o.due_date, o.is_rush, o.needs_new_frame,
+                   o.is_paid, o.remarks, o.created_by,
+                   c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
+                   c.logo_filename, c.is_discounted
+            FROM print_orders o
+            JOIN print_clients c ON c.id = o.client_id
+            {where}
+            ORDER BY o.order_date ASC, o.id ASC""",
+        params,
+    )
+    orders = [dict(r) for r in cur.fetchall()]
+    if not orders:
+        return []
+
+    by_id = {}
+    for o in orders:
+        o["items"] = []
+        o["order_date"] = o["order_date"].isoformat() if o["order_date"] else None
+        o["due_date"] = o["due_date"].isoformat() if o["due_date"] else None
+        by_id[o["id"]] = o
+
+    cur.execute(
+        """SELECT i.id, i.order_id, i.item_text, i.lid_text, i.ink_color,
+                  i.quantity, i.qty_delivered, i.unit_price, i.status, i.notes,
+                  p.family, p.size
+           FROM print_order_items i
+           LEFT JOIN print_products p ON p.id = i.product_id
+           WHERE i.order_id = ANY(%s)
+           ORDER BY i.id""",
+        (list(by_id),),
+    )
+    for r in cur.fetchall():
+        item = dict(r)
+        # a line either points at a catalogue product or carries the text it
+        # was imported with - show whichever it has
+        item["label"] = item["item_text"] or " ".join(
+            x for x in (item["family"], item["size"]) if x
+        )
+        by_id[item["order_id"]]["items"].append(item)
+
+    for o in orders:
+        o["quantity"] = sum(i["quantity"] for i in o["items"])
+        o["delivered"] = sum(
+            i["quantity"] if i["status"] == "done" else i["qty_delivered"] for i in o["items"]
+        )
+        o["total"] = round(sum(i["quantity"] * i["unit_price"] for i in o["items"]), 2)
+        o["status"] = _rollup_status(o["items"])
+
+    orders.sort(key=lambda o: (PRINT_STATUS_RANK.get(o["status"], 9), o["order_date"] or ""))
+    return orders
+
+
+@app.route("/api/print/orders")
+@manager_required
+def api_print_orders():
+    """The queue itself. `view` filters the same way the toolbar chips do.
+
+    Everything is fetched once and filtered here rather than in SQL: the
+    chips show a count each, so every view needs the whole set anyway, and
+    "open" keys off the rolled-up status, which only exists once the lines
+    are attached."""
+    view = request.args.get("view", "open")
+    every = _print_order_rows()
+
+    tests = {
+        "open": lambda o: o["status"] in PRINT_OPEN_STATUSES,
+        "rush": lambda o: o["is_rush"],
+        "frame": lambda o: o["needs_new_frame"],
+        "unpaid": lambda o: not o["is_paid"],
+        "all": lambda o: True,
+    }
+    keep = tests.get(view, tests["open"])
+
+    return jsonify({
+        "orders": [o for o in every if keep(o)],
+        "counts": {name: sum(1 for o in every if t(o)) for name, t in tests.items()},
+    })
+
+
+@app.route("/api/print/orders", methods=["POST"])
+@manager_required
+def api_print_order_create():
+    data = request.get_json(force=True)
+    client_name = (data.get("client") or "").strip()
+    if not client_name:
+        return jsonify({"status": "error", "message": "Pick a client for this order."}), 400
+
+    items = [i for i in (data.get("items") or []) if (i.get("label") or "").strip()]
+    if not items:
+        return jsonify({"status": "error", "message": "An order needs at least one cup line."}), 400
+
+    order_date = (data.get("order_date") or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(order_date)
+        if data.get("due_date"):
+            date.fromisoformat(data["due_date"])
+    except ValueError:
+        return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    # an unknown name creates the client rather than blocking the order -
+    # the contact details get filled in from the client drawer afterwards
+    cur.execute("SELECT id FROM print_clients WHERE LOWER(name)=LOWER(%s)", (client_name,))
+    row = cur.fetchone()
+    if row:
+        client_id = row["id"]
+    else:
+        cur.execute("INSERT INTO print_clients (name) VALUES (%s) RETURNING id", (client_name,))
+        client_id = cur.fetchone()["id"]
+
+    cur.execute(
+        """INSERT INTO print_orders
+             (client_id, order_date, due_date, is_rush, needs_new_frame, is_paid, remarks, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (
+            client_id, order_date, data.get("due_date") or None,
+            bool(data.get("is_rush")), bool(data.get("needs_new_frame")),
+            bool(data.get("is_paid")), (data.get("remarks") or "").strip() or None,
+            session.get("display_name"),
+        ),
+    )
+    order_id = cur.fetchone()["id"]
+
+    for i in items:
+        cur.execute(
+            """INSERT INTO print_order_items
+                 (order_id, item_text, lid_text, ink_color, quantity, unit_price, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                order_id, (i.get("label") or "").strip(),
+                (i.get("lid") or "").strip() or None,
+                (i.get("ink") or "").strip() or None,
+                int(i.get("quantity") or 0), float(i.get("unit_price") or 0),
+                i["status"] if i.get("status") in PRINT_STATUSES else "not_started",
+            ),
+        )
+
+    record_audit(
+        cur, "Created print order", client_name,
+        {"items": len(items), "cups": sum(int(i.get("quantity") or 0) for i in items)},
+    )
+    db.commit()
+    return jsonify({"status": "ok", "id": order_id})
+
+
+@app.route("/api/print/orders/<int:order_id>", methods=["POST"])
+@manager_required
+def api_print_order_update(order_id):
+    """Order-level edits: paid, rush, frame, due date, remarks."""
+    data = request.get_json(force=True)
+    fields = {}
+    for key in ("is_paid", "is_rush", "needs_new_frame"):
+        if key in data:
+            fields[key] = bool(data[key])
+    for key in ("remarks", "due_date"):
+        if key in data:
+            fields[key] = (data[key] or "").strip() or None
+
+    if fields.get("due_date"):
+        try:
+            date.fromisoformat(fields["due_date"])
+        except ValueError:
+            return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+
+    if not fields:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT o.id, c.name FROM print_orders o
+           JOIN print_clients c ON c.id = o.client_id WHERE o.id=%s""",
+        (order_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "That order no longer exists."}), 404
+
+    sets = ", ".join(f"{k}=%s" for k in fields)
+    cur.execute(f"UPDATE print_orders SET {sets} WHERE id=%s", (*fields.values(), order_id))
+    record_audit(cur, "Updated print order", row["name"], fields)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/print/items/<int:item_id>", methods=["POST"])
+@manager_required
+def api_print_item_update(item_id):
+    """Move one cup line along: its status, or how many have gone out."""
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT i.id, i.quantity, c.name FROM print_order_items i
+           JOIN print_orders o ON o.id = i.order_id
+           JOIN print_clients c ON c.id = o.client_id
+           WHERE i.id=%s""",
+        (item_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "That line no longer exists."}), 404
+
+    fields = {}
+    if "status" in data:
+        if data["status"] not in PRINT_STATUSES:
+            return jsonify({"status": "error", "message": "Unknown status."}), 400
+        fields["status"] = data["status"]
+        # a line marked done has gone out in full; one reset to not started
+        # has not gone out at all
+        if data["status"] == "done":
+            fields["qty_delivered"] = row["quantity"]
+        elif data["status"] == "not_started":
+            fields["qty_delivered"] = 0
+
+    if "qty_delivered" in data:
+        delivered = int(data["qty_delivered"] or 0)
+        if delivered < 0 or delivered > row["quantity"]:
+            return jsonify({
+                "status": "error",
+                "message": "Delivered must be between 0 and " + str(row["quantity"]) + ".",
+            }), 400
+        fields["qty_delivered"] = delivered
+        # keep the badge and the number in step so they never contradict
+        if "status" not in data:
+            if delivered == 0:
+                fields["status"] = "not_started"
+            elif delivered >= row["quantity"]:
+                fields["status"] = "done"
+            else:
+                fields["status"] = "partial"
+
+    if not fields:
+        return jsonify({"status": "ok"})
+
+    sets = ", ".join(f"{k}=%s" for k in fields)
+    cur.execute(f"UPDATE print_order_items SET {sets} WHERE id=%s", (*fields.values(), item_id))
+    record_audit(cur, "Updated print line", row["name"], fields)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/print/orders/<int:order_id>", methods=["DELETE"])
+@manager_required
+def api_print_order_delete(order_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT c.name FROM print_orders o
+           JOIN print_clients c ON c.id = o.client_id WHERE o.id=%s""",
+        (order_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "That order no longer exists."}), 404
+    cur.execute("DELETE FROM print_orders WHERE id=%s", (order_id,))
+    record_audit(cur, "Deleted print order", row["name"], {"order_id": order_id})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/print/clients")
+@manager_required
+def api_print_clients():
+    """Every client, for the picker on the new-order form."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT c.id, c.name, c.instagram, c.facebook, c.is_discounted,
+                  COUNT(o.id) AS order_count
+           FROM print_clients c
+           LEFT JOIN print_orders o ON o.client_id = c.id
+           GROUP BY c.id ORDER BY c.name"""
+    )
+    return jsonify({"clients": [dict(r) for r in cur.fetchall()]})
+
+
+@app.route("/api/print/clients/<int:client_id>")
+@manager_required
+def api_print_client(client_id):
+    """One client, with everything the queue drawer shows."""
+    cur = get_db().cursor()
+    cur.execute("SELECT * FROM print_clients WHERE id=%s", (client_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+    client = dict(row)
+    client["created_at"] = client["created_at"].isoformat() if client.get("created_at") else None
+
+    cur.execute(
+        """SELECT o.id, o.order_date, o.is_paid,
+                  COALESCE(SUM(i.quantity), 0) AS cups,
+                  COALESCE(SUM(i.quantity * i.unit_price), 0) AS total
+           FROM print_orders o
+           LEFT JOIN print_order_items i ON i.order_id = o.id
+           WHERE o.client_id = %s
+           GROUP BY o.id ORDER BY o.order_date DESC LIMIT 12""",
+        (client_id,),
+    )
+    history = []
+    for r in cur.fetchall():
+        h = dict(r)
+        h["order_date"] = h["order_date"].isoformat() if h["order_date"] else None
+        history.append(h)
+
+    cur.execute(
+        """SELECT COUNT(DISTINCT o.id) AS orders,
+                  COALESCE(SUM(i.quantity), 0) AS cups,
+                  COALESCE(SUM(CASE WHEN o.is_paid THEN 0 ELSE i.quantity * i.unit_price END), 0) AS owed
+           FROM print_orders o
+           LEFT JOIN print_order_items i ON i.order_id = o.id
+           WHERE o.client_id = %s""",
+        (client_id,),
+    )
+    totals = dict(cur.fetchone())
+
+    cur.execute(
+        """SELECT cp.price, cp.note, p.family, p.size
+           FROM print_client_prices cp
+           JOIN print_products p ON p.id = cp.product_id
+           WHERE cp.client_id = %s ORDER BY p.family, p.size""",
+        (client_id,),
+    )
+    deals = [dict(r) for r in cur.fetchall()]
+
+    return jsonify({"client": client, "totals": totals, "history": history, "deals": deals})
+
+
+PRINT_CLIENT_FIELDS = (
+    "name", "contact_person", "phone", "email", "instagram", "facebook", "notes", "status",
+)
+
+
+@app.route("/api/print/clients/<int:client_id>", methods=["POST"])
+@manager_required
+def api_print_client_update(client_id):
+    """Contact details, edited from the drawer in the queue."""
+    data = request.get_json(force=True)
+    updates = {}
+    for field in PRINT_CLIENT_FIELDS:
+        if field in data:
+            updates[field] = (data[field] or "").strip() or None
+    if "is_discounted" in data:
+        updates["is_discounted"] = bool(data["is_discounted"])
+
+    if "name" in updates and not updates["name"]:
+        return jsonify({"status": "error", "message": "A client needs a name."}), 400
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    columns = ", ".join(updates)
+    cur.execute(f"SELECT name, {columns} FROM print_clients WHERE id=%s", (client_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+
+    changed = {f: {"from": row[f], "to": v} for f, v in updates.items() if row[f] != v}
+    if changed:
+        sets = ", ".join(f"{f}=%s" for f in updates)
+        cur.execute(f"UPDATE print_clients SET {sets} WHERE id=%s", (*updates.values(), client_id))
+        record_audit(cur, "Updated print client", row["name"], changed)
+        db.commit()
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/generate", methods=["POST"])

@@ -446,6 +446,8 @@ const tabPayrollBtn = document.getElementById("tabPayrollBtn");
 const tabEmployeesBtn = document.getElementById("tabEmployeesBtn");
 const tabActivityBtn = document.getElementById("tabActivityBtn");
 const activityView = document.getElementById("activityView");
+const tabPrintBtn = document.getElementById("tabPrintBtn");
+const printView = document.getElementById("printView");
 const tabAdminBtn = document.getElementById("tabAdminBtn");
 const adminView = document.getElementById("adminView");
 const tabMyPayBtn = document.getElementById("tabMyPayBtn");
@@ -469,6 +471,7 @@ if (tabLeaveBtn) TABS.leave = { btn: tabLeaveBtn, view: leaveView, controls: nul
 if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, controls: payrollControls };
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
+if (tabPrintBtn) TABS.print = { btn: tabPrintBtn, view: printView, controls: null };
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
 if (tabMyPayBtn) TABS.mypay = { btn: tabMyPayBtn, view: myPayView, controls: null };
 if (tabMyInfoBtn) TABS.myinfo = { btn: tabMyInfoBtn, view: myInfoView, controls: null };
@@ -500,6 +503,9 @@ function showTab(tab) {
   if (tab === "admin") {
     loadAdminUsers();
   }
+  if (tab === "print") {
+    loadPrintQueue();
+  }
   if (tab === "mypay") {
     loadMyPay();
   }
@@ -522,6 +528,7 @@ if (tabLeaveBtn) tabLeaveBtn.addEventListener("click", () => showTab("leave"));
 if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payroll"));
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
+if (tabPrintBtn) tabPrintBtn.addEventListener("click", () => showTab("print"));
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
 if (tabMyPayBtn) tabMyPayBtn.addEventListener("click", () => showTab("mypay"));
 if (tabMyInfoBtn) tabMyInfoBtn.addEventListener("click", () => showTab("myinfo"));
@@ -1169,6 +1176,11 @@ const ACTION_TONE = {
   "Saved payroll": "bg-blue-50 text-brand-blue border-blue-200",
   "Updated employee": "bg-blue-50 text-brand-blue border-blue-200",
   "Updated own details": "bg-blue-50 text-brand-blue border-blue-200",
+  "Created print order": "bg-blue-50 text-brand-blue border-blue-200",
+  "Updated print order": "bg-blue-50 text-brand-blue border-blue-200",
+  "Updated print line": "bg-blue-50 text-brand-blue border-blue-200",
+  "Updated print client": "bg-blue-50 text-brand-blue border-blue-200",
+  "Deleted print order": "bg-red-50 text-red-600 border-red-200",
   "Recorded cash advance": "bg-blue-50 text-brand-blue border-blue-200",
   "Deleted cash advance": "bg-red-50 text-red-600 border-red-200",
   "Archived employee": "bg-red-50 text-red-600 border-red-200",
@@ -2680,4 +2692,601 @@ async function uploadEmployeePhoto(card, name, input) {
   } finally {
     input.value = "";
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Print Queue (cup printing order book)
+//
+// The board is a card grid rather than a list: each card is one order, and
+// its cup lines are a small table inside it. Ongoing sorts to the top -
+// this is a "what is on the press now" screen, so work already started
+// outranks work not yet begun.
+// ---------------------------------------------------------------------------
+
+// Ink names as they are written on the orders, mapped to something close
+// enough to recognise at a glance. Anything unlisted falls back to grey.
+const PRINT_INK = {
+  white: "#f2f2ef", black: "#17181c", brown: "#6f4a2d", gold: "#b9922f",
+  violet: "#6b3fa0", red: "#cc2b26", "dark red": "#8c1f1b", green: "#4caf50",
+  "dark green": "#17603a", "lime green": "#a4cf3c", "yellow green": "#9acd32",
+  yellow: "#e8b820", "lemon yellow": "#f0e442", "baby blue": "#a9cbe8",
+  "navy blue": "#1b2a5e", "deep blue": "#1d3f8f", blue: "#2f5bd6",
+  "teal blue": "#17787f", pink: "#f08cad", "baby pink": "#f2b8c6",
+  orange: "#e8862a", silver: "#c0c4cc", grey: "#9aa0a6", gray: "#9aa0a6",
+};
+
+const PRINT_STATUS_LABEL = {
+  ongoing: "Ongoing", partial: "Partial", not_started: "Not started",
+  done: "Done", cancelled: "Cancelled",
+};
+// same order the API sorts by, so the groups read top to bottom the way
+// the cards do
+const PRINT_STATUS_ORDER = ["ongoing", "partial", "not_started", "done", "cancelled"];
+const PRINT_STATUS_TONE = {
+  ongoing: "bg-blue-50 text-brand-blue border-blue-200",
+  partial: "bg-amber-50 text-amber-700 border-amber-200",
+  not_started: "bg-gray-50 text-gray-500 border-gray-200",
+  done: "bg-green-50 text-green-700 border-green-200",
+  cancelled: "bg-gray-100 text-gray-400 border-gray-200",
+};
+const PRINT_STATUS_DOT = {
+  ongoing: "#1c33bb", partial: "#c98a12", not_started: "#9ca3af",
+  done: "#07c067", cancelled: "#d1d5db",
+};
+
+const PRINT_DEFAULTS = {
+  view: "open", group: "status", sort: "age", cols: "2",
+  fields: { logo: true, lid: true, unit: true, ink: true, amount: true, progress: true, remark: true },
+};
+
+let printState = loadPrintPrefs();
+let printOrders = [];
+let printClients = [];
+
+function loadPrintPrefs() {
+  try {
+    const raw = localStorage.getItem("mpd.print.prefs");
+    if (raw) {
+      const saved = JSON.parse(raw);
+      return {
+        view: saved.view || PRINT_DEFAULTS.view,
+        group: saved.group || PRINT_DEFAULTS.group,
+        sort: saved.sort || PRINT_DEFAULTS.sort,
+        cols: saved.cols || PRINT_DEFAULTS.cols,
+        fields: Object.assign({}, PRINT_DEFAULTS.fields, saved.fields || {}),
+      };
+    }
+  } catch (e) {
+    // private window or blocked storage - defaults are fine
+  }
+  return JSON.parse(JSON.stringify(PRINT_DEFAULTS));
+}
+
+function savePrintPrefs() {
+  try {
+    localStorage.setItem("mpd.print.prefs", JSON.stringify(printState));
+  } catch (e) {
+    // nothing to do - the board still works, it just won't be remembered
+  }
+}
+
+function inkColor(name) {
+  return PRINT_INK[(name || "").trim().toLowerCase()] || "#9ca3af";
+}
+
+// stable colour per client so a logo circle always looks the same
+function printClientHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+  return h;
+}
+
+function printLogo(name, big) {
+  const h = printClientHue(name || "?");
+  const size = big ? "w-12 h-12 text-lg" : "w-9 h-9 text-sm";
+  const letter = escapeHtml((name || "?").replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase() || "?");
+  return `<div class="${size} rounded-full grid place-items-center font-display font-bold shrink-0"
+               style="background:hsl(${h},62%,93%);color:hsl(${h},55%,32%);box-shadow:inset 0 0 0 1px rgba(17,24,39,.1)">${letter}</div>`;
+}
+
+function printMoney(n) {
+  return "₱" + Number(n || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function printShortDate(iso) {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function printChip(text, tone) {
+  return `<span class="print-chip ${tone}">${escapeHtml(text)}</span>`;
+}
+
+function printCard(o) {
+  const f = printState.fields;
+  const cups = o.quantity || 0;
+
+  const chips = [printChip(PRINT_STATUS_LABEL[o.status] || o.status, PRINT_STATUS_TONE[o.status] || "")];
+  if (o.is_rush) {
+    chips.push(printChip(o.due_date ? `Due ${printShortDate(o.due_date)}` : "Rush", "bg-red-50 text-red-600 border-red-200"));
+  }
+  if (o.needs_new_frame) chips.push(printChip("New frame", "bg-amber-50 text-amber-700 border-amber-200"));
+  if (!o.is_paid && o.status === "done") chips.push(printChip("Unpaid", "bg-red-50 text-red-600 border-red-200"));
+
+  // the cup lines, as a table - per-line status only when there's more
+  // than one line, since a single line already has the card's badge
+  const multi = o.items.length > 1;
+  const head =
+    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th>` +
+    `${f.unit ? '<th class="r">Unit</th>' : ""}${f.amount ? '<th class="r">Amount</th>' : ""}</tr>`;
+  const rows = o.items
+    .map((i) => {
+      const line = multi
+        ? `<br />${printChip(PRINT_STATUS_LABEL[i.status] || i.status, PRINT_STATUS_TONE[i.status] || "")}`
+        : "";
+      return (
+        `<tr data-item="${i.id}">` +
+        `<td class="font-medium text-gray-900">${escapeHtml(i.label || "")}${line}</td>` +
+        (f.lid ? `<td class="text-gray-500">${escapeHtml(i.lid_text || "—")}</td>` : "") +
+        `<td class="r">${Number(i.quantity).toLocaleString("en-PH")}</td>` +
+        (f.unit ? `<td class="r text-gray-500">${Number(i.unit_price).toFixed(2)}</td>` : "") +
+        (f.amount ? `<td class="r">${(i.quantity * i.unit_price).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>` : "") +
+        `</tr>`
+      );
+    })
+    .join("");
+
+  const extras = [];
+  if (f.ink && o.items.length && o.items[0].ink_color) {
+    const ink = o.items[0].ink_color;
+    extras.push(
+      `<div class="flex items-center gap-1.5 text-xs text-gray-500">
+         <span class="w-3 h-3 rounded" style="background:${inkColor(ink)};box-shadow:inset 0 0 0 1px rgba(17,24,39,.2)"></span>
+         ${escapeHtml(ink)} ink
+       </div>`
+    );
+  }
+  if (f.progress && o.delivered > 0 && o.delivered < cups) {
+    const pct = Math.round((o.delivered / cups) * 100);
+    extras.push(
+      `<div>
+         <div class="h-1 bg-gray-100 rounded-full overflow-hidden"><div class="h-full bg-amber-500 rounded-full" style="width:${pct}%"></div></div>
+         <p class="text-[11px] text-gray-400 font-mono mt-1">${o.delivered.toLocaleString("en-PH")} of ${cups.toLocaleString("en-PH")} delivered</p>
+       </div>`
+    );
+  }
+  if (f.remark && o.remarks) {
+    extras.push(`<p class="text-xs text-gray-500 bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>`);
+  }
+
+  return `
+    <article class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col hover:shadow-md hover:border-gray-300 transition" data-order="${o.id}">
+      <div class="h-1" style="background:${inkColor(o.items.length ? o.items[0].ink_color : "")}"></div>
+      <div class="flex items-center gap-2.5 px-3 pt-3 pb-2">
+        ${f.logo ? printLogo(o.client_name, false) : ""}
+        <div class="min-w-0 flex-1">
+          <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
+          <p class="text-[11px] text-gray-400 font-mono">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
+        </div>
+        <div class="flex flex-wrap gap-1 justify-end shrink-0 max-w-[55%]">${chips.join("")}</div>
+      </div>
+      <table class="print-lines"><thead>${head}</thead><tbody>${rows}</tbody></table>
+      ${extras.length ? `<div class="px-3 pt-2 flex flex-col gap-2">${extras.join("")}</div>` : ""}
+      <div class="mt-auto flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
+        <button class="print-paid-btn text-[11px] font-mono uppercase tracking-wide ${o.is_paid ? "text-green-700" : "text-red-600"}"
+                data-order="${o.id}" data-paid="${o.is_paid ? 1 : 0}">${o.is_paid ? "Paid" : "Unpaid"}</button>
+        ${f.amount ? `<span class="font-mono font-semibold text-sm ${o.is_paid ? "" : "text-red-600"}">${printMoney(o.total)}</span>` : ""}
+      </div>
+    </article>`;
+}
+
+function printGroupKey(o) {
+  if (printState.group === "client") return o.client_name;
+  if (printState.group === "ink") {
+    const ink = o.items.length && o.items[0].ink_color ? o.items[0].ink_color : "No ink noted";
+    return ink;
+  }
+  return PRINT_STATUS_LABEL[o.status] || o.status;
+}
+
+function printSorted(list) {
+  const copy = list.slice();
+  copy.sort((a, b) => {
+    if (printState.sort === "qty") return b.quantity - a.quantity;
+    if (printState.sort === "amount") return b.total - a.total;
+    if (printState.sort === "due") {
+      const ad = a.due_date || "9999", bd = b.due_date || "9999";
+      return ad < bd ? -1 : ad > bd ? 1 : (a.order_date || "").localeCompare(b.order_date || "");
+    }
+    return (a.order_date || "").localeCompare(b.order_date || "");
+  });
+  return copy;
+}
+
+function renderPrintBoard() {
+  const board = document.getElementById("printBoard");
+  const q = (document.getElementById("printSearch").value || "").trim().toLowerCase();
+
+  let list = printOrders.filter((o) => {
+    if (!q) return true;
+    if (o.client_name.toLowerCase().includes(q)) return true;
+    return o.items.some(
+      (i) =>
+        (i.label || "").toLowerCase().includes(q) ||
+        (i.ink_color || "").toLowerCase().includes(q)
+    );
+  });
+
+  if (!list.length) {
+    board.innerHTML = `<p class="text-sm text-gray-400 italic py-10 text-center">Nothing here yet. Add an order, or try another view.</p>`;
+    return;
+  }
+
+  list = printSorted(list);
+
+  if (printState.group === "none") {
+    board.innerHTML = `<div class="print-grid" data-cols="${printState.cols}">${list.map(printCard).join("")}</div>`;
+    wirePrintBoard();
+    return;
+  }
+
+  const buckets = new Map();
+  list.forEach((o) => {
+    const k = printGroupKey(o);
+    if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(o);
+  });
+
+  let keys = [...buckets.keys()];
+  if (printState.group === "status") {
+    keys.sort(
+      (a, b) =>
+        PRINT_STATUS_ORDER.indexOf(printStatusFromLabel(a)) -
+        PRINT_STATUS_ORDER.indexOf(printStatusFromLabel(b))
+    );
+  } else {
+    keys.sort();
+  }
+
+  board.innerHTML = keys
+    .map((k) => {
+      const group = buckets.get(k);
+      const cups = group.reduce((s, o) => s + o.quantity, 0);
+      const dot =
+        printState.group === "status"
+          ? `<span class="w-2 h-2 rounded-sm" style="background:${PRINT_STATUS_DOT[printStatusFromLabel(k)] || "#9ca3af"}"></span>`
+          : "";
+      return `
+        <section class="flex flex-col gap-2.5">
+          <div class="flex items-center gap-2">
+            ${dot}
+            <h3 class="text-[13px] font-semibold">${escapeHtml(k)}</h3>
+            <span class="text-[11px] font-mono text-gray-400">${group.length}</span>
+            <span class="flex-1 h-px bg-gray-200"></span>
+            <span class="text-[11px] font-mono text-gray-400">${cups.toLocaleString("en-PH")} cups</span>
+          </div>
+          <div class="print-grid" data-cols="${printState.cols}">${group.map(printCard).join("")}</div>
+        </section>`;
+    })
+    .join("");
+
+  wirePrintBoard();
+}
+
+function printStatusFromLabel(label) {
+  const hit = Object.keys(PRINT_STATUS_LABEL).find((k) => PRINT_STATUS_LABEL[k] === label);
+  return hit || "not_started";
+}
+
+function wirePrintBoard() {
+  document.querySelectorAll(".print-client-btn").forEach((b) => {
+    b.addEventListener("click", () => openPrintClient(b.dataset.client));
+  });
+  // paid is the one thing you flip constantly, so it's a click on the card
+  // rather than a trip into a form
+  document.querySelectorAll(".print-paid-btn").forEach((b) => {
+    b.addEventListener("click", async () => {
+      const paid = b.dataset.paid !== "1";
+      const res = await fetch(`/api/print/orders/${b.dataset.order}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_paid: paid }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not update that order.");
+        return;
+      }
+      loadPrintQueue();
+    });
+  });
+}
+
+async function loadPrintQueue() {
+  const board = document.getElementById("printBoard");
+  const res = await fetch(`/api/print/orders?view=${encodeURIComponent(printState.view)}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    board.innerHTML = `<p class="text-sm text-gray-500 py-10 text-center">${escapeHtml(err.message || "Could not load the print queue.")}</p>`;
+    return;
+  }
+  const data = await res.json();
+  printOrders = data.orders;
+
+  Object.entries(data.counts).forEach(([k, v]) => {
+    const el = document.querySelector(`#printViews [data-n="${k}"]`);
+    if (el) el.textContent = v;
+  });
+
+  const open = data.counts.open;
+  document.getElementById("printSubtitle").textContent =
+    `${open} order${open === 1 ? "" : "s"} still open · ongoing first`;
+
+  renderPrintBoard();
+}
+
+// ---------------------------------------------------------------------------
+// Client drawer
+// ---------------------------------------------------------------------------
+
+function closePrintDrawer() {
+  document.getElementById("printDrawer").classList.remove("print-drawer-open");
+  document.getElementById("printScrim").classList.add("hidden");
+}
+
+async function openPrintClient(clientId) {
+  const res = await fetch(`/api/print/clients/${clientId}`);
+  if (!res.ok) {
+    alert("Could not load that client.");
+    return;
+  }
+  const data = await res.json();
+  const c = data.client;
+  const t = data.totals;
+
+  document.getElementById("printDrawerLogo").outerHTML =
+    printLogo(c.name, true).replace('class="', 'id="printDrawerLogo" class="');
+  document.getElementById("printDrawerName").textContent = c.name;
+  document.getElementById("printDrawerSub").textContent =
+    `${t.orders} order${t.orders === 1 ? "" : "s"} · ${Number(t.cups).toLocaleString("en-PH")} cups printed`;
+
+  const contactRow = (label, field, value) => `
+    <div class="flex items-center gap-2 py-1.5 border-b border-dashed border-gray-100 text-sm">
+      <span class="text-xs text-gray-500 w-24 shrink-0">${label}</span>
+      <input class="print-contact flex-1 min-w-0 border border-transparent hover:border-gray-200 focus:border-brand-blue rounded px-1 py-0.5 text-sm"
+             data-client="${c.id}" data-field="${field}" value="${escapeHtml(value || "")}" placeholder="Not on file" />
+    </div>`;
+
+  const deals = data.deals.length
+    ? `<table class="w-full text-sm">${data.deals
+        .map(
+          (d) =>
+            `<tr class="border-b border-gray-100 last:border-0">
+               <td class="py-1">${escapeHtml([d.family, d.size].filter(Boolean).join(" "))}</td>
+               <td class="py-1 text-right font-mono">${printMoney(d.price)}</td>
+             </tr>`
+        )
+        .join("")}</table>`
+    : `<p class="text-xs text-gray-400 italic">No agreed prices yet — the grid rate applies.</p>`;
+
+  const history = data.history.length
+    ? `<table class="w-full text-sm">${data.history
+        .map(
+          (h) =>
+            `<tr class="border-b border-gray-100 last:border-0">
+               <td class="py-1 text-xs font-mono text-gray-400 whitespace-nowrap">${printShortDate(h.order_date)}</td>
+               <td class="py-1 text-right font-mono">${Number(h.cups).toLocaleString("en-PH")}</td>
+               <td class="py-1 text-right font-mono ${h.is_paid ? "text-gray-500" : "text-red-600"}">${printMoney(h.total)}</td>
+             </tr>`
+        )
+        .join("")}</table>`
+    : `<p class="text-xs text-gray-400 italic">No orders yet.</p>`;
+
+  const sectionHead = (title) =>
+    `<div class="flex items-center gap-2"><span class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">${title}</span><span class="flex-1 h-px bg-gray-100"></span></div>`;
+
+  document.getElementById("printDrawerBody").innerHTML = `
+    <div class="grid grid-cols-3 gap-2">
+      <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
+        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Orders</p>
+        <p class="font-display font-semibold text-lg">${t.orders}</p>
+      </div>
+      <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
+        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Cups</p>
+        <p class="font-display font-semibold text-lg">${Number(t.cups).toLocaleString("en-PH")}</p>
+      </div>
+      <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
+        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Owed</p>
+        <p class="font-display font-semibold text-lg ${Number(t.owed) > 0 ? "text-red-600" : ""}">${Number(t.owed) > 0 ? printMoney(t.owed) : "—"}</p>
+      </div>
+    </div>
+    <section class="flex flex-col gap-2">
+      ${sectionHead("Contact")}
+      <div>
+        ${contactRow("Instagram", "instagram", c.instagram)}
+        ${contactRow("Facebook", "facebook", c.facebook)}
+        ${contactRow("Contact", "contact_person", c.contact_person)}
+        ${contactRow("Phone", "phone", c.phone)}
+        ${contactRow("Email", "email", c.email)}
+      </div>
+      <p class="text-[11px] text-gray-400">Type to edit — saves when you click away.</p>
+    </section>
+    <section class="flex flex-col gap-2">${sectionHead("Agreed prices")}${deals}</section>
+    <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>`;
+
+  // contact fields save on blur - no save button to forget
+  document.querySelectorAll(".print-contact").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const body = {};
+      body[input.dataset.field] = input.value.trim();
+      const res = await fetch(`/api/print/clients/${input.dataset.client}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not save that.");
+      }
+    });
+  });
+
+  document.getElementById("printScrim").classList.remove("hidden");
+  document.getElementById("printDrawer").classList.add("print-drawer-open");
+}
+
+// ---------------------------------------------------------------------------
+// New order form
+// ---------------------------------------------------------------------------
+
+function poItemRow() {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td class="py-1 pr-2"><input class="po-label w-full border border-gray-300 rounded px-2 py-1" placeholder="Dabba 16oz" /></td>
+    <td class="py-1 pr-2"><input class="po-lid w-full border border-gray-300 rounded px-2 py-1" placeholder="Strawless" /></td>
+    <td class="py-1 pr-2"><input class="po-qty w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="1" /></td>
+    <td class="py-1 pr-2"><input class="po-unit w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="0.01" /></td>
+    <td class="py-1"><button class="po-remove text-gray-400 hover:text-red-600" aria-label="Remove">&#10005;</button></td>`;
+  tr.querySelector(".po-remove").addEventListener("click", () => tr.remove());
+  return tr;
+}
+
+function openPrintOrderForm() {
+  document.getElementById("poClient").value = "";
+  document.getElementById("poDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("poDue").value = "";
+  document.getElementById("poInk").value = "";
+  document.getElementById("poRemarks").value = "";
+  ["poRush", "poFrame", "poPaid"].forEach((id) => (document.getElementById(id).checked = false));
+
+  const body = document.getElementById("poItems");
+  body.innerHTML = "";
+  body.appendChild(poItemRow());
+
+  const list = document.getElementById("poClientList");
+  list.innerHTML = printClients.map((c) => `<option value="${escapeHtml(c.name)}"></option>`).join("");
+
+  const modal = document.getElementById("printOrderModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("poClient").focus();
+}
+
+function closePrintOrderForm() {
+  const modal = document.getElementById("printOrderModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function savePrintOrder() {
+  const items = [...document.querySelectorAll("#poItems tr")]
+    .map((tr) => ({
+      label: tr.querySelector(".po-label").value.trim(),
+      lid: tr.querySelector(".po-lid").value.trim(),
+      ink: document.getElementById("poInk").value.trim(),
+      quantity: Number(tr.querySelector(".po-qty").value || 0),
+      unit_price: Number(tr.querySelector(".po-unit").value || 0),
+    }))
+    .filter((i) => i.label);
+
+  if (!items.length) {
+    alert("Add at least one cup line before saving.");
+    return;
+  }
+
+  const res = await fetch("/api/print/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client: document.getElementById("poClient").value.trim(),
+      order_date: document.getElementById("poDate").value,
+      due_date: document.getElementById("poDue").value,
+      is_rush: document.getElementById("poRush").checked,
+      needs_new_frame: document.getElementById("poFrame").checked,
+      is_paid: document.getElementById("poPaid").checked,
+      remarks: document.getElementById("poRemarks").value,
+      items,
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    alert(data.message || "Could not save that order.");
+    return;
+  }
+  closePrintOrderForm();
+  await loadPrintClients();
+  loadPrintQueue();
+}
+
+async function loadPrintClients() {
+  const res = await fetch("/api/print/clients");
+  if (!res.ok) return;
+  const data = await res.json();
+  printClients = data.clients;
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+if (tabPrintBtn) {
+  document.querySelectorAll("#printViews .print-view-btn").forEach((b) => {
+    b.classList.toggle("active-print-view", b.dataset.view === printState.view);
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#printViews .print-view-btn").forEach((x) => x.classList.remove("active-print-view"));
+      b.classList.add("active-print-view");
+      printState.view = b.dataset.view;
+      savePrintPrefs();
+      loadPrintQueue();
+    });
+  });
+
+  [["printGroup", "group"], ["printSort", "sort"], ["printCols", "cols"]].forEach(([id, key]) => {
+    const sel = document.getElementById(id);
+    sel.value = printState[key];
+    sel.addEventListener("change", () => {
+      printState[key] = sel.value;
+      savePrintPrefs();
+      renderPrintBoard();
+    });
+  });
+
+  document.getElementById("printSearch").addEventListener("input", renderPrintBoard);
+
+  const czBtn = document.getElementById("printCzBtn");
+  czBtn.addEventListener("click", () => {
+    document.getElementById("printCustomize").classList.toggle("hidden");
+  });
+
+  document.querySelectorAll("#printFieldToggles .print-toggle").forEach((t) => {
+    const field = t.dataset.f;
+    t.classList.toggle("active-print-toggle", !!printState.fields[field]);
+    t.addEventListener("click", () => {
+      printState.fields[field] = !printState.fields[field];
+      t.classList.toggle("active-print-toggle", printState.fields[field]);
+      savePrintPrefs();
+      renderPrintBoard();
+    });
+  });
+
+  document.getElementById("printNewBtn").addEventListener("click", openPrintOrderForm);
+  document.getElementById("poCancel").addEventListener("click", closePrintOrderForm);
+  document.getElementById("poSave").addEventListener("click", savePrintOrder);
+  document.getElementById("poAddRow").addEventListener("click", () => {
+    document.getElementById("poItems").appendChild(poItemRow());
+  });
+
+  document.getElementById("printDrawerClose").addEventListener("click", closePrintDrawer);
+  document.getElementById("printScrim").addEventListener("click", closePrintDrawer);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closePrintDrawer();
+      closePrintOrderForm();
+    }
+  });
+
+  loadPrintClients();
 }

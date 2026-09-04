@@ -40,6 +40,39 @@
   ::-webkit-scrollbar-thumb { background: #c7ccd9; border-radius: 6px; }
   thead th { position: sticky; top: 0; z-index: 10; }
   .tab-btn, .payday-btn { color: rgba(255,255,255,0.7); }
+  /* Print queue: view chips, field toggles, and the card grid. */
+  .print-view-btn {
+    border: 1px solid #d1d5db; background: #fff; color: #4b5563;
+    padding: .3rem .7rem; border-radius: 999px; font-size: .8rem; font-weight: 500;
+    display: inline-flex; align-items: center; gap: .35rem;
+  }
+  .print-view-btn:hover { border-color: #9ca3af; color: #111827; }
+  .print-view-btn.active-print-view { background: #111827; border-color: #111827; color: #fff; }
+  .print-toggle {
+    border: 1px solid #c9d1f6; background: #fff; color: #4b5563;
+    padding: .25rem .6rem; border-radius: 999px; font-size: .78rem;
+  }
+  .print-toggle.active-print-toggle { background: #1c33bb; border-color: #1c33bb; color: #fff; }
+  .print-grid { display: grid; gap: .85rem; }
+  .print-grid[data-cols="1"] { grid-template-columns: 1fr; }
+  .print-grid[data-cols="2"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 25rem), 1fr)); }
+  .print-grid[data-cols="3"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 17.5rem), 1fr)); }
+  .print-lines { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  .print-lines thead th {
+    font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .08em; color: #9ca3af; text-align: left;
+    padding: .3rem .85rem; background: #f9fafb;
+    border-top: 1px solid #f3f4f6; border-bottom: 1px solid #f3f4f6;
+  }
+  .print-lines td { padding: .42rem .85rem; border-bottom: 1px solid #f3f4f6; color: #374151; vertical-align: baseline; }
+  .print-lines tbody tr:last-child td { border-bottom: 0; }
+  .print-lines td.r { text-align: right; font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; white-space: nowrap; color: #111827; }
+  .print-chip {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .045em; padding: .14rem .38rem; border-radius: 6px;
+    border: 1px solid transparent; white-space: nowrap; display: inline-block;
+  }
+  .print-drawer-open { transform: none !important; }
   .tab-btn.active-tab, .payday-btn.active-payday { background: #ffffff; color: #1c33bb; }
   /* The <select>s in the header use white text/translucent background to
      sit on the blue header bar, but the opened option list is a separate
@@ -128,6 +161,10 @@
       {# Employee records (addresses, bank details, IDs) stay manager-only. #}
       {% if current_user.is_manager %}
       <button id="tabEmployeesBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
+      {% endif %}
+      {# Cup printing - the order book for the printing side of the shop. #}
+      {% if current_user.is_manager %}
+      <button id="tabPrintBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button>
       {% endif %}
       {# The audit trail spans everyone's pay and login changes, including
          the managers' own - superuser only. #}
@@ -496,6 +533,150 @@
       </p>
     </div>
   </div>
+
+  {# Cup printing. Manager-only, so the markup isn't sent to anyone else. #}
+  {% if current_user.is_manager %}
+  <div id="printView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Print Queue</h2>
+        <p id="printSubtitle" class="text-sm text-gray-500">Open work, ongoing first.</p>
+      </div>
+      <button id="printNewBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New order</button>
+    </div>
+
+    {# Toolbar: the saved views, then how the board is laid out. #}
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <div id="printViews" class="flex flex-wrap gap-1.5">
+        <button class="print-view-btn" data-view="open">Open work <span class="text-xs font-mono opacity-60" data-n="open"></span></button>
+        <button class="print-view-btn" data-view="rush">Rush <span class="text-xs font-mono opacity-60" data-n="rush"></span></button>
+        <button class="print-view-btn" data-view="frame">Needs frame <span class="text-xs font-mono opacity-60" data-n="frame"></span></button>
+        <button class="print-view-btn" data-view="unpaid">Unpaid <span class="text-xs font-mono opacity-60" data-n="unpaid"></span></button>
+        <button class="print-view-btn" data-view="all">Everything <span class="text-xs font-mono opacity-60" data-n="all"></span></button>
+      </div>
+      <input id="printSearch" type="search" placeholder="Client, cup or ink…" class="ml-auto border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 mb-4 text-sm">
+      <label class="flex items-center gap-1.5 border border-gray-300 rounded-lg px-2 py-1">
+        <span class="text-xs text-gray-400">Group</span>
+        <select id="printGroup" class="text-sm bg-transparent">
+          <option value="status">Status</option>
+          <option value="none">None</option>
+          <option value="client">Client</option>
+          <option value="ink">Ink colour</option>
+        </select>
+      </label>
+      <label class="flex items-center gap-1.5 border border-gray-300 rounded-lg px-2 py-1">
+        <span class="text-xs text-gray-400">Sort</span>
+        <select id="printSort" class="text-sm bg-transparent">
+          <option value="age">Oldest first</option>
+          <option value="due">Due date</option>
+          <option value="qty">Biggest job</option>
+          <option value="amount">Highest value</option>
+        </select>
+      </label>
+      <label class="flex items-center gap-1.5 border border-gray-300 rounded-lg px-2 py-1">
+        <span class="text-xs text-gray-400">Per row</span>
+        <select id="printCols" class="text-sm bg-transparent">
+          <option value="2">Two</option>
+          <option value="3">Three</option>
+          <option value="1">One</option>
+        </select>
+      </label>
+      <button id="printCzBtn" class="border border-gray-300 rounded-lg px-3 py-1 text-sm hover:border-gray-400 transition">Customize cards</button>
+    </div>
+
+    <div id="printCustomize" class="hidden border border-blue-200 bg-blue-50 rounded-xl p-3 mb-4">
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Show on every card</p>
+      <div id="printFieldToggles" class="flex flex-wrap gap-1.5">
+        <button class="print-toggle" data-f="logo">Client logo</button>
+        <button class="print-toggle" data-f="lid">Lid column</button>
+        <button class="print-toggle" data-f="unit">Unit price</button>
+        <button class="print-toggle" data-f="ink">Ink colour</button>
+        <button class="print-toggle" data-f="amount">Order value</button>
+        <button class="print-toggle" data-f="progress">Delivered</button>
+        <button class="print-toggle" data-f="remark">Remarks</button>
+      </div>
+      <p class="text-[11px] text-gray-500 mt-2">Saved on this computer, per person.</p>
+    </div>
+
+    <div id="printBoard" class="flex flex-col gap-6"></div>
+  </div>
+
+  {# Client details, opened from a client name on any card. #}
+  <div id="printScrim" class="fixed inset-0 bg-black/40 z-40 hidden"></div>
+  <aside id="printDrawer" class="fixed top-0 right-0 bottom-0 w-full sm:w-[27rem] bg-white border-l border-gray-200 shadow-2xl z-50 translate-x-full transition-transform duration-200 flex flex-col">
+    <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
+      <div id="printDrawerLogo" class="w-12 h-12 rounded-full grid place-items-center font-display font-bold text-lg shrink-0"></div>
+      <div class="min-w-0">
+        <h3 id="printDrawerName" class="font-semibold leading-tight truncate"></h3>
+        <p id="printDrawerSub" class="text-xs text-gray-500"></p>
+      </div>
+      <button id="printDrawerClose" class="ml-auto w-8 h-8 rounded-md border border-gray-300 text-gray-500 hover:text-gray-900 shrink-0" aria-label="Close">&#10005;</button>
+    </div>
+    <div id="printDrawerBody" class="overflow-y-auto px-4 py-4 flex flex-col gap-5"></div>
+  </aside>
+
+  {# New order form. #}
+  <div id="printOrderModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5">
+      <h3 class="font-display font-semibold text-lg mb-4">New print order</h3>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Client</span>
+          <input id="poClient" list="poClientList" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Type or pick a client" />
+          <datalist id="poClientList"></datalist>
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Order date</span>
+          <input id="poDate" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Due date <span class="text-gray-400">(optional)</span></span>
+          <input id="poDue" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Ink colour</span>
+          <input id="poInk" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Black, White, Brown…" />
+        </label>
+      </div>
+
+      <div class="flex flex-wrap gap-4 mb-4 text-sm">
+        <label class="flex items-center gap-2"><input id="poRush" type="checkbox" /> Rush</label>
+        <label class="flex items-center gap-2"><input id="poFrame" type="checkbox" /> Needs a new frame</label>
+        <label class="flex items-center gap-2"><input id="poPaid" type="checkbox" /> Already paid</label>
+      </div>
+
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Cups</p>
+      <div class="overflow-x-auto mb-2">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400">
+              <th class="text-left py-1">Cup</th>
+              <th class="text-left py-1">Lid</th>
+              <th class="text-right py-1 w-24">Qty</th>
+              <th class="text-right py-1 w-24">Unit ₱</th>
+              <th class="w-8"></th>
+            </tr>
+          </thead>
+          <tbody id="poItems"></tbody>
+        </table>
+      </div>
+      <button id="poAddRow" class="text-sm text-brand-blue hover:underline mb-4">+ Add another cup</button>
+
+      <label class="text-sm block mb-4">
+        <span class="text-xs text-gray-500 block mb-1">Remarks</span>
+        <textarea id="poRemarks" rows="2" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Rush notes, frame notes, anything the sheet used to hold"></textarea>
+      </label>
+
+      <div class="flex justify-end gap-2">
+        <button id="poCancel" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="poSave" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold">Save order</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <div id="adminView" style="display:none">
     <div class="flex items-start justify-between gap-4 flex-wrap mb-5">
