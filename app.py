@@ -2054,6 +2054,72 @@ def api_my_details():
     )
 
 
+# What a staff member may change about themselves: how to reach them, and
+# the account/ID numbers that only they can actually read off a card. Pay
+# rates, targets, PTO entitlement and the contribution *amounts* stay
+# manager-only - those are terms of employment and payroll deductions, not
+# personal particulars, and letting someone edit their own deduction would
+# let them edit their own net pay.
+MY_SELF_EDITABLE_FIELDS = (
+    "birthday", "phone", "email", "address",
+    "sss_id", "pagibig_id", "philhealth_id", "hmo_id",
+    "bank_name", "bank_account_name", "bank_account_number",
+)
+
+
+@app.route("/api/staff/me", methods=["POST"])
+@login_required
+def api_my_details_update():
+    """Let the logged-in staff member correct their own particulars.
+
+    Deliberately not routed through api_staff_update: that one is
+    manager-gated and writes any field in STAFF_EDITABLE_FIELDS, so
+    reusing it would mean one bad `name` in the payload editing somebody
+    else - or one extra key editing a daily rate. This writes a fixed
+    field list to a fixed row, the caller's own."""
+    staff_name = session.get("staff_name")
+    if not staff_name:
+        return jsonify({"status": "error", "message": "This account has no employee record"}), 400
+
+    data = request.get_json(force=True)
+    updates = {}
+    for field in MY_SELF_EDITABLE_FIELDS:
+        if field in data:
+            updates[field] = (data[field] or "").strip()
+
+    birthday = updates.get("birthday")
+    if birthday:
+        try:
+            date.fromisoformat(birthday)
+        except ValueError:
+            return jsonify({"status": "error", "message": "Birthday must be a real date."}), 400
+
+    email = updates.get("email")
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return jsonify({"status": "error", "message": "That doesn't look like an email address."}), 400
+
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    columns = ", ".join(updates)
+    cur.execute(f"SELECT id, {columns} FROM staff WHERE name=%s", (staff_name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No employee record found"}), 404
+
+    changed = {f: {"from": row[f], "to": v} for f, v in updates.items() if (row[f] or "") != v}
+    if changed:
+        set_clause = ", ".join(f"{field}=%s" for field in updates)
+        cur.execute(f"UPDATE staff SET {set_clause} WHERE id=%s", (*updates.values(), row["id"]))
+        # same trail as a manager's edit - a bank account that changed the
+        # week before payday should be traceable either way
+        record_audit(cur, "Updated own details", staff_name, changed)
+        db.commit()
+    return jsonify({"status": "ok", "changed": sorted(changed)})
+
+
 @app.route("/api/staff/<name>/advances")
 @manager_required
 def api_staff_advances(name):

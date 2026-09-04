@@ -504,6 +504,9 @@ function showTab(tab) {
     loadMyPay();
   }
   if (tab === "myinfo") {
+    // leaving and coming back discards a half-finished edit rather than
+    // resuming one the person has probably forgotten about
+    if (myInfoEditing) setMyInfoEditing(false);
     loadMyDetails();
   }
   if (tab === "activity") {
@@ -717,9 +720,17 @@ const dashMyPay = document.getElementById("dashMyPay");
 if (dashMyPay) dashMyPay.addEventListener("click", () => showTab("mypay"));
 
 // ---------------------------------------------------------------------------
-// My Details (a staff member's own record, read-only)
+// My Details (a staff member's own record; contact, IDs and bank are
+// theirs to correct, the rest is read-only)
 // ---------------------------------------------------------------------------
 const myInfoPtoYear = document.getElementById("myInfoPtoYear");
+const myInfoEditBtn = document.getElementById("myInfoEditBtn");
+const myInfoSaveBtn = document.getElementById("myInfoSaveBtn");
+const myInfoCancelBtn = document.getElementById("myInfoCancelBtn");
+const myInfoStatus = document.getElementById("myInfoStatus");
+
+let myInfoEditing = false;
+let myInfoData = null; // last loaded record, so Cancel can put it back
 
 // definition list rows; blank values read "—" rather than vanishing, so a
 // missing bank account is visibly missing rather than silently absent
@@ -732,6 +743,27 @@ function infoRows(pairs) {
         <dd class="text-right ${value ? "" : "text-gray-300"}">${value ? escapeHtml(String(value)) : "—"}</dd>
       </div>`
     )
+    .join("");
+}
+
+// same shape as infoRows, but the fields the employee owns become inputs.
+// Rows that aren't theirs to change stay plain text in edit mode, so the
+// card doesn't reshuffle when you click Edit.
+function editRows(rows) {
+  return rows
+    .map(([label, field, value, type]) => {
+      const cell = field
+        ? `<input data-myinfo-field="${field}" type="${type || "text"}"
+                  value="${escapeHtml(value == null ? "" : String(value))}"
+                  class="w-full sm:w-56 text-sm text-right border border-gray-300 rounded-md px-2 py-1
+                         focus:outline-none focus:ring-1 focus:ring-brand-blue" />`
+        : `<span class="${value ? "" : "text-gray-300"}">${value ? escapeHtml(String(value)) : "—"}</span>`;
+      return `
+      <div class="flex items-center justify-between gap-4 py-1.5">
+        <dt class="text-gray-500 shrink-0">${escapeHtml(label)}</dt>
+        <dd class="text-right">${cell}</dd>
+      </div>`;
+    })
     .join("");
 }
 
@@ -748,31 +780,36 @@ function renderMyDetails(d, pto) {
     : d.daily_rate
     ? `${formatMoney(d.daily_rate)} / day`
     : "";
-  document.getElementById("myInfoBasic").innerHTML = infoRows([
-    ["Employment", d.employment],
-    ["Pay rate", rate],
-    ["Birthday", d.birthday],
-    ["Phone", d.phone],
-    ["Email", d.email],
-    ["Address", d.address],
-  ]);
+  const basic = [
+    ["Employment", null, d.employment],
+    ["Pay rate", null, rate],
+    ["Birthday", "birthday", d.birthday, "date"],
+    ["Phone", "phone", d.phone, "tel"],
+    ["Email", "email", d.email, "email"],
+    ["Address", "address", d.address],
+  ];
+  const gov = [
+    ["SSS no.", "sss_id", d.sss_id],
+    ["SSS amount", null, d.default_sss ? formatMoney(d.default_sss) : ""],
+    ["Pag-IBIG no.", "pagibig_id", d.pagibig_id],
+    ["Pag-IBIG amount", null, d.default_pagibig ? formatMoney(d.default_pagibig) : ""],
+    ["PhilHealth no.", "philhealth_id", d.philhealth_id],
+    ["PhilHealth amount", null, d.default_philhealth ? formatMoney(d.default_philhealth) : ""],
+    ["HMO no.", "hmo_id", d.hmo_id],
+    ["HMO amount", null, d.default_hmo ? formatMoney(d.default_hmo) : ""],
+  ];
+  const bank = [
+    ["Bank", "bank_name", d.bank_name],
+    ["Account name", "bank_account_name", d.bank_account_name],
+    ["Account number", "bank_account_number", d.bank_account_number],
+  ];
 
-  document.getElementById("myInfoGov").innerHTML = infoRows([
-    ["SSS no.", d.sss_id],
-    ["SSS amount", d.default_sss ? formatMoney(d.default_sss) : ""],
-    ["Pag-IBIG no.", d.pagibig_id],
-    ["Pag-IBIG amount", d.default_pagibig ? formatMoney(d.default_pagibig) : ""],
-    ["PhilHealth no.", d.philhealth_id],
-    ["PhilHealth amount", d.default_philhealth ? formatMoney(d.default_philhealth) : ""],
-    ["HMO no.", d.hmo_id],
-    ["HMO amount", d.default_hmo ? formatMoney(d.default_hmo) : ""],
-  ]);
-
-  document.getElementById("myInfoBank").innerHTML = infoRows([
-    ["Bank", d.bank_name],
-    ["Account name", d.bank_account_name],
-    ["Account number", d.bank_account_number],
-  ]);
+  const render = myInfoEditing
+    ? (rows) => editRows(rows)
+    : (rows) => infoRows(rows.map(([label, , value]) => [label, value]));
+  document.getElementById("myInfoBasic").innerHTML = render(basic);
+  document.getElementById("myInfoGov").innerHTML = render(gov);
+  document.getElementById("myInfoBank").innerHTML = render(bank);
 
   const availableClass = pto.available <= 0 ? "text-red-600" : "text-brand-blue";
   document.getElementById("myInfoPtoSummary").innerHTML =
@@ -801,7 +838,52 @@ async function loadMyDetails() {
     return;
   }
   const data = await res.json();
+  myInfoData = data;
   renderMyDetails(data.details, data.pto);
+}
+
+function setMyInfoEditing(on) {
+  myInfoEditing = on;
+  myInfoEditBtn.classList.toggle("hidden", on);
+  myInfoSaveBtn.classList.toggle("hidden", !on);
+  myInfoCancelBtn.classList.toggle("hidden", !on);
+  myInfoStatus.textContent = "";
+  if (myInfoData) renderMyDetails(myInfoData.details, myInfoData.pto);
+}
+
+async function saveMyDetails() {
+  const payload = {};
+  document.querySelectorAll("[data-myinfo-field]").forEach((el) => {
+    payload[el.dataset.myinfoField] = el.value.trim();
+  });
+
+  myInfoSaveBtn.disabled = true;
+  myInfoStatus.textContent = "Saving…";
+  const res = await fetch("/api/staff/me", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  myInfoSaveBtn.disabled = false;
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    myInfoStatus.textContent = "";
+    alert(data.message || "Could not save your details.");
+    return;
+  }
+  // reload rather than trusting the payload: the server is what decides
+  // which fields it actually accepted
+  await loadMyDetails();
+  setMyInfoEditing(false);
+  myInfoStatus.textContent = data.changed && data.changed.length ? "Saved." : "No changes.";
+  setTimeout(() => (myInfoStatus.textContent = ""), 3000);
+}
+
+if (myInfoEditBtn) {
+  myInfoEditBtn.addEventListener("click", () => setMyInfoEditing(true));
+  myInfoCancelBtn.addEventListener("click", () => setMyInfoEditing(false));
+  myInfoSaveBtn.addEventListener("click", saveMyDetails);
 }
 
 if (myInfoPtoYear) {
@@ -1086,6 +1168,7 @@ const activityActor = document.getElementById("activityActor");
 const ACTION_TONE = {
   "Saved payroll": "bg-blue-50 text-brand-blue border-blue-200",
   "Updated employee": "bg-blue-50 text-brand-blue border-blue-200",
+  "Updated own details": "bg-blue-50 text-brand-blue border-blue-200",
   "Recorded cash advance": "bg-blue-50 text-brand-blue border-blue-200",
   "Deleted cash advance": "bg-red-50 text-red-600 border-red-200",
   "Archived employee": "bg-red-50 text-red-600 border-red-200",

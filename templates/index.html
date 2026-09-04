@@ -408,16 +408,23 @@
         <div class="shrink-0">
           <div id="myInfoPhoto" class="w-16 h-16 rounded-full overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center"></div>
         </div>
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1">
           <p id="myInfoName" class="font-display font-semibold text-xl leading-tight"></p>
           <p id="myInfoRole" class="text-sm text-gray-500"></p>
+        </div>
+        <div class="shrink-0 flex items-center gap-2">
+          <span id="myInfoStatus" class="text-xs text-gray-500"></span>
+          <button id="myInfoEditBtn" class="text-sm px-3 py-1.5 rounded-md border border-gray-300 hover:bg-gray-50 transition">Edit</button>
+          <button id="myInfoCancelBtn" class="hidden text-sm px-3 py-1.5 rounded-md border border-gray-300 hover:bg-gray-50 transition">Cancel</button>
+          <button id="myInfoSaveBtn" class="hidden text-sm px-3 py-1.5 rounded-md bg-brand-green text-white font-medium hover:opacity-90 transition">Save</button>
         </div>
       </div>
 
       <p class="text-xs text-gray-500 mb-5">
-        Your own record, as the branch holds it. It's read-only here — if
-        anything is wrong or out of date, tell the branch manager and
-        they'll correct it.
+        Your own record, as the branch holds it. You can correct your
+        contact details, your government ID numbers and your bank account
+        yourself — everything else (your pay, your targets, the amounts
+        deducted each cutoff) is set by the branch manager.
       </p>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-10">
@@ -429,7 +436,7 @@
         <section class="border border-gray-200 bg-white rounded-xl p-4 shadow-sm">
           <h3 class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-3">Government</h3>
           <dl id="myInfoGov" class="text-sm divide-y divide-gray-100"></dl>
-          <p class="text-[11px] text-gray-400 mt-2">The amounts are what's deducted each cutoff.</p>
+          <p class="text-[11px] text-gray-400 mt-2">The amounts are what's deducted each cutoff — those are set by the branch manager.</p>
         </section>
 
         <section class="border border-gray-200 bg-white rounded-xl p-4 shadow-sm">
