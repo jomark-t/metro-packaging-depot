@@ -54,9 +54,15 @@
   }
   .print-toggle.active-print-toggle { background: #1c33bb; border-color: #1c33bb; color: #fff; }
   .print-grid { display: grid; gap: .85rem; }
+  /* an exact column count, because the control says "Two" and "Three" -
+     auto-fill would quietly give four on a wide screen */
   .print-grid[data-cols="1"] { grid-template-columns: 1fr; }
-  .print-grid[data-cols="2"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 25rem), 1fr)); }
-  .print-grid[data-cols="3"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 17.5rem), 1fr)); }
+  .print-grid[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .print-grid[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* a card below ~20rem cannot hold the lines table, so narrow screens
+     collapse to one column whatever the setting says */
+  @media (max-width: 60rem) { .print-grid[data-cols="3"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 42rem) { .print-grid { grid-template-columns: 1fr !important; } }
   .print-lines { width: 100%; border-collapse: collapse; font-size: .84rem; }
   .print-lines thead th {
     font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 500;
