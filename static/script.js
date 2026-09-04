@@ -2832,7 +2832,7 @@ function printCard(o) {
         (f.lid ? `<td class="text-gray-500">${escapeHtml(i.lid_text || "—")}</td>` : "") +
         `<td class="r">${Number(i.quantity).toLocaleString("en-PH")}</td>` +
         (f.unit ? `<td class="r text-gray-500">${Number(i.unit_price).toFixed(2)}</td>` : "") +
-        (f.amount ? `<td class="r">${(i.quantity * i.unit_price).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>` : "") +
+        (f.amount ? `<td class="r">${Number(i.amount).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>` : "") +
         `</tr>`
       );
     })

@@ -442,14 +442,14 @@ def init_db():
     cur.execute(
         """CREATE TABLE IF NOT EXISTS print_product_prices (
             product_id INTEGER PRIMARY KEY REFERENCES print_products(id) ON DELETE CASCADE,
-            cost REAL,
-            retail REAL,
-            wholesale REAL,
-            wholesale_lid REAL,
-            print_only_1k REAL,
-            lid_and_print_1k REAL,
-            print_only_sub1k REAL,
-            lid_and_print_sub1k REAL,
+            cost NUMERIC(10,2),
+            retail NUMERIC(10,2),
+            wholesale NUMERIC(10,2),
+            wholesale_lid NUMERIC(10,2),
+            print_only_1k NUMERIC(10,2),
+            lid_and_print_1k NUMERIC(10,2),
+            print_only_sub1k NUMERIC(10,2),
+            lid_and_print_sub1k NUMERIC(10,2),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
@@ -460,7 +460,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             client_id INTEGER NOT NULL REFERENCES print_clients(id) ON DELETE CASCADE,
             product_id INTEGER NOT NULL REFERENCES print_products(id) ON DELETE CASCADE,
-            price REAL NOT NULL,
+            price NUMERIC(10,2) NOT NULL,
             note TEXT,
             UNIQUE(client_id, product_id)
         )"""
@@ -494,11 +494,38 @@ def init_db():
             ink_color TEXT,
             quantity INTEGER NOT NULL DEFAULT 0,
             qty_delivered INTEGER NOT NULL DEFAULT 0,
-            unit_price REAL NOT NULL DEFAULT 0,
+            -- NUMERIC, not REAL: float4 cannot represent 5.70, so a
+            -- REAL price turns a 10,215.00 order into 10,214.999771 once
+            -- it is summed. Money is exact here even though the older
+            -- payroll columns predate this.
+            unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'not_started',
             notes TEXT
         )"""
     )
+    # these tables were first created with REAL money columns; move any
+    # such column to NUMERIC once, guarded so a boot on the right type is
+    # a no-op rather than a table rewrite
+    for table, column, spec in (
+        ("print_order_items", "unit_price", "NUMERIC(12,2)"),
+        ("print_client_prices", "price", "NUMERIC(10,2)"),
+        ("print_product_prices", "cost", "NUMERIC(10,2)"),
+        ("print_product_prices", "retail", "NUMERIC(10,2)"),
+        ("print_product_prices", "wholesale", "NUMERIC(10,2)"),
+        ("print_product_prices", "wholesale_lid", "NUMERIC(10,2)"),
+        ("print_product_prices", "print_only_1k", "NUMERIC(10,2)"),
+        ("print_product_prices", "lid_and_print_1k", "NUMERIC(10,2)"),
+        ("print_product_prices", "print_only_sub1k", "NUMERIC(10,2)"),
+        ("print_product_prices", "lid_and_print_sub1k", "NUMERIC(10,2)"),
+    ):
+        cur.execute(
+            """SELECT 1 FROM information_schema.columns
+               WHERE table_name=%s AND column_name=%s AND data_type='real'""",
+            (table, column),
+        )
+        if cur.fetchone():
+            cur.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE {spec}")
+
     cur.execute("CREATE INDEX IF NOT EXISTS print_order_items_order_idx ON print_order_items(order_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS print_orders_date_idx ON print_orders(order_date DESC)")
 
@@ -2748,6 +2775,11 @@ def _print_order_rows(where="", params=()):
         item["label"] = item["item_text"] or " ".join(
             x for x in (item["family"], item["size"]) if x
         )
+        # do the money in Decimal, hand out floats: NUMERIC arrives as
+        # Decimal, which jsonify will not serialise
+        price = item["unit_price"] or 0
+        item["amount"] = float(round(price * item["quantity"], 2))
+        item["unit_price"] = float(price)
         by_id[item["order_id"]]["items"].append(item)
 
     for o in orders:
@@ -2755,7 +2787,7 @@ def _print_order_rows(where="", params=()):
         o["delivered"] = sum(
             i["quantity"] if i["status"] == "done" else i["qty_delivered"] for i in o["items"]
         )
-        o["total"] = round(sum(i["quantity"] * i["unit_price"] for i in o["items"]), 2)
+        o["total"] = round(sum(i["amount"] for i in o["items"]), 2)
         o["status"] = _rollup_status(o["items"])
 
     orders.sort(key=lambda o: (PRINT_STATUS_RANK.get(o["status"], 9), o["order_date"] or ""))
@@ -3013,6 +3045,7 @@ def api_print_client(client_id):
     for r in cur.fetchall():
         h = dict(r)
         h["order_date"] = h["order_date"].isoformat() if h["order_date"] else None
+        h["total"] = float(h["total"] or 0)
         history.append(h)
 
     cur.execute(
@@ -3025,6 +3058,7 @@ def api_print_client(client_id):
         (client_id,),
     )
     totals = dict(cur.fetchone())
+    totals["owed"] = float(totals["owed"] or 0)
 
     cur.execute(
         """SELECT cp.price, cp.note, p.family, p.size
@@ -3033,7 +3067,11 @@ def api_print_client(client_id):
            WHERE cp.client_id = %s ORDER BY p.family, p.size""",
         (client_id,),
     )
-    deals = [dict(r) for r in cur.fetchall()]
+    deals = []
+    for r in cur.fetchall():
+        d = dict(r)
+        d["price"] = float(d["price"] or 0)
+        deals.append(d)
 
     return jsonify({"client": client, "totals": totals, "history": history, "deals": deals})
 
