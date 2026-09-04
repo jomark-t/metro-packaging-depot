@@ -2859,15 +2859,6 @@ function printCard(o) {
     .join("");
 
   const extras = [];
-  if (f.ink && o.items.length && o.items[0].ink_color) {
-    const ink = o.items[0].ink_color;
-    extras.push(
-      `<div class="flex items-center gap-1.5 text-xs text-gray-500">
-         <span class="w-3 h-3 rounded" style="background:${inkColor(ink)};box-shadow:inset 0 0 0 1px rgba(17,24,39,.2)"></span>
-         ${escapeHtml(ink)} ink
-       </div>`
-    );
-  }
   if (f.progress && o.delivered > 0 && o.delivered < cups) {
     const pct = Math.round((o.delivered / cups) * 100);
     extras.push(
@@ -2881,23 +2872,40 @@ function printCard(o) {
     extras.push(`<p class="text-xs text-gray-500 bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>`);
   }
 
+  // the ink sits with the client name rather than as a stripe across the
+  // card: it names the job as much as the client does, and a coloured
+  // border on every card made the board noisy
+  const ink = o.items.length ? o.items[0].ink_color : "";
+  const inkTag =
+    f.ink && ink
+      ? `<span class="inline-flex items-center gap-1 text-[11px] text-gray-500 shrink-0">
+           <span class="w-2.5 h-2.5 rounded-full" style="background:${inkColor(ink)};box-shadow:inset 0 0 0 1px rgba(17,24,39,.25)"></span>${escapeHtml(ink)}
+         </span>`
+      : "";
+
   return `
     <article class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col hover:shadow-md hover:border-gray-300 transition" data-order="${o.id}">
-      <div class="h-1" style="background:${inkColor(o.items.length ? o.items[0].ink_color : "")}"></div>
       <div class="flex items-center gap-2.5 px-3 pt-3 pb-2">
         ${f.logo ? printLogo(o.client_name, false) : ""}
         <div class="min-w-0 flex-1">
-          <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
+          <div class="flex items-baseline gap-2 min-w-0">
+            <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
+            ${inkTag}
+          </div>
           <p class="text-[11px] text-gray-400 font-mono">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
         </div>
-        <div class="flex flex-wrap gap-1 justify-end shrink-0 max-w-[55%]">${chips.join("")}</div>
+        <div class="flex flex-wrap gap-1 justify-end shrink-0 max-w-[45%]">${chips.join("")}</div>
       </div>
       <table class="print-lines"><thead>${head}</thead><tbody>${rows}</tbody></table>
       ${extras.length ? `<div class="px-3 pt-2 flex flex-col gap-2">${extras.join("")}</div>` : ""}
       <div class="mt-auto flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-100">
         <button class="print-paid-btn text-[11px] font-mono uppercase tracking-wide ${o.is_paid ? "text-green-700" : "text-red-600"}"
                 data-order="${o.id}" data-paid="${o.is_paid ? 1 : 0}">${o.is_paid ? "Paid" : "Unpaid"}</button>
-        ${f.amount ? `<span class="print-card-total font-mono font-semibold text-sm ${o.is_paid ? "" : "text-red-600"}">${printMoney(o.total)}</span>` : ""}
+        ${
+          f.amount && o.status === "done"
+            ? `<span class="print-card-total font-mono font-semibold text-sm ${o.is_paid ? "" : "text-red-600"}">${printMoney(o.total)}</span>`
+            : `<span class="text-[11px] text-gray-300 font-mono">—</span>`
+        }
       </div>
     </article>`;
 }
@@ -2976,14 +2984,14 @@ function renderPrintBoard() {
       const cups = group.reduce((s, o) => s + o.quantity, 0);
       const dot =
         printState.group === "status"
-          ? `<span class="w-2 h-2 rounded-sm" style="background:${PRINT_STATUS_DOT[printStatusFromLabel(k)] || "#9ca3af"}"></span>`
+          ? `<span class="w-2.5 h-2.5 rounded-sm shrink-0" style="background:${PRINT_STATUS_DOT[printStatusFromLabel(k)] || "#9ca3af"}"></span>`
           : "";
       return `
-        <section class="flex flex-col gap-2.5">
-          <div class="flex items-center gap-2">
+        <section class="flex flex-col gap-3">
+          <div class="flex items-center gap-2.5 pt-1">
             ${dot}
-            <h3 class="text-[13px] font-semibold">${escapeHtml(k)}</h3>
-            <span class="text-[11px] font-mono text-gray-400">${group.length}</span>
+            <h3 class="font-display font-semibold text-lg leading-none tracking-tight">${escapeHtml(k)}</h3>
+            <span class="text-[11px] font-mono text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-2 py-0.5 leading-none">${group.length}</span>
             <span class="flex-1 h-px bg-gray-200"></span>
             <span class="group-cups text-[11px] font-mono text-gray-400">${cups.toLocaleString("en-PH")} cups</span>
           </div>
