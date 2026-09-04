@@ -2815,17 +2815,21 @@ function printCard(o) {
   if (o.needs_new_frame) chips.push(printChip("New frame", "bg-amber-50 text-amber-700 border-amber-200"));
   if (!o.is_paid && o.status === "done") chips.push(printChip("Unpaid", "bg-red-50 text-red-600 border-red-200"));
 
-  // the cup lines, as a table - per-line status only when there's more
-  // than one line, since a single line already has the card's badge
-  const multi = o.items.length > 1;
+  // the cup lines, as a table. Every line carries its own status pill and
+  // every pill is a button: moving a job along is the thing you do twenty
+  // times a day, and it should not need a form.
   const head =
     `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th>` +
     `${f.unit ? '<th class="r">Unit</th>' : ""}${f.amount ? '<th class="r">Amount</th>' : ""}</tr>`;
   const rows = o.items
     .map((i) => {
-      const line = multi
-        ? `<br />${printChip(PRINT_STATUS_LABEL[i.status] || i.status, PRINT_STATUS_TONE[i.status] || "")}`
+      const delivered = i.status === "partial" && i.qty_delivered
+        ? ` <span class="text-[10px] text-amber-700 font-mono">${Number(i.qty_delivered).toLocaleString("en-PH")} out</span>`
         : "";
+      const line =
+        `<br /><button type="button" class="print-line-status print-chip ${PRINT_STATUS_TONE[i.status] || ""}"
+                 data-item="${i.id}" data-status="${i.status}" data-qty="${i.quantity}"
+                 title="Change status">${escapeHtml(PRINT_STATUS_LABEL[i.status] || i.status)}</button>${delivered}`;
       return (
         `<tr data-item="${i.id}">` +
         `<td class="font-medium text-gray-900">${escapeHtml(i.label || "")}${line}</td>` +
@@ -2980,9 +2984,106 @@ function printStatusFromLabel(label) {
   return hit || "not_started";
 }
 
+// Status popover. One element reused for every pill rather than one per
+// line - there are 350 lines in the queue and only ever one popover open.
+let printStatusPop = null;
+
+function closeStatusPopover() {
+  if (printStatusPop) {
+    printStatusPop.remove();
+    printStatusPop = null;
+  }
+}
+
+async function setLineStatus(itemId, body) {
+  const res = await fetch(`/api/print/items/${itemId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.message || "Could not update that line.");
+    return;
+  }
+  closeStatusPopover();
+  // a status change can move the card into another group, so redraw the
+  // whole board rather than patching the one pill
+  loadPrintQueue();
+}
+
+function openStatusPopover(pill) {
+  closeStatusPopover();
+  const itemId = pill.dataset.item;
+  const current = pill.dataset.status;
+  const qty = Number(pill.dataset.qty || 0);
+
+  const pop = document.createElement("div");
+  pop.className =
+    "fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-44 text-sm";
+  pop.innerHTML =
+    ["ongoing", "partial", "not_started", "done", "cancelled"]
+      .map(
+        (st) =>
+          `<button type="button" class="status-opt w-full text-left px-3 py-1.5 hover:bg-gray-50 flex items-center gap-2 ${
+            st === current ? "font-semibold" : ""
+          }" data-status="${st}">
+             <span class="w-2 h-2 rounded-sm" style="background:${PRINT_STATUS_DOT[st]}"></span>
+             ${PRINT_STATUS_LABEL[st]}
+             ${st === current ? '<span class="ml-auto text-brand-blue">&#10003;</span>' : ""}
+           </button>`
+      )
+      .join("") +
+    `<div class="border-t border-gray-100 mt-1 pt-1 px-3 pb-1">
+       <label class="block text-[11px] text-gray-500 mb-1">Delivered of ${qty.toLocaleString("en-PH")}</label>
+       <div class="flex gap-1">
+         <input type="number" min="0" max="${qty}" class="status-qty w-full border border-gray-300 rounded px-1.5 py-1 text-sm text-right" />
+         <button type="button" class="status-qty-save bg-brand-blue text-white rounded px-2 text-xs">Set</button>
+       </div>
+     </div>`;
+
+  document.body.appendChild(pop);
+  const r = pill.getBoundingClientRect();
+  // flip above the pill when there is no room below
+  const top = r.bottom + 260 > window.innerHeight ? r.top - pop.offsetHeight - 4 : r.bottom + 4;
+  pop.style.top = `${Math.max(8, top)}px`;
+  pop.style.left = `${Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)}px`;
+
+  pop.querySelectorAll(".status-opt").forEach((opt) => {
+    opt.addEventListener("click", () => setLineStatus(itemId, { status: opt.dataset.status }));
+  });
+  const qtyInput = pop.querySelector(".status-qty");
+  const save = () => {
+    const n = Number(qtyInput.value);
+    if (qtyInput.value === "" || Number.isNaN(n)) return;
+    setLineStatus(itemId, { qty_delivered: n });
+  };
+  pop.querySelector(".status-qty-save").addEventListener("click", save);
+  qtyInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") save();
+  });
+
+  printStatusPop = pop;
+}
+
+document.addEventListener("click", (e) => {
+  if (printStatusPop && !printStatusPop.contains(e.target) && !e.target.closest(".print-line-status")) {
+    closeStatusPopover();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeStatusPopover();
+});
+
 function wirePrintBoard() {
   document.querySelectorAll(".print-client-btn").forEach((b) => {
     b.addEventListener("click", () => openPrintClient(b.dataset.client));
+  });
+  document.querySelectorAll(".print-line-status").forEach((pill) => {
+    pill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openStatusPopover(pill);
+    });
   });
   // paid is the one thing you flip constantly, so it's a click on the card
   // rather than a trip into a form
