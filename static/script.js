@@ -2747,7 +2747,7 @@ const PRINT_STATUS_DOT = {
 
 const PRINT_DEFAULTS = {
   view: "open", group: "status", sort: "age", cols: "2", showControls: false,
-  fields: { logo: true, lid: true, unit: true, ink: true, amount: true, progress: true, remark: true },
+  fields: { logo: true, lid: true, unit: true, ink: true, amount: true, remark: true },
 };
 
 let printState = loadPrintPrefs();
@@ -2831,16 +2831,22 @@ function printCard(o) {
   // does double duty: it carries the status while the line is in progress,
   // and swaps to the unit price and amount the moment it is done, so money
   // appears as work completes rather than sitting there all along.
+  // Once every line is done there is no status left to report, so the
+  // column it occupied becomes the two money columns it was standing in
+  // for - with headings, because by then the figures are the point.
+  const allDone = o.status === "done";
   const head =
-    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th><th class="r"></th></tr>`;
+    `<tr><th>Cup</th>${f.lid ? "<th>Lid</th>" : ""}<th class="r">Qty</th>` +
+    (allDone
+      ? `${f.unit ? '<th class="r">Unit</th>' : ""}${f.amount ? '<th class="r">Amount</th>' : ""}`
+      : `<th class="r"></th>`) +
+    `</tr>`;
 
   const rows = o.items
     .map((i) => {
-      const money =
-        `<span class="print-money">` +
-        (f.unit ? `<span class="pm-unit">${Number(i.unit_price).toFixed(2)}</span>` : "") +
-        (f.amount ? `<span class="pm-amount">${Number(i.amount).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>` : "") +
-        `</span>`;
+      const moneyCells =
+        (f.unit ? `<td class="r text-gray-500">${Number(i.unit_price).toFixed(2)}</td>` : "") +
+        (f.amount ? `<td class="r"><span class="pm-amount">${Number(i.amount).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></td>` : "");
 
       const pill =
         `<button type="button" class="print-line-status print-chip ${PRINT_STATUS_TONE[i.status] || ""}"
@@ -2863,22 +2869,13 @@ function printCard(o) {
         `<td class="r"><span class="print-edit" tabindex="0" role="button"
                     data-item="${i.id}" data-field="quantity" title="Click to edit"
                     >${Number(i.quantity).toLocaleString("en-PH")}</span></td>` +
-        `<td class="r">${i.status === "done" ? money : pill}</td>` +
+        (allDone ? moneyCells : `<td class="r">${pill}</td>`) +
         `</tr>`
       );
     })
     .join("");
 
   const extras = [];
-  if (f.progress && o.delivered > 0 && o.delivered < cups) {
-    const pct = Math.round((o.delivered / cups) * 100);
-    extras.push(
-      `<div>
-         <div class="h-1 bg-gray-100 rounded-full overflow-hidden"><div class="h-full bg-amber-500 rounded-full" style="width:${pct}%"></div></div>
-         <p class="text-[11px] text-gray-400 font-mono mt-1">${o.delivered.toLocaleString("en-PH")} of ${cups.toLocaleString("en-PH")} delivered</p>
-       </div>`
-    );
-  }
   if (f.remark && o.remarks) {
     extras.push(`<p class="text-xs text-gray-500 bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>`);
   }
@@ -2887,12 +2884,14 @@ function printCard(o) {
   // card: it names the job as much as the client does, and a coloured
   // border on every card made the board noisy
   const ink = o.items.length ? o.items[0].ink_color : "";
-  const inkTag =
-    f.ink && ink
-      ? `<span class="inline-flex items-center gap-1 text-[11px] text-gray-500 shrink-0">
-           <span class="w-2.5 h-2.5 rounded-full" style="background:${inkColor(ink)};box-shadow:inset 0 0 0 1px rgba(17,24,39,.25)"></span>${escapeHtml(ink)}
-         </span>`
-      : "";
+  const inkTag = f.ink
+    ? `<span class="inline-flex items-center gap-1 text-[11px] text-gray-500 shrink-0">
+         <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${inkColor(ink)};box-shadow:inset 0 0 0 1px rgba(17,24,39,.25)"></span>
+         <span class="print-edit ${ink ? "" : "text-gray-300 italic"}" tabindex="0" role="button"
+               data-order="${o.id}" data-field="ink" title="Click to change the ink"
+               >${escapeHtml(ink || "add ink")}</span>
+       </span>`
+    : "";
 
   return `
     <article class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col hover:shadow-md hover:border-gray-300 transition" data-order="${o.id}">
@@ -2908,7 +2907,7 @@ function printCard(o) {
         <div class="flex flex-wrap gap-1 justify-end shrink-0 max-w-[45%]">${chips.join("")}</div>
       </div>
       <table class="print-lines"><thead>${head}</thead><tbody>${rows}</tbody></table>
-      ${extras.length ? `<div class="px-3 pt-2 flex flex-col gap-2">${extras.join("")}</div>` : ""}
+      ${extras.length ? `<div class="px-3 pt-2 pb-3 flex flex-col gap-2">${extras.join("")}</div>` : ""}
       ${
         // A footer only when there is something to put in it. An unfinished
         // job has no total to show and nothing to bill, so the card simply
@@ -3226,7 +3225,7 @@ function printCellRaw(cell) {
   const field = cell.dataset.field;
   const text = cell.textContent.trim();
   if (field === "quantity") return text.replace(/[^0-9]/g, "");
-  return text === "—" ? "" : text;
+  return text === "—" || text === "add ink" ? "" : text;
 }
 
 // Save one edited cell. Deliberately does not reload the board: you are
@@ -3235,6 +3234,7 @@ function printCellRaw(cell) {
 // instead, and the next real load reconciles everything.
 async function savePrintCell(cell, raw, revert) {
   const itemId = cell.dataset.item;
+  const orderId = cell.dataset.order;
   const field = cell.dataset.field;
   const value = field === "quantity" ? Number(raw || 0) : String(raw).trim();
 
@@ -3250,8 +3250,9 @@ async function savePrintCell(cell, raw, revert) {
   }
 
   const body = {};
-  body[field] = value;
-  const res = await fetch(`/api/print/items/${itemId}`, {
+  const url = field === "ink" ? `/api/print/orders/${orderId}` : `/api/print/items/${itemId}`;
+  body[field === "ink" ? "ink_color" : field] = value;
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -3266,9 +3267,22 @@ async function savePrintCell(cell, raw, revert) {
   cell.textContent =
     field === "quantity"
       ? Number(value).toLocaleString("en-PH")
-      : value || (field === "lid" ? "—" : "");
+      : value || (field === "lid" ? "—" : field === "ink" ? "add ink" : "");
+  if (field === "ink") {
+    cell.classList.toggle("text-gray-300", !value);
+    cell.classList.toggle("italic", !value);
+    const dot = cell.previousElementSibling;
+    if (dot) dot.style.background = inkColor(value);
+    for (const order of printOrders) {
+      if (String(order.id) !== String(orderId)) continue;
+      order.items.forEach((i) => (i.ink_color = value || null));
+      break;
+    }
+  }
   cell.classList.add("saved");
   setTimeout(() => cell.classList.remove("saved"), 900);
+
+  if (field === "ink") return;
 
   // keep the in-memory copy in step, then repaint the figures this line
   // feeds: its own amount, the card's cup count and total, and the group
