@@ -87,7 +87,7 @@
   select option { color: #111827; background: #ffffff; }
 </style>
 </head>
-<body class="bg-[#F3F4F8] text-black">
+<body class="bg-[#F3F4F8] text-black" data-payroll-unlocked="{{ 1 if current_user.payroll_unlocked else 0 }}">
 
 {# Mobile: brand + account + hamburger on one row, tabs collapse into a
    stacked menu, month/year controls get their own row. From `sm` up the
@@ -96,14 +96,45 @@
 <header class="bg-brand-blue text-white px-4 sm:px-6 py-4 sm:py-5 sm:flex sm:items-center sm:flex-wrap sm:gap-4">
 
   <div class="flex items-center justify-between gap-3 sm:contents">
-    <div class="flex items-center gap-3 min-w-0 sm:order-1">
+    {# The brand block doubles as the app switcher: the subtitle already
+       named the app, so it names whichever one you are in and the whole
+       block opens the menu. People with one app get the plain brand. #}
+    <div class="flex items-center gap-3 min-w-0 sm:order-1 relative">
       <span class="text-3xl text-brand-green leading-none shrink-0">⟡</span>
+      {% if current_user.has_admin_app %}
+      <button id="appSwitchBtn" type="button" class="min-w-0 text-left rounded-lg px-2 py-1 -mx-2 hover:bg-white/10 transition">
+        <h1 class="font-display font-semibold text-base sm:text-xl tracking-tight leading-tight sm:truncate">{{ business_name }}</h1>
+        <p class="hidden sm:flex items-center gap-1 text-xs text-white/70">
+          <span id="appLabel">Payroll and HRMS</span>
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </p>
+      </button>
+      <div id="appMenu" class="hidden absolute left-0 top-full mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-40">
+        <p class="px-3 pt-1.5 pb-1 text-[10px] uppercase tracking-wide font-mono text-gray-400">Switch app</p>
+        <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="payroll">
+          <span class="flex-1">
+            <span class="block text-sm text-gray-900">Payroll &amp; HRMS</span>
+            <span class="block text-[11px] text-gray-400">Schedule, pay, employees</span>
+          </span>
+          <span class="app-lock text-xs text-gray-400" aria-label="Locked">&#128274;</span>
+          <span class="app-tick text-brand-blue hidden">&#10003;</span>
+        </button>
+        <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="admin">
+          <span class="flex-1">
+            <span class="block text-sm text-gray-900">Admin</span>
+            <span class="block text-[11px] text-gray-400">Cup printing and clients</span>
+          </span>
+          <span class="app-tick text-brand-blue hidden">&#10003;</span>
+        </button>
+      </div>
+      {% else %}
       <div class="min-w-0">
         {# wraps to two lines on a phone rather than truncating the name;
            the subtitle is dead weight at that width #}
         <h1 class="font-display font-semibold text-base sm:text-xl tracking-tight leading-tight sm:truncate">{{ business_name }}</h1>
         <p class="hidden sm:block text-xs text-white/70">Payroll and HRMS</p>
       </div>
+      {% endif %}
     </div>
 
     <div class="flex items-center gap-1 shrink-0 sm:contents">
@@ -139,12 +170,12 @@
   </div>
 
   <nav id="navTabs" class="hidden sm:flex sm:order-2 flex-col sm:flex-row mt-3 sm:mt-0 bg-white/10 rounded-lg p-1 gap-1">
-      <button id="tabDashboardBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
-      <button id="tabScheduleBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
+      <button id="tabDashboardBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
+      <button id="tabScheduleBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
       {# Time Off is for people who take it or approve it - an outside
          viewer has neither a schedule nor a say. #}
       {% if current_user.staff_name or current_user.is_manager %}
-      <button id="tabLeaveBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">
+      <button id="tabLeaveBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">
         Time Off<span id="pendingLeaveBadge" class="ml-1.5 hidden bg-brand-green text-black text-[10px] font-bold rounded-full px-1.5 py-0.5"></span>
       </button>
       {% endif %}
@@ -152,31 +183,31 @@
          granted it; the figures are read-only for everyone but the
          superuser, and the API enforces the same rule. #}
       {% if current_user.can_view_payroll %}
-      <button id="tabPayrollBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
+      <button id="tabPayrollBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
       {% endif %}
       {# Anyone on the payroll also gets their own payslip on its own tab,
          managers included - Clare asked for the same one-page view of her
          pay that the staff have, next to the full table. #}
       {% if current_user.staff_name %}
-      <button id="tabMyPayBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Pay</button>
+      <button id="tabMyPayBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Pay</button>
       {% endif %}
       {# Their own record, read-only. Managers use the Employees tab. #}
       {% if current_user.staff_name and not current_user.is_manager %}
-      <button id="tabMyInfoBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Details</button>
+      <button id="tabMyInfoBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Details</button>
       {% endif %}
       {# Employee records (addresses, bank details, IDs) stay manager-only. #}
       {% if current_user.is_manager %}
-      <button id="tabEmployeesBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
+      <button id="tabEmployeesBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
       {% endif %}
       {# Cup printing - the order book for the printing side of the shop. #}
       {% if current_user.is_manager %}
-      <button id="tabPrintBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button>
+      <button id="tabPrintBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button>
       {% endif %}
       {# The audit trail spans everyone's pay and login changes, including
          the managers' own - superuser only. #}
       {% if current_user.is_superuser %}
-      <button id="tabActivityBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Activity</button>
-      <button id="tabAdminBtn" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Admin</button>
+      <button id="tabActivityBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Activity</button>
+      <button id="tabAdminBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Admin</button>
       {% endif %}
 
       {# Phone-only footer for this menu - who you are and how to leave.
@@ -609,6 +640,25 @@
 
     <div id="printBoard" class="flex flex-col gap-6"></div>
   </div>
+
+  {# Crossing into Payroll & HRMS on a shared computer asks for the same
+     PIN used to log in. #}
+  {% if current_user.has_admin_app %}
+  <div id="payrollLockModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-6 text-center">
+      <h3 class="font-display font-semibold text-lg mb-1">Enter your PIN</h3>
+      <p class="text-sm text-gray-600 mb-4">Payroll &amp; HRMS is locked on this computer. Use the same PIN you log in with.</p>
+      <input id="payrollLockPin" type="password" inputmode="numeric" autocomplete="off"
+             class="w-full border border-gray-300 rounded-lg px-3 py-2 text-center tracking-widest mb-2" />
+      <p id="payrollLockError" class="text-xs text-red-600 h-4 mb-2"></p>
+      <div class="flex gap-2">
+        <button id="payrollLockCancel" type="button" class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="payrollLockGo" type="button" class="flex-1 bg-brand-blue text-white rounded-lg px-4 py-2 text-sm font-semibold">Unlock</button>
+      </div>
+      <p class="text-[11px] text-gray-400 mt-3">Stays unlocked for 10 minutes.</p>
+    </div>
+  </div>
+  {% endif %}
 
   {# Client details, opened from a client name on any card. #}
   <div id="printScrim" class="fixed inset-0 bg-black/40 z-40 hidden"></div>

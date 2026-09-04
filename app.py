@@ -1657,6 +1657,62 @@ def _session_expired():
     return idle > timedelta(minutes=SESSION_IDLE_MINUTES)
 
 
+# How long a payroll unlock lasts. Well short of SESSION_IDLE_MINUTES on
+# purpose: the point is the shared computer in the shop, where the risk is
+# a manager walking away from an unlocked screen, not an abandoned session.
+PAYROLL_UNLOCK_MINUTES = 10
+
+# Everything under these paths needs a fresh PIN from a manager. The two
+# exceptions are a person's own payslip and their own record - those are
+# self-service, they belong to whoever is logged in, and locking someone
+# out of their own details would be nonsense.
+PAYROLL_LOCKED_PREFIXES = ("/api/payroll", "/api/staff", "/api/admin", "/api/audit-log")
+# the lock and unlock endpoints live under /api/payroll themselves, so they
+# have to be exempt - guarding them would mean the PIN prompt could never
+# be answered
+PAYROLL_UNLOCKED_PATHS = (
+    "/api/payroll/unlock", "/api/payroll/lock", "/api/payroll/mine", "/api/staff/me",
+)
+
+
+def payroll_unlocked():
+    """True if this session entered its PIN recently enough.
+
+    Only meaningful for managers: they are the ones who can be in the
+    Admin app with payroll a click away. Everyone else has one app, so
+    there is nothing to unlock."""
+    if not is_manager():
+        return True
+    stamp = session.get("payroll_unlocked_at")
+    if not stamp:
+        return False
+    try:
+        idle = datetime.now() - datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return False
+    return idle <= timedelta(minutes=PAYROLL_UNLOCK_MINUTES)
+
+
+@app.before_request
+def _guard_payroll():
+    """Refuse payroll and employee data until the PIN has been re-entered.
+
+    A before_request rather than a decorator on twenty routes: the rule is
+    "these paths, for managers, need a recent PIN", and it should be
+    readable in one place rather than reconstructed from scattered
+    decorators."""
+    path = request.path
+    if not path.startswith(PAYROLL_LOCKED_PREFIXES):
+        return None
+    if path.startswith(PAYROLL_UNLOCKED_PATHS):
+        return None
+    if "user_id" not in session or not is_manager():
+        return None  # login_required and manager_required still apply
+    if payroll_unlocked():
+        return None
+    return jsonify({"status": "locked", "message": "Enter your PIN to open Payroll & HRMS."}), 423
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -1805,6 +1861,28 @@ def login_page():
     return render_template("login.html", business_name=BUSINESS_NAME, candidates=candidates, error=error)
 
 
+@app.route("/api/payroll/unlock", methods=["POST"])
+@login_required
+def api_payroll_unlock():
+    """Re-enter the same PIN used to log in, to open the payroll side."""
+    pin = (request.get_json(force=True) or {}).get("pin") or ""
+    cur = get_db().cursor()
+    cur.execute("SELECT pin_hash FROM app_users WHERE id=%s", (session.get("user_id"),))
+    row = cur.fetchone()
+    if row is None or not row["pin_hash"] or not check_password_hash(row["pin_hash"], pin):
+        return jsonify({"status": "error", "message": "That PIN doesn't match."}), 400
+    session["payroll_unlocked_at"] = datetime.now().isoformat()
+    return jsonify({"status": "ok", "minutes": PAYROLL_UNLOCK_MINUTES})
+
+
+@app.route("/api/payroll/lock", methods=["POST"])
+@login_required
+def api_payroll_lock():
+    """Drop the unlock - used when switching back to Admin."""
+    session.pop("payroll_unlocked_at", None)
+    return jsonify({"status": "ok"})
+
+
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
@@ -1896,6 +1974,10 @@ def index():
         "is_manager": is_manager(),
         "is_outside_viewer": is_outside_viewer(),
         "can_view_payroll": can_view_payroll(),
+        # managers get two apps and therefore a switcher; everyone else has
+        # one, and never sees a lock
+        "has_admin_app": is_manager(),
+        "payroll_unlocked": payroll_unlocked(),
         # branch-wide figures (per-person day totals) - the people running
         # the place and the owners, not the team
         "sees_branch": is_manager() or is_outside_viewer(),

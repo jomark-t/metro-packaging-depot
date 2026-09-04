@@ -3290,3 +3290,173 @@ if (tabPrintBtn) {
 
   loadPrintClients();
 }
+
+
+// ---------------------------------------------------------------------------
+// App switching (Payroll & HRMS <-> Admin)
+//
+// One navbar, two apps. The tabs carry data-app, so switching is a matter
+// of showing that app's tabs and landing on its first one. The brand block
+// in the header is the switch - its subtitle already named the app.
+//
+// Crossing into Payroll asks for the PIN again. That is not a wall against
+// someone who knows it; it is there because the shop computer is shared and
+// a manager's session sits open on it.
+// ---------------------------------------------------------------------------
+
+const appSwitchBtn = document.getElementById("appSwitchBtn");
+const appMenu = document.getElementById("appMenu");
+const appLabel = document.getElementById("appLabel");
+const payrollLockModal = document.getElementById("payrollLockModal");
+
+const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Admin" };
+// where each app opens: the first thing you want to see in it
+const APP_HOME = { payroll: "dashboard", admin: "print" };
+
+let currentApp = "payroll";
+// seeded from the server so a reload inside the unlock window doesn't
+// re-prompt, and an expired one does
+let payrollUnlocked = document.body.dataset.payrollUnlocked === "1";
+let pendingApp = null; // the app to enter once the PIN lands
+
+function appTabButtons(app) {
+  return [...document.querySelectorAll(".tab-btn[data-app]")].filter((b) => b.dataset.app === app);
+}
+
+function applyApp(app) {
+  currentApp = app;
+  if (appLabel) appLabel.textContent = APP_NAMES[app];
+
+  document.querySelectorAll(".tab-btn[data-app]").forEach((b) => {
+    b.classList.toggle("hidden", b.dataset.app !== app);
+  });
+  document.querySelectorAll("#appMenu .app-choice").forEach((c) => {
+    c.querySelector(".app-tick").classList.toggle("hidden", c.dataset.app !== app);
+  });
+  // the padlock only means anything while payroll is actually locked
+  const lock = document.querySelector('#appMenu .app-choice[data-app="payroll"] .app-lock');
+  if (lock) lock.classList.toggle("hidden", payrollUnlocked);
+
+  try {
+    localStorage.setItem("mpd.app", app);
+  } catch (e) {
+    // storage blocked - the app just won't be remembered next visit
+  }
+
+  // land on a tab that belongs to this app, keeping the current one if it
+  // already does
+  const active = document.querySelector(".tab-btn.active-tab");
+  if (!active || active.dataset.app !== app) {
+    const home = TABS[APP_HOME[app]] ? APP_HOME[app] : null;
+    const first = appTabButtons(app)[0];
+    if (home) showTab(home);
+    else if (first) first.click();
+  }
+}
+
+function switchApp(app) {
+  closeAppMenu();
+  if (app === currentApp) return;
+  if (app === "payroll" && !payrollUnlocked) {
+    pendingApp = app;
+    openPayrollLock();
+    return;
+  }
+  if (app === "admin" && payrollUnlocked) {
+    // leaving payroll drops the unlock, so coming back asks again
+    fetch("/api/payroll/lock", { method: "POST" }).catch(() => {});
+    payrollUnlocked = false;
+  }
+  applyApp(app);
+}
+
+function openAppMenu() {
+  if (appMenu) appMenu.classList.remove("hidden");
+}
+function closeAppMenu() {
+  if (appMenu) appMenu.classList.add("hidden");
+}
+
+function openPayrollLock() {
+  if (!payrollLockModal) return;
+  document.getElementById("payrollLockPin").value = "";
+  document.getElementById("payrollLockError").textContent = "";
+  payrollLockModal.classList.remove("hidden");
+  payrollLockModal.classList.add("flex");
+  document.getElementById("payrollLockPin").focus();
+}
+
+function closePayrollLock() {
+  if (!payrollLockModal) return;
+  payrollLockModal.classList.add("hidden");
+  payrollLockModal.classList.remove("flex");
+  pendingApp = null;
+}
+
+async function submitPayrollPin() {
+  const pin = document.getElementById("payrollLockPin").value;
+  const errorEl = document.getElementById("payrollLockError");
+  const res = await fetch("/api/payroll/unlock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    errorEl.textContent = data.message || "Could not unlock.";
+    document.getElementById("payrollLockPin").select();
+    return;
+  }
+  payrollUnlocked = true;
+  const target = pendingApp || "payroll";
+  closePayrollLock();
+  applyApp(target);
+}
+
+// A locked reply can also arrive mid-session, when the ten minutes run out
+// while the payroll tab is open. Rather than each caller handling 423, one
+// wrapper turns it into the same prompt.
+const _fetch = window.fetch;
+window.fetch = async function (...args) {
+  const res = await _fetch.apply(this, args);
+  if (res.status === 423) {
+    payrollUnlocked = false;
+    openPayrollLock();
+  }
+  return res;
+};
+
+if (appSwitchBtn) {
+  appSwitchBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    appMenu.classList.contains("hidden") ? openAppMenu() : closeAppMenu();
+  });
+  document.querySelectorAll("#appMenu .app-choice").forEach((c) => {
+    c.addEventListener("click", () => switchApp(c.dataset.app));
+  });
+  document.addEventListener("click", (e) => {
+    if (appMenu && !appMenu.contains(e.target) && e.target !== appSwitchBtn) closeAppMenu();
+  });
+
+  document.getElementById("payrollLockCancel").addEventListener("click", closePayrollLock);
+  document.getElementById("payrollLockGo").addEventListener("click", submitPayrollPin);
+  document.getElementById("payrollLockPin").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitPayrollPin();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeAppMenu();
+      closePayrollLock();
+    }
+  });
+
+  // open where they left off, but never straight into a locked payroll
+  let remembered = "payroll";
+  try {
+    remembered = localStorage.getItem("mpd.app") || "payroll";
+  } catch (e) {
+    // storage blocked - fall back to payroll
+  }
+  if (remembered === "payroll" && !payrollUnlocked) remembered = "admin";
+  applyApp(remembered);
+}
