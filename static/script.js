@@ -4044,14 +4044,14 @@ function renderPrintClients() {
 // Cup pricing page
 // ---------------------------------------------------------------------------
 
+// Cost is the one figure a client must never see, so it is superuser-only
+// server-side and simply absent here for everyone else.
 const PRICE_COLUMNS = [
   ["cost", "Cost"],
   ["retail", "Retail"],
   ["wholesale", "Wholesale"],
-  ["print_only_1k", "Print 1000+"],
-  ["print_only_sub1k", "Print <1000"],
-  ["discounted_1k", "Disc. P0.7"],
-  ["discounted_no_min", "Disc. no min"],
+  ["print_only_1k", "Print 1,000+"],
+  ["print_only_sub1k", "Print <1,000"],
 ];
 
 async function loadPricing() {
@@ -4062,53 +4062,61 @@ async function loadPricing() {
     return;
   }
   renderPricing();
+  renderQuote();
 }
 
-function priceTable(title, items, columns, note) {
-  const q = (document.getElementById("pricingSearch").value || "").trim().toLowerCase();
-  const rows = items.filter((p) => !q || p.label.toLowerCase().includes(q));
-  if (!rows.length) return "";
+function usageFor(id) {
+  const u = (printCatalogue.usage || {})[String(id)];
+  return u || { lines: 0, cups: 0 };
+}
 
-  // group the cups under their family so the eye can find a run of sizes
-  let lastFamily = null;
-  const body = rows
+// one family at a time - PPY's four sizes belong together, and a run of
+// sizes down a short table reads faster than the same rows in one long one
+function familyBlock(family, items, columns) {
+  const rows = items
     .map((p) => {
-      const head =
-        p.family !== lastFamily
-          ? `<tr class="bg-gray-50"><td colspan="${columns.length + 1}" class="px-3 py-1 text-[11px] font-mono uppercase tracking-wide text-gray-500">${escapeHtml(p.family)}</td></tr>`
-          : "";
-      lastFamily = p.family;
+      const used = usageFor(p.id);
       const cells = columns
-        .map(
-          ([key, _]) =>
-            `<td class="px-3 py-1.5 text-right">
-               <span class="print-edit price-cell font-mono" tabindex="0" role="button"
-                     data-product="${p.id}" data-field="${key}" title="Click to edit"
-                     >${p[key] == null ? "—" : Number(p[key]).toFixed(2)}</span>
-             </td>`
-        )
+        .map(([key]) => {
+          const missing = p[key] == null;
+          return `<td class="px-3 py-1.5 text-right">
+            <span class="print-edit price-cell font-mono ${missing ? "text-gray-300" : ""}"
+                  tabindex="0" role="button" data-product="${p.id}" data-field="${key}"
+                  title="Click to edit">${missing ? "—" : Number(p[key]).toFixed(2)}</span>
+          </td>`;
+        })
         .join("");
-      return `${head}<tr class="hover:bg-gray-50">
-        <td class="px-3 py-1.5">${escapeHtml(p.size || p.family)}</td>${cells}</tr>`;
+      return `<tr class="hover:bg-gray-50">
+        <td class="px-3 py-1.5 font-medium whitespace-nowrap">${escapeHtml(p.size || p.family)}</td>
+        ${cells}
+        <td class="px-3 py-1.5 text-right font-mono text-xs ${used.cups ? "text-gray-500" : "text-gray-300"}">${
+          used.cups ? used.cups.toLocaleString("en-PH") : "—"
+        }</td>
+      </tr>`;
     })
     .join("");
 
+  const familyCups = items.reduce((n, p) => n + usageFor(p.id).cups, 0);
+
   return `
-    <section>
-      <div class="flex items-baseline gap-2 mb-2">
-        <h3 class="font-display font-semibold text-lg leading-none">${title}</h3>
-        <span class="text-[11px] font-mono text-gray-400">${rows.length}</span>
-        ${note ? `<span class="text-xs text-gray-400">${note}</span>` : ""}
+    <section class="border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
+      <div class="flex items-baseline gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50">
+        <h4 class="font-semibold text-sm">${escapeHtml(family)}</h4>
+        <span class="text-[11px] font-mono text-gray-400">${items.length} size${items.length === 1 ? "" : "s"}</span>
+        <span class="ml-auto text-[11px] font-mono text-gray-400">${
+          familyCups ? familyCups.toLocaleString("en-PH") + " printed" : "not used yet"
+        }</span>
       </div>
-      <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+      <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
-              <th class="text-left px-3 py-2">Size</th>
-              ${columns.map(([, label]) => `<th class="text-right px-3 py-2 whitespace-nowrap">${label}</th>`).join("")}
+            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 border-b border-gray-100">
+              <th class="text-left px-3 py-1.5">Size</th>
+              ${columns.map(([, label]) => `<th class="text-right px-3 py-1.5 whitespace-nowrap">${label}</th>`).join("")}
+              <th class="text-right px-3 py-1.5">Printed</th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-gray-100">${body}</tbody>
+          <tbody class="divide-y divide-gray-100">${rows}</tbody>
         </table>
       </div>
     </section>`;
@@ -4116,17 +4124,36 @@ function priceTable(title, items, columns, note) {
 
 function renderPricing() {
   const cat = printCatalogue;
+  const q = (document.getElementById("pricingSearch").value || "").trim().toLowerCase();
   const cols = PRICE_COLUMNS.filter(([k]) => cat.shows_cost || k !== "cost");
   const lidCols = cols.filter(([k]) => ["cost", "retail", "wholesale"].includes(k));
 
+  const cups = cat.cups.filter((p) => !q || p.label.toLowerCase().includes(q));
+  const lids = cat.lids.filter((p) => !q || p.family.toLowerCase().includes(q));
+
+  const gaps =
+    cat.cups.filter((p) => p.print_only_1k == null && p.print_only_sub1k == null).length;
   document.getElementById("pricingSubtitle").textContent =
-    `${cat.cups.length} cups · ${cat.lids.length} lids`;
+    `${cat.cups.length} cups · ${cat.lids.length} lids` + (gaps ? ` · ${gaps} without a print price` : "");
 
-  document.getElementById("pricingTables").innerHTML =
-    priceTable("Cups", cat.cups, cols, "") +
-    priceTable("Lids", cat.lids, lidCols, "added on top of the print price");
+  const families = [];
+  cups.forEach((p) => {
+    const hit = families.find((f) => f.name === p.family);
+    if (hit) hit.items.push(p);
+    else families.push({ name: p.family, items: [p] });
+  });
 
-  document.querySelectorAll("#pricingTables .print-edit").forEach((cell) => {
+  const host = document.getElementById("pricingTables");
+  if (!families.length && !lids.length) {
+    host.innerHTML = `<p class="text-sm text-gray-400 italic py-8 text-center">Nothing matches that.</p>`;
+    return;
+  }
+
+  host.innerHTML =
+    families.map((f) => familyBlock(f.name, f.items, cols)).join("") +
+    (lids.length ? familyBlock("Lids", lids, lidCols) : "");
+
+  host.querySelectorAll(".print-edit").forEach((cell) => {
     cell.addEventListener("click", () => beginPrintCellEdit(cell));
     cell.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -4135,6 +4162,117 @@ function renderPricing() {
       }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Quote calculator
+//
+// Same arithmetic the order form and the server use - print tier for the
+// quantity, plus the lid - so a number quoted here is the number that will
+// appear on the order.
+// ---------------------------------------------------------------------------
+
+let quoteRows = [{ cup: "", lid: "", qty: 500 }];
+
+function quoteLineTotals() {
+  const cat = printCatalogue || { cups: [], lids: [] };
+  return quoteRows.map((r) => {
+    const cup = cat.cups.find((c) => String(c.id) === String(r.cup));
+    const lid = cat.lids.find((l) => String(l.id) === String(r.lid));
+    const qty = Number(r.qty || 0);
+    const unit = cup ? priceFor(cup, lid, qty) : 0;
+    return { cup, lid, qty, unit, amount: Math.round(unit * qty * 100) / 100 };
+  });
+}
+
+function renderQuote() {
+  const cat = printCatalogue;
+  if (!cat) return;
+  const host = document.getElementById("quoteLines");
+
+  host.innerHTML = quoteRows
+    .map((r, idx) => {
+      const allowed = (cat.fits[r.cup] || []).map(String);
+      const lidOptions = cat.lids.filter((l) => allowed.includes(String(l.id)));
+      return `
+      <div class="flex flex-col gap-1.5 pb-3 ${idx ? "border-t border-gray-100 pt-3" : ""}" data-row="${idx}">
+        <div class="flex items-center gap-1.5">
+          <select class="q-cup flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm">
+            <option value="">Pick a cup…</option>
+            ${cat.cups.map((c) => `<option value="${c.id}"${String(c.id) === String(r.cup) ? " selected" : ""}>${escapeHtml(c.label)}</option>`).join("")}
+          </select>
+          ${quoteRows.length > 1 ? `<button class="q-remove text-gray-400 hover:text-red-600 shrink-0" title="Remove">&#10005;</button>` : ""}
+        </div>
+        <select class="q-lid border border-gray-300 rounded px-2 py-1 text-sm" ${r.cup ? "" : "disabled"}>
+          <option value="">${r.cup ? "No lid" : "Pick a cup first"}</option>
+          ${lidOptions.map((l) => `<option value="${l.id}"${String(l.id) === String(r.lid) ? " selected" : ""}>${escapeHtml(l.family)}</option>`).join("")}
+        </select>
+        <div class="flex items-center gap-2">
+          <input class="q-qty w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="50" value="${r.qty}" />
+          <span class="text-xs text-gray-400">cups</span>
+          <span class="q-line ml-auto text-sm font-mono"></span>
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  const totals = quoteLineTotals();
+  host.querySelectorAll("[data-row]").forEach((el, idx) => {
+    const t = totals[idx];
+    const line = el.querySelector(".q-line");
+    line.textContent = t.cup ? `${t.unit.toFixed(2)} × ${t.qty.toLocaleString("en-PH")}` : "";
+    line.title = t.cup ? printMoney(t.amount) : "";
+
+    el.querySelector(".q-cup").addEventListener("change", (e) => {
+      quoteRows[idx].cup = e.target.value;
+      quoteRows[idx].lid = "";      // the old lid may not fit the new cup
+      renderQuote();
+    });
+    el.querySelector(".q-lid").addEventListener("change", (e) => {
+      quoteRows[idx].lid = e.target.value;
+      renderQuote();
+    });
+    el.querySelector(".q-qty").addEventListener("input", (e) => {
+      quoteRows[idx].qty = Number(e.target.value || 0);
+      updateQuoteTotals();
+    });
+    const rm = el.querySelector(".q-remove");
+    if (rm) {
+      rm.addEventListener("click", () => {
+        quoteRows.splice(idx, 1);
+        renderQuote();
+      });
+    }
+  });
+
+  updateQuoteTotals();
+}
+
+function updateQuoteTotals() {
+  const totals = quoteLineTotals();
+  const host = document.getElementById("quoteLines");
+  host.querySelectorAll("[data-row]").forEach((el, idx) => {
+    const t = totals[idx];
+    const line = el.querySelector(".q-line");
+    line.textContent = t.cup ? `${t.unit.toFixed(2)} × ${t.qty.toLocaleString("en-PH")}` : "";
+  });
+  const total = totals.reduce((n, t) => n + t.amount, 0);
+  const cups = totals.reduce((n, t) => n + (t.cup ? t.qty : 0), 0);
+  document.getElementById("quoteTotal").textContent = printMoney(total);
+  document.getElementById("quoteCups").textContent =
+    `${cups.toLocaleString("en-PH")} cup${cups === 1 ? "" : "s"}`;
+}
+
+function quoteText() {
+  const totals = quoteLineTotals().filter((t) => t.cup);
+  if (!totals.length) return "";
+  const lines = totals.map((t) => {
+    const bits = [t.cup.label];
+    if (t.lid) bits.push(t.lid.family);
+    return `${t.qty.toLocaleString("en-PH")} x ${bits.join(" + ")} — ${printMoney(t.unit)} each — ${printMoney(t.amount)}`;
+  });
+  const total = totals.reduce((n, t) => n + t.amount, 0);
+  return `Metro Packaging Depot — cup printing quote\n\n${lines.join("\n")}\n\nTotal: ${printMoney(total)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -4147,6 +4285,34 @@ if (tabPrintClientsBtn) {
 if (tabPricingBtn) {
   document.getElementById("pricingSearch").addEventListener("input", () => {
     if (printCatalogue) renderPricing();
+  });
+
+  document.getElementById("quoteAddBtn").addEventListener("click", () => {
+    quoteRows.push({ cup: "", lid: "", qty: 500 });
+    renderQuote();
+  });
+  document.getElementById("quoteClearBtn").addEventListener("click", () => {
+    quoteRows = [{ cup: "", lid: "", qty: 500 }];
+    renderQuote();
+    document.getElementById("quoteCopied").textContent = "";
+  });
+  document.getElementById("quoteCopyBtn").addEventListener("click", async () => {
+    const text = quoteText();
+    const note = document.getElementById("quoteCopied");
+    if (!text) {
+      note.textContent = "Pick a cup first.";
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      note.textContent = "Copied — paste it to the client.";
+    } catch (e) {
+      // clipboard blocked (an insecure origin, usually) - show it instead
+      // so it can still be copied by hand
+      note.textContent = "";
+      alert(text);
+    }
+    setTimeout(() => (note.textContent = ""), 4000);
   });
 }
 

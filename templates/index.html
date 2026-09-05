@@ -747,12 +747,41 @@
       </div>
       <input id="pricingSearch" type="search" placeholder="Search cups or lids…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
     </div>
-    <p class="text-xs text-gray-500 mb-4">
-      Printing is priced per cup, and the lid is added on top — a line in the
-      queue costs the print tier for its quantity plus its lid. Click any
-      figure to change it.
-    </p>
-    <div id="pricingTables" class="flex flex-col gap-6"></div>
+    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_22rem] gap-5 items-start">
+      <div>
+        <p class="text-xs text-gray-500 mb-3">
+          Printing is priced per cup and the lid is added on top, so a line
+          costs the print tier for its quantity plus its lid. Click any figure
+          to change it.
+        </p>
+        <div id="pricingTables" class="flex flex-col gap-5"></div>
+      </div>
+
+      {# Quoting panel: the same arithmetic the queue uses, before an order
+         exists. #}
+      <aside class="border border-gray-200 bg-white rounded-xl shadow-sm xl:sticky xl:top-4">
+        <div class="px-4 py-3 border-b border-gray-200">
+          <h3 class="font-display font-semibold text-base leading-none">Quote a client</h3>
+          <p class="text-xs text-gray-500 mt-1">Priced exactly as an order would be.</p>
+        </div>
+        <div class="px-4 py-3 flex flex-col gap-3">
+          <div id="quoteLines" class="flex flex-col gap-3"></div>
+          <button id="quoteAddBtn" type="button" class="text-sm text-brand-blue hover:underline self-start">+ Add another cup</button>
+        </div>
+        <div class="px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-xl">
+          <div class="flex items-baseline justify-between mb-1">
+            <span class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Total</span>
+            <span id="quoteTotal" class="font-mono font-semibold text-lg">₱0.00</span>
+          </div>
+          <p id="quoteCups" class="text-[11px] text-gray-400 font-mono mb-3">0 cups</p>
+          <div class="flex gap-2">
+            <button id="quoteCopyBtn" type="button" class="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm hover:border-gray-400 transition">Copy quote</button>
+            <button id="quoteClearBtn" type="button" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm hover:border-gray-400 transition">Clear</button>
+          </div>
+          <p id="quoteCopied" class="text-[11px] text-green-700 mt-2 h-3"></p>
+        </div>
+      </aside>
+    </div>
   </div>
 
   {# Client details, opened from a client name on any card. #}

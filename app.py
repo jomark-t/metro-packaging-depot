@@ -3342,8 +3342,7 @@ def api_print_catalogue():
     cur.execute(
         """SELECT p.id, p.family, p.size, p.kind, p.moq,
                   pr.cost, pr.retail, pr.wholesale,
-                  pr.print_only_1k, pr.print_only_sub1k,
-                  pr.discounted_1k, pr.discounted_no_min
+                  pr.print_only_1k, pr.print_only_sub1k
            FROM print_products p
            LEFT JOIN print_product_prices pr ON pr.product_id = p.id
            WHERE p.is_active
@@ -3352,8 +3351,7 @@ def api_print_catalogue():
     cups, lids = [], []
     for r in cur.fetchall():
         row = dict(r)
-        for money in ("cost", "retail", "wholesale", "print_only_1k",
-                      "print_only_sub1k", "discounted_1k", "discounted_no_min"):
+        for money in ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k"):
             row[money] = float(row[money]) if row[money] is not None else None
         row["label"] = f"{row['family']} {row['size']}".strip()
         (cups if row["kind"] == "cup" else lids).append(row)
@@ -3372,14 +3370,28 @@ def api_print_catalogue():
             [l["id"] for l in lids if _lid_fits(l["family"], rule)] if rule else [l["id"] for l in lids]
         )
 
+    # what each product is actually used for - a price list that cannot show
+    # you the cups you print most is just a spreadsheet
+    cur.execute(
+        """SELECT product_id, COUNT(*) AS lines, COALESCE(SUM(quantity), 0) AS cups
+           FROM print_order_items WHERE product_id IS NOT NULL GROUP BY product_id"""
+    )
+    usage = {str(r["product_id"]): {"lines": r["lines"], "cups": int(r["cups"])} for r in cur.fetchall()}
+    cur.execute(
+        """SELECT lid_product_id, COUNT(*) AS lines, COALESCE(SUM(quantity), 0) AS cups
+           FROM print_order_items WHERE lid_product_id IS NOT NULL GROUP BY lid_product_id"""
+    )
+    for r in cur.fetchall():
+        usage[str(r["lid_product_id"])] = {"lines": r["lines"], "cups": int(r["cups"])}
+
     colors = {}
     for cup in cups:
         options = CUP_COLORS.get(cup["family"])
         if options:
             colors[str(cup["id"])] = options
 
-    return jsonify({"cups": cups, "lids": lids, "fits": fits,
-                    "colors": colors, "shows_cost": show_cost})
+    return jsonify({"cups": cups, "lids": lids, "fits": fits, "colors": colors,
+                    "usage": usage, "shows_cost": show_cost})
 
 
 @app.route("/api/print/products/<int:product_id>", methods=["POST"])
@@ -3388,8 +3400,7 @@ def api_print_product_price_update(product_id):
     """Edit one price on the price list."""
     data = request.get_json(force=True)
     fields = {}
-    for key in ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k",
-                "discounted_1k", "discounted_no_min"):
+    for key in ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k"):
         if key in data:
             raw = data[key]
             if raw in (None, ""):
