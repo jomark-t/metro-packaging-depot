@@ -147,6 +147,9 @@
   }
   .week-chip:hover { border-color: #9ca3af; }
   .week-chip.dragging { opacity: .4; }
+  /* a finished job is a record of what ran, not work to pick up */
+  .week-chip.is-done { background: #f6fdf9; border-color: #cdebda; }
+  .week-chip.is-done .wc-client { color: #05743f; font-weight: 500; }
   .week-chip .wc-client { font-weight: 600; display: block; }
   .week-chip .wc-meta { color: #6b7280; font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
   .print-mode-on { background: #111827; color: #fff; }

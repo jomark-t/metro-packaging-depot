@@ -3522,7 +3522,10 @@ async function loadPrintQueue() {
   // when a form happens to open
   await loadPrintCatalogue();
   const board = document.getElementById("printBoard");
-  const res = await fetch(`/api/print/orders?view=${encodeURIComponent(printState.view)}`);
+  // the week shows what the press actually ran, so it needs the finished
+  // jobs as well; the view chips govern the board only
+  const view = printState.mode === "week" ? "all" : printState.view;
+  const res = await fetch(`/api/print/orders?view=${encodeURIComponent(view)}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     board.innerHTML = `<p class="text-sm text-gray-500 py-10 text-center">${escapeHtml(err.message || "Could not load the print queue.")}</p>`;
@@ -4707,18 +4710,19 @@ function setPrintMode(mode) {
   document.getElementById("printWeek").classList.toggle("hidden", mode !== "week");
   document.getElementById("printModeBoard").classList.toggle("print-mode-on", mode === "board");
   document.getElementById("printModeWeek").classList.toggle("print-mode-on", mode === "week");
-  renderPrintBoard();
+  loadPrintQueue();
 }
 
 function weekChip(o) {
   const ink = o.items.length ? o.items[0].ink_color : "";
+  const finished = o.status === "done" || o.status === "cancelled";
   return `
-    <div class="week-chip" draggable="true" data-order="${o.id}">
-      <span class="wc-client">${escapeHtml(o.client_name)}</span>
+    <div class="week-chip${finished ? " is-done" : ""}" draggable="true" data-order="${o.id}">
+      <span class="wc-client">${finished ? "&#10003; " : ""}${escapeHtml(o.client_name)}</span>
       <span class="wc-meta">${o.quantity.toLocaleString("en-PH")} cups${
         ink ? ` · ${escapeHtml(ink)}` : ""
       }</span>
-      ${o.is_rush ? `<span class="print-chip c-rush mt-1 inline-block">Rush</span>` : ""}
+      ${o.is_rush && !finished ? `<span class="print-chip c-rush mt-1 inline-block">Rush</span>` : ""}
     </div>`;
 }
 
@@ -4741,9 +4745,22 @@ function renderPrintWeek() {
   days.forEach((d) => (scheduled[isoDay(d)] = []));
   const unscheduled = [];
   open.forEach((o) => {
-    if (o.scheduled_date && scheduled[o.scheduled_date]) scheduled[o.scheduled_date].push(o);
-    else if (!o.scheduled_date) unscheduled.push(o);
+    const finished = o.status === "done" || o.status === "cancelled";
+    if (o.scheduled_date && scheduled[o.scheduled_date]) {
+      // a day holds whatever ran on it, finished or not
+      scheduled[o.scheduled_date].push(o);
+    } else if (!o.scheduled_date && !finished) {
+      // the rail is work still to place - a finished job with no day was
+      // never scheduled and never will be
+      unscheduled.push(o);
+    }
   });
+  Object.values(scheduled).forEach((list) =>
+    list.sort((a, b) => {
+      const rank = (o) => (o.status === "done" || o.status === "cancelled" ? 1 : 0);
+      return rank(a) - rank(b);
+    })
+  );
 
   const weekCups = Object.values(scheduled).reduce(
     (n, list) => n + list.reduce((m, o) => m + o.quantity, 0), 0);
