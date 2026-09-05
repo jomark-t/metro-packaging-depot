@@ -2911,22 +2911,25 @@ def _print_order_rows(where="", params=()):
         by_id[o["id"]] = o
 
     cur.execute(
-        """SELECT i.id, i.order_id, i.item_text, i.lid_text, i.ink_color,
+        """SELECT i.id, i.order_id, i.product_id, i.lid_product_id,
+                  i.item_text, i.lid_text, i.ink_color,
                   i.quantity, i.qty_delivered, i.unit_price, i.status, i.notes,
-                  p.family, p.size
+                  p.family, p.size, lp.family AS lid_family
            FROM print_order_items i
            LEFT JOIN print_products p ON p.id = i.product_id
+           LEFT JOIN print_products lp ON lp.id = i.lid_product_id
            WHERE i.order_id = ANY(%s)
            ORDER BY i.id""",
         (list(by_id),),
     )
     for r in cur.fetchall():
         item = dict(r)
-        # a line either points at a catalogue product or carries the text it
-        # was imported with - show whichever it has
-        item["label"] = item["item_text"] or " ".join(
-            x for x in (item["family"], item["size"]) if x
-        )
+        # The catalogue name wins. The sheet wrote the same cup a dozen ways
+        # - "D. Wall 8oz - Black", "DWall 8oz white", "D.Wall Black 8oz" -
+        # and showing that back would defeat the point of mapping it. The
+        # original text stays on the row for tracing, not for display.
+        item["label"] = " ".join(x for x in (item["family"], item["size"]) if x) or item["item_text"]
+        item["lid_label"] = item["lid_family"] or item["lid_text"]
         # do the money in Decimal, hand out floats: NUMERIC arrives as
         # Decimal, which jsonify will not serialise
         price = item["unit_price"] or 0
@@ -3146,6 +3149,20 @@ def api_print_item_update(item_id):
     if "label" in data and not fields.get("item_text"):
         return jsonify({"status": "error", "message": "A line needs a cup."}), 400
 
+    # cup and lid are picked from the price list, so they arrive as ids
+    for key in ("product_id", "lid_product_id"):
+        if key in data:
+            raw = data[key]
+            if raw in (None, "", 0):
+                if key == "product_id":
+                    return jsonify({"status": "error", "message": "A line needs a cup."}), 400
+                fields[key] = None
+                continue
+            cur.execute("SELECT id FROM print_products WHERE id=%s AND is_active", (int(raw),))
+            if cur.fetchone() is None:
+                return jsonify({"status": "error", "message": "That isn't on the price list."}), 400
+            fields[key] = int(raw)
+
     # quantity is the awkward one: it can drop below what has already gone
     # out, so the delivered count follows it down rather than being left
     # describing an impossible delivery
@@ -3202,6 +3219,19 @@ def api_print_item_update(item_id):
 
     if not fields:
         return jsonify({"status": "ok"})
+
+    # the price follows the cup, the lid and the quantity - crossing the
+    # 1,000 line changes the tier, so a quantity edit reprices too
+    if {"product_id", "lid_product_id", "quantity"} & set(fields):
+        cur.execute(
+            "SELECT product_id, lid_product_id, quantity FROM print_order_items WHERE id=%s",
+            (item_id,),
+        )
+        current = dict(cur.fetchone())
+        current.update({k: v for k, v in fields.items() if k in current})
+        fields["unit_price"] = price_line(
+            cur, current["product_id"], current["lid_product_id"], current["quantity"]
+        )
 
     sets = ", ".join(f"{k}=%s" for k in fields)
     cur.execute(f"UPDATE print_order_items SET {sets} WHERE id=%s", (*fields.values(), item_id))

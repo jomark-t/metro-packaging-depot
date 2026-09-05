@@ -2904,12 +2904,15 @@ function printCard(o) {
       return (
         `<tr data-item="${i.id}">` +
         `<td><span class="print-edit font-medium text-gray-900" tabindex="0" role="button"
-                    data-item="${i.id}" data-field="label" title="Click to edit"
+                    data-item="${i.id}" data-field="product_id" data-value="${i.product_id || ""}"
+                    title="Click to change the cup"
                     >${escapeHtml(i.label || "")}</span></td>` +
         (f.lid
           ? `<td><span class="print-edit text-gray-500" tabindex="0" role="button"
-                       data-item="${i.id}" data-field="lid" title="Click to edit"
-                       >${escapeHtml(i.lid_text || "—")}</span></td>`
+                       data-item="${i.id}" data-field="lid_product_id"
+                       data-value="${i.lid_product_id || ""}" data-cup="${i.product_id || ""}"
+                       title="Click to change the lid"
+                       >${escapeHtml(i.lid_label || "—")}</span></td>`
           : "") +
         (f.ink ? `<td>${inkChip(i)}</td>` : "") +
         `<td class="r"><span class="print-edit" tabindex="0" role="button"
@@ -3001,6 +3004,7 @@ function renderPrintBoard() {
     return o.items.some(
       (i) =>
         (i.label || "").toLowerCase().includes(q) ||
+        (i.lid_label || "").toLowerCase().includes(q) ||
         (i.ink_color || "").toLowerCase().includes(q)
     );
   });
@@ -3207,9 +3211,16 @@ function wirePrintBoard() {
 // the long cup names and threw away the thousands separators on quantity -
 // and the table is read far more often than it is edited.
 function beginPrintCellEdit(cell) {
-  if (cell.querySelector("input")) return;
+  if (cell.querySelector("input") || cell.querySelector("select")) return;
 
   const field = cell.dataset.field;
+  // cup and lid are picked from the price list, never typed - that is the
+  // whole reason they are products and not text
+  if (field === "product_id" || field === "lid_product_id") {
+    beginProductPick(cell, field);
+    return;
+  }
+
   const original = printCellRaw(cell);
 
   const input = document.createElement("input");
@@ -4097,5 +4108,73 @@ if (tabPrintClientsBtn) {
 if (tabPricingBtn) {
   document.getElementById("pricingSearch").addEventListener("input", () => {
     if (printCatalogue) renderPricing();
+  });
+}
+
+
+// Pick a cup or a lid from the catalogue, in place on the card. The lid
+// list is filtered to what fits the cup on that line, the same rules the
+// order form uses.
+async function beginProductPick(cell, field) {
+  const cat = await loadPrintCatalogue();
+  if (!cat) return;
+
+  const shown = cell.textContent;
+  const current = cell.dataset.value || "";
+  const isLid = field === "lid_product_id";
+
+  let options;
+  if (isLid) {
+    const cupId = cell.dataset.cup;
+    const allowed = (cat.fits[cupId] || []).map(String);
+    options = [{ id: "", label: "No lid" }].concat(
+      cat.lids.filter((l) => allowed.includes(String(l.id))).map((l) => ({ id: l.id, label: l.family }))
+    );
+  } else {
+    options = cat.cups.map((c) => ({ id: c.id, label: c.label }));
+  }
+
+  const sel = document.createElement("select");
+  sel.className = "print-cell-input";
+  sel.innerHTML = options
+    .map((o) => `<option value="${o.id}"${String(o.id) === current ? " selected" : ""}>${escapeHtml(o.label)}</option>`)
+    .join("");
+
+  cell.textContent = "";
+  cell.appendChild(sel);
+  sel.focus();
+
+  let settled = false;
+  const finish = async (commit) => {
+    if (settled) return;
+    settled = true;
+    const value = sel.value;
+    if (!commit || String(value) === current) {
+      cell.textContent = shown;
+      return;
+    }
+    const res = await fetch(`/api/print/items/${cell.dataset.item}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: value === "" ? null : Number(value) }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.message || "Could not change that.");
+      cell.textContent = shown;
+      return;
+    }
+    // changing the cup can invalidate the lid and always moves the price,
+    // so the board is reloaded rather than patched
+    loadPrintQueue();
+  };
+
+  sel.addEventListener("change", () => finish(true));
+  sel.addEventListener("blur", () => finish(true));
+  sel.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
   });
 }
