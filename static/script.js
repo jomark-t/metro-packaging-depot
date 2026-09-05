@@ -2903,10 +2903,20 @@ function printCard(o) {
 
       return (
         `<tr data-item="${i.id}">` +
-        `<td><span class="print-edit font-medium text-gray-900" tabindex="0" role="button"
-                    data-item="${i.id}" data-field="product_id" data-value="${i.product_id || ""}"
-                    title="Click to change the cup"
-                    >${escapeHtml(i.label || "")}</span></td>` +
+        `<td>
+           <span class="print-edit font-medium text-gray-900" tabindex="0" role="button"
+                 data-item="${i.id}" data-field="product_id" data-value="${i.product_id || ""}"
+                 title="Click to change the cup">${escapeHtml(i.label || "")}</span>
+           ${
+             printCupColours(i.product_id).length
+               ? `<span class="print-edit print-cup-colour" tabindex="0" role="button"
+                        data-item="${i.id}" data-field="cup_color" data-cup="${i.product_id || ""}"
+                        data-value="${escapeHtml(i.cup_color || "")}"
+                        title="Colour of the cup itself"
+                        >${escapeHtml(i.cup_color || "— colour")}</span>`
+               : ""
+           }
+         </td>` +
         (f.lid
           ? `<td><span class="print-edit text-gray-500" tabindex="0" role="button"
                        data-item="${i.id}" data-field="lid_product_id"
@@ -3004,6 +3014,7 @@ function renderPrintBoard() {
     return o.items.some(
       (i) =>
         (i.label || "").toLowerCase().includes(q) ||
+        (i.cup_color || "").toLowerCase().includes(q) ||
         (i.lid_label || "").toLowerCase().includes(q) ||
         (i.ink_color || "").toLowerCase().includes(q)
     );
@@ -3210,13 +3221,19 @@ function wirePrintBoard() {
 // when you click them. Rendering permanent inputs looked tidy but clipped
 // the long cup names and threw away the thousands separators on quantity -
 // and the table is read far more often than it is edited.
+// which colours a cup comes in, straight from the catalogue
+function printCupColours(productId) {
+  if (!printCatalogue || !printCatalogue.colors) return [];
+  return printCatalogue.colors[String(productId)] || [];
+}
+
 function beginPrintCellEdit(cell) {
   if (cell.querySelector("input") || cell.querySelector("select")) return;
 
   const field = cell.dataset.field;
   // cup and lid are picked from the price list, never typed - that is the
   // whole reason they are products and not text
-  if (field === "product_id" || field === "lid_product_id") {
+  if (field === "product_id" || field === "lid_product_id" || field === "cup_color") {
     beginProductPick(cell, field);
     return;
   }
@@ -3349,7 +3366,7 @@ async function savePrintCell(cell, raw, revert) {
   cell.textContent =
     field === "quantity"
       ? Number(value).toLocaleString("en-PH")
-      : value || (field === "lid" || field === "ink" ? "—" : "");
+      : value || (field === "lid" || field === "ink" || field === "cup_color" ? "—" : "");
   if (field === "ink") {
     const bg = value ? inkColor(value) : "transparent";
     cell.style.background = bg;
@@ -3369,6 +3386,7 @@ async function savePrintCell(cell, raw, revert) {
     if (field === "label") item.label = value;
     if (field === "lid") item.lid_text = value;
     if (field === "ink") item.ink_color = value || null;
+    if (field === "cup_color") item.cup_color = value || null;
     item.amount = Math.round(item.quantity * item.unit_price * 100) / 100;
     order.quantity = order.items.reduce((n, x) => n + x.quantity, 0);
     order.total = Math.round(order.items.reduce((n, x) => n + x.amount, 0) * 100) / 100;
@@ -3406,6 +3424,10 @@ function repaintPrintTotals(order) {
 }
 
 async function loadPrintQueue() {
+  // the board needs the catalogue to know which cups have colours and
+  // which lids fit, so it is fetched before the first render rather than
+  // when a form happens to open
+  await loadPrintCatalogue();
   const board = document.getElementById("printBoard");
   const res = await fetch(`/api/print/orders?view=${encodeURIComponent(printState.view)}`);
   if (!res.ok) {
@@ -3550,7 +3572,10 @@ function poItemRow() {
 
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td class="py-1 pr-2"><select class="po-cup w-full border border-gray-300 rounded px-2 py-1">${cupOptions}</select></td>
+    <td class="py-1 pr-2">
+      <select class="po-cup w-full border border-gray-300 rounded px-2 py-1">${cupOptions}</select>
+      <select class="po-cup-colour w-full border border-gray-200 rounded px-2 py-1 mt-1 text-xs hidden"></select>
+    </td>
     <td class="py-1 pr-2"><select class="po-lid w-full border border-gray-300 rounded px-2 py-1" disabled><option value="">Pick a cup first</option></select></td>
     <td class="py-1 pr-2"><input class="po-ink w-full border border-gray-300 rounded px-2 py-1" placeholder="Black" list="poInkList" /></td>
     <td class="py-1 pr-2"><input class="po-qty w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="1" /></td>
@@ -3570,7 +3595,19 @@ function poItemRow() {
       options.map((l) => `<option value="${l.id}">${escapeHtml(l.family)}</option>`).join("");
   };
 
-  cupSel.addEventListener("change", fillLids);
+  const colourSel = tr.querySelector(".po-cup-colour");
+  const fillColours = () => {
+    const options = printCupColours(cupSel.value);
+    colourSel.classList.toggle("hidden", !options.length);
+    colourSel.innerHTML =
+      `<option value="">Cup colour…</option>` +
+      options.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+  };
+
+  cupSel.addEventListener("change", () => {
+    fillLids();
+    fillColours();
+  });
   tr.querySelector(".po-remove").addEventListener("click", () => tr.remove());
   return tr;
 }
@@ -3601,6 +3638,7 @@ async function openPrintOrderForm() {
   }
   inkList.innerHTML = inks.map((i) => `<option value="${escapeHtml(i)}"></option>`).join("");
 
+
   const modal = document.getElementById("printOrderModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
@@ -3627,6 +3665,7 @@ async function savePrintOrder() {
         // ink is per line: one order can print different colours on
         // different cups
         ink: tr.querySelector(".po-ink").value.trim(),
+        cup_color: tr.querySelector(".po-cup-colour").value.trim(),
         quantity: Number(tr.querySelector(".po-qty").value || 0),
       };
     })
@@ -4124,7 +4163,11 @@ async function beginProductPick(cell, field) {
   const isLid = field === "lid_product_id";
 
   let options;
-  if (isLid) {
+  if (field === "cup_color") {
+    options = [{ id: "", label: "— colour" }].concat(
+      printCupColours(cell.dataset.cup).map((c) => ({ id: c, label: c }))
+    );
+  } else if (isLid) {
     const cupId = cell.dataset.cup;
     const allowed = (cat.fits[cupId] || []).map(String);
     options = [{ id: "", label: "No lid" }].concat(
@@ -4156,7 +4199,9 @@ async function beginProductPick(cell, field) {
     const res = await fetch(`/api/print/items/${cell.dataset.item}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [field]: value === "" ? null : Number(value) }),
+      body: JSON.stringify({
+        [field]: value === "" ? null : field === "cup_color" ? value : Number(value),
+      }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

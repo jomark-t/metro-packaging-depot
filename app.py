@@ -498,6 +498,10 @@ def init_db():
             item_text TEXT,
             lid_text TEXT,
             ink_color TEXT,
+            -- the colour of the cup itself, which is not the colour it is
+            -- printed in: a white Double Wall printed in black is two
+            -- different colours and the press needs both
+            cup_color TEXT,
             quantity INTEGER NOT NULL DEFAULT 0,
             qty_delivered INTEGER NOT NULL DEFAULT 0,
             -- NUMERIC, not REAL: float4 cannot represent 5.70, so a
@@ -510,6 +514,7 @@ def init_db():
         )"""
     )
     cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS lid_product_id INTEGER REFERENCES print_products(id)")
+    cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS cup_color TEXT")
     for col in ("discounted_1k", "discounted_no_min"):
         cur.execute(f"ALTER TABLE print_product_prices ADD COLUMN IF NOT EXISTS {col} NUMERIC(10,2)")
     # the combined lid-and-print columns are gone: the price sheet now
@@ -2912,7 +2917,7 @@ def _print_order_rows(where="", params=()):
 
     cur.execute(
         """SELECT i.id, i.order_id, i.product_id, i.lid_product_id,
-                  i.item_text, i.lid_text, i.ink_color,
+                  i.item_text, i.lid_text, i.ink_color, i.cup_color,
                   i.quantity, i.qty_delivered, i.unit_price, i.status, i.notes,
                   p.family, p.size, lp.family AS lid_family
            FROM print_order_items i
@@ -3058,13 +3063,14 @@ def api_print_order_create():
         cur.execute(
             """INSERT INTO print_order_items
                  (order_id, product_id, lid_product_id, item_text, lid_text,
-                  ink_color, quantity, unit_price, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                  ink_color, cup_color, quantity, unit_price, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (
                 order_id, product_id, lid_product_id,
                 (i.get("label") or "").strip(),
                 (i.get("lid") or "").strip() or None,
                 (i.get("ink") or "").strip() or None,
+                (i.get("cup_color") or "").strip() or None,
                 quantity, unit,
                 i["status"] if i.get("status") in PRINT_STATUSES else "not_started",
             ),
@@ -3142,9 +3148,24 @@ def api_print_item_update(item_id):
 
     fields = {}
 
-    for key, column in (("label", "item_text"), ("lid", "lid_text"), ("ink", "ink_color")):
+    for key, column in (("label", "item_text"), ("lid", "lid_text"),
+                        ("ink", "ink_color"), ("cup_color", "cup_color")):
         if key in data:
             fields[column] = (data[key] or "").strip() or None
+
+    if fields.get("cup_color"):
+        cur.execute(
+            """SELECT p.family FROM print_order_items i
+               JOIN print_products p ON p.id = i.product_id WHERE i.id=%s""",
+            (item_id,),
+        )
+        prod = cur.fetchone()
+        allowed = CUP_COLORS.get(prod["family"]) if prod else None
+        if allowed and fields["cup_color"] not in allowed:
+            return jsonify({
+                "status": "error",
+                "message": f"{prod['family']} comes in: " + ", ".join(allowed),
+            }), 400
 
     if "label" in data and not fields.get("item_text"):
         return jsonify({"status": "error", "message": "A line needs a cup."}), 400
@@ -3279,6 +3300,14 @@ LID_RULES = {
     "PPU":                    {"diameters": ["95"]},
     "Dabba":                  {"diameters": ["Dabba"]},
 }
+# The cup stock itself comes in colours - distinct from the ink it is
+# printed with. Double Wall is the one that does; everything else is a
+# single colour and gets no picker.
+CUP_COLORS = {
+    "Double Wall": ["White", "Black", "Kraft (Brown)", "Red", "Grey", "Green", "Blue"],
+}
+
+
 # the 8oz Double Wall is the exception: 80mm, and hard lids only
 LID_RULES_BY_SIZE = {
     ("Double Wall", "8oz"): {"diameters": ["80"], "only_hard": True},
@@ -3343,7 +3372,14 @@ def api_print_catalogue():
             [l["id"] for l in lids if _lid_fits(l["family"], rule)] if rule else [l["id"] for l in lids]
         )
 
-    return jsonify({"cups": cups, "lids": lids, "fits": fits, "shows_cost": show_cost})
+    colors = {}
+    for cup in cups:
+        options = CUP_COLORS.get(cup["family"])
+        if options:
+            colors[str(cup["id"])] = options
+
+    return jsonify({"cups": cups, "lids": lids, "fits": fits,
+                    "colors": colors, "shows_cost": show_cost})
 
 
 @app.route("/api/print/products/<int:product_id>", methods=["POST"])
