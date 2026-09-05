@@ -2922,7 +2922,7 @@ function printCard(o) {
           ? `<span class="print-frame-fold" title="Needs a new frame"><i>new</i></span>`
           : ""
       }
-      <div class="flex items-center gap-2.5 px-3 pt-3 pb-2">
+      <div class="flex items-center gap-2.5 pl-3 ${o.needs_new_frame ? "pr-12" : "pr-3"} pt-3 pb-2">
         ${f.logo ? printLogo(o.client_name, false) : ""}
         <div class="min-w-0 flex-1">
           <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left block max-w-full" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
