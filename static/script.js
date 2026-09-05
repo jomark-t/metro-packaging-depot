@@ -2833,9 +2833,17 @@ function printClientHue(name) {
   return h;
 }
 
-function printLogo(name, big) {
-  const h = printClientHue(name || "?");
+function printLogo(name, big, logoFile) {
   const size = big ? "w-12 h-12 text-lg" : "w-9 h-9 text-sm";
+  if (logoFile) {
+    // the logo is the thing we print for them, so it names a client faster
+    // than a monogram ever will
+    return `<div class="${size} rounded-full overflow-hidden shrink-0 bg-white"
+                 style="box-shadow:inset 0 0 0 1px rgba(17,24,39,.12)">
+              <img src="/static/uploads/${escapeHtml(logoFile)}" alt="" class="w-full h-full object-contain" />
+            </div>`;
+  }
+  const h = printClientHue(name || "?");
   const letter = escapeHtml((name || "?").replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase() || "?");
   return `<div class="${size} rounded-full grid place-items-center font-display font-bold shrink-0"
                style="background:hsl(${h},62%,93%);color:hsl(${h},55%,32%);box-shadow:inset 0 0 0 1px rgba(17,24,39,.1)">${letter}</div>`;
@@ -2958,7 +2966,7 @@ function printCard(o) {
           : ""
       }
       <div class="flex items-center gap-2.5 pl-3 ${o.needs_new_frame ? "pr-12" : "pr-3"} pt-3 pb-2">
-        ${f.logo ? printLogo(o.client_name, false) : ""}
+        ${f.logo ? printLogo(o.client_name, false, o.logo_filename) : ""}
         <div class="min-w-0 flex-1">
           <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left block max-w-full" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
           <p class="text-[11px] text-gray-400 font-mono">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
@@ -3321,6 +3329,34 @@ async function savePrintCell(cell, raw, revert) {
   const orderId = cell.dataset.order;
   const field = cell.dataset.field;
 
+  // renaming a client, from the drawer header
+  if (cell.dataset.clientField === "name") {
+    const text = String(raw).trim();
+    if (!text) {
+      alert("A client needs a name.");
+      revert();
+      return;
+    }
+    const res = await fetch(`/api/print/clients/${cell.dataset.client}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: text }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.message || "Could not rename that client.");
+      revert();
+      return;
+    }
+    cell.textContent = text;
+    cell.classList.add("saved");
+    setTimeout(() => cell.classList.remove("saved"), 900);
+    // the name is on every card of theirs, and in the clients list
+    loadPrintQueue();
+    if (printClientRows.length) loadPrintClientsPage();
+    return;
+  }
+
   // a note belongs to the order, not to one of its cup lines
   if (orderId && field === "remarks") {
     const text = String(raw).trim();
@@ -3513,8 +3549,10 @@ async function openPrintClient(clientId) {
   const t = data.totals;
 
   document.getElementById("printDrawerLogo").outerHTML =
-    printLogo(c.name, true).replace('class="', 'id="printDrawerLogo" class="');
-  document.getElementById("printDrawerName").textContent = c.name;
+    printLogo(c.name, true, c.logo_filename).replace('class="', 'id="printDrawerLogo" class="');
+  document.getElementById("printDrawerName").innerHTML =
+    `<span class="print-edit" tabindex="0" role="button" data-client-field="name"
+           data-client="${c.id}" title="Click to rename">${escapeHtml(c.name)}</span>`;
   document.getElementById("printDrawerSub").textContent =
     `${t.orders} order${t.orders === 1 ? "" : "s"} · ${Number(t.cups).toLocaleString("en-PH")} cups printed`;
 
@@ -3569,6 +3607,29 @@ async function openPrintClient(clientId) {
       </div>
     </div>
     <section class="flex flex-col gap-2">
+      ${sectionHead("Logo")}
+      <div class="flex items-center gap-3">
+        ${printLogo(c.name, true, c.logo_filename)}
+        <div class="flex-1 min-w-0">
+          <p class="text-xs text-gray-500 mb-1.5">${
+            c.logo_filename ? "The logo we print for them." : "No logo yet — a monogram stands in."
+          }</p>
+          <div class="flex gap-2">
+            <label class="text-xs border border-gray-300 rounded-md px-2 py-1 cursor-pointer hover:border-gray-400 transition">
+              ${c.logo_filename ? "Replace" : "Upload logo"}
+              <input type="file" accept="image/png,image/jpeg,image/webp" class="hidden print-logo-input" data-client="${c.id}" />
+            </label>
+            ${
+              c.logo_filename
+                ? `<button type="button" class="print-logo-remove text-xs border border-gray-300 rounded-md px-2 py-1 text-gray-500 hover:text-red-600 hover:border-red-300 transition" data-client="${c.id}">Remove</button>`
+                : ""
+            }
+          </div>
+          <p class="print-logo-note text-[11px] text-gray-400 mt-1"></p>
+        </div>
+      </div>
+    </section>
+    <section class="flex flex-col gap-2">
       ${sectionHead("Contact")}
       <div>
         ${contactRow("Instagram", "instagram", c.instagram)}
@@ -3581,6 +3642,54 @@ async function openPrintClient(clientId) {
     </section>
     <section class="flex flex-col gap-2">${sectionHead("Agreed prices")}${deals}</section>
     <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>`;
+
+  const nameCell = document.querySelector('[data-client-field="name"]');
+  if (nameCell) {
+    nameCell.addEventListener("click", () => beginPrintCellEdit(nameCell));
+    nameCell.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        beginPrintCellEdit(nameCell);
+      }
+    });
+  }
+
+  const drawerBody = document.getElementById("printDrawerBody");
+  const note = drawerBody.querySelector(".print-logo-note");
+  const fileInput = drawerBody.querySelector(".print-logo-input");
+  if (fileInput) {
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      note.textContent = "Uploading…";
+      const form = new FormData();
+      form.append("logo", file);
+      const res = await fetch(`/api/print/clients/${fileInput.dataset.client}/logo`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        note.textContent = "";
+        alert(data.message || "Could not upload that logo.");
+        return;
+      }
+      await openPrintClient(fileInput.dataset.client);
+      loadPrintQueue();
+    });
+  }
+  const removeBtn = drawerBody.querySelector(".print-logo-remove");
+  if (removeBtn) {
+    removeBtn.addEventListener("click", async () => {
+      const res = await fetch(`/api/print/clients/${removeBtn.dataset.client}/logo`, { method: "DELETE" });
+      if (!res.ok) {
+        alert("Could not remove that logo.");
+        return;
+      }
+      await openPrintClient(removeBtn.dataset.client);
+      loadPrintQueue();
+    });
+  }
 
   // contact fields save on blur - no save button to forget
   document.querySelectorAll(".print-contact").forEach((input) => {
@@ -4064,7 +4173,10 @@ function renderPrintClients() {
       (c) => `
       <tr class="hover:bg-gray-50">
         <td class="px-3 py-2">
-          <button class="print-client-btn font-medium hover:text-brand-blue text-left" data-client="${c.id}">${escapeHtml(c.name)} &rsaquo;</button>
+          <span class="inline-flex items-center gap-2">
+            ${printLogo(c.name, false, c.logo_filename).replace("w-9 h-9 text-sm", "w-6 h-6 text-[10px]")}
+            <button class="print-client-btn font-medium hover:text-brand-blue text-left" data-client="${c.id}">${escapeHtml(c.name)} &rsaquo;</button>
+          </span>
         </td>
         <td class="px-3 py-2 ${c.instagram ? "" : "text-gray-300"}">${escapeHtml(c.instagram || "—")}</td>
         <td class="px-3 py-2 ${c.facebook ? "" : "text-gray-300"}">${escapeHtml(c.facebook || "—")}</td>

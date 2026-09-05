@@ -3455,7 +3455,7 @@ def api_print_clients():
     cur = get_db().cursor()
     cur.execute(
         """SELECT c.id, c.name, c.instagram, c.facebook, c.phone, c.email,
-                  c.contact_person, c.is_discounted,
+                  c.contact_person, c.is_discounted, c.logo_filename,
                   COUNT(DISTINCT o.id) AS order_count,
                   COALESCE(SUM(i.quantity), 0) AS cups,
                   COALESCE(SUM(CASE WHEN o.is_paid THEN 0
@@ -3530,6 +3530,59 @@ def api_print_client(client_id):
     return jsonify({"client": client, "totals": totals, "history": history, "deals": deals})
 
 
+@app.route("/api/print/clients/<int:client_id>/logo", methods=["POST"])
+@manager_required
+def api_print_client_logo(client_id):
+    """A client's logo - the thing we print, so it identifies them faster
+    than their name does."""
+    file = request.files.get("logo")
+    if not file or not file.filename:
+        return jsonify({"status": "error", "message": "No logo uploaded"}), 400
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXTENSIONS:
+        return jsonify({"status": "error", "message": "Logo must be a PNG, JPG or WEBP image"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, name, logo_filename FROM print_clients WHERE id=%s", (client_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+
+    # keyed on the id, not the name, so renaming a client keeps its logo
+    filename = f"client-{client_id}.{ext}"
+    if row["logo_filename"] and row["logo_filename"] != filename:
+        old = os.path.join(UPLOAD_DIR, row["logo_filename"])
+        if os.path.exists(old):
+            os.remove(old)
+
+    file.save(os.path.join(UPLOAD_DIR, filename))
+    cur.execute("UPDATE print_clients SET logo_filename=%s WHERE id=%s", (filename, client_id))
+    record_audit(cur, "Updated print client", row["name"], {"logo": filename})
+    db.commit()
+    return jsonify({"status": "ok", "logo_filename": filename})
+
+
+@app.route("/api/print/clients/<int:client_id>/logo", methods=["DELETE"])
+@manager_required
+def api_print_client_logo_delete(client_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name, logo_filename FROM print_clients WHERE id=%s", (client_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+    if row["logo_filename"]:
+        path = os.path.join(UPLOAD_DIR, row["logo_filename"])
+        if os.path.exists(path):
+            os.remove(path)
+    cur.execute("UPDATE print_clients SET logo_filename=NULL WHERE id=%s", (client_id,))
+    record_audit(cur, "Updated print client", row["name"], {"logo": None})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
 PRINT_CLIENT_FIELDS = (
     "name", "contact_person", "phone", "email", "instagram", "facebook", "notes", "status",
 )
@@ -3547,8 +3600,19 @@ def api_print_client_update(client_id):
     if "is_discounted" in data:
         updates["is_discounted"] = bool(data["is_discounted"])
 
-    if "name" in updates and not updates["name"]:
-        return jsonify({"status": "error", "message": "A client needs a name."}), 400
+    if "name" in updates:
+        if not updates["name"]:
+            return jsonify({"status": "error", "message": "A client needs a name."}), 400
+        cur_check = get_db().cursor()
+        cur_check.execute(
+            "SELECT id FROM print_clients WHERE LOWER(name)=LOWER(%s) AND id<>%s",
+            (updates["name"], client_id),
+        )
+        if cur_check.fetchone():
+            return jsonify({
+                "status": "error",
+                "message": f"There is already a client called {updates['name']}.",
+            }), 400
     if not updates:
         return jsonify({"status": "ok"})
 
