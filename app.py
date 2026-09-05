@@ -474,6 +474,10 @@ def init_db():
             client_id INTEGER NOT NULL REFERENCES print_clients(id),
             order_date DATE NOT NULL,
             due_date DATE,
+            -- the day this job is meant to go on the press. Distinct from
+            -- due_date, which is when the client needs it: you print on
+            -- Tuesday for a Friday deadline.
+            scheduled_date DATE,
             is_rush BOOLEAN NOT NULL DEFAULT FALSE,
             needs_new_frame BOOLEAN NOT NULL DEFAULT FALSE,
             is_paid BOOLEAN NOT NULL DEFAULT FALSE,
@@ -515,6 +519,8 @@ def init_db():
     )
     cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS lid_product_id INTEGER REFERENCES print_products(id)")
     cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS cup_color TEXT")
+    cur.execute("ALTER TABLE print_orders ADD COLUMN IF NOT EXISTS scheduled_date DATE")
+    cur.execute("CREATE INDEX IF NOT EXISTS print_orders_scheduled_idx ON print_orders(scheduled_date)")
     for col in ("discounted_1k", "discounted_no_min"):
         cur.execute(f"ALTER TABLE print_product_prices ADD COLUMN IF NOT EXISTS {col} NUMERIC(10,2)")
     # the combined lid-and-print columns are gone: the price sheet now
@@ -2894,7 +2900,8 @@ def _print_order_rows(where="", params=()):
     repeated once per line."""
     cur = get_db().cursor()
     cur.execute(
-        f"""SELECT o.id, o.order_date, o.due_date, o.is_rush, o.needs_new_frame,
+        f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
+                   o.is_rush, o.needs_new_frame,
                    o.is_paid, o.remarks, o.created_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
                    c.logo_filename, c.is_discounted
@@ -2913,6 +2920,7 @@ def _print_order_rows(where="", params=()):
         o["items"] = []
         o["order_date"] = o["order_date"].isoformat() if o["order_date"] else None
         o["due_date"] = o["due_date"].isoformat() if o["due_date"] else None
+        o["scheduled_date"] = o["scheduled_date"].isoformat() if o["scheduled_date"] else None
         by_id[o["id"]] = o
 
     cur.execute(
@@ -3096,15 +3104,16 @@ def api_print_order_update(order_id):
     for key in ("is_paid", "is_rush", "needs_new_frame"):
         if key in data:
             fields[key] = bool(data[key])
-    for key in ("remarks", "due_date"):
+    for key in ("remarks", "due_date", "scheduled_date"):
         if key in data:
             fields[key] = (data[key] or "").strip() or None
 
-    if fields.get("due_date"):
-        try:
-            date.fromisoformat(fields["due_date"])
-        except ValueError:
-            return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+    for key in ("due_date", "scheduled_date"):
+        if fields.get(key):
+            try:
+                date.fromisoformat(fields[key])
+            except ValueError:
+                return jsonify({"status": "error", "message": "That date is not a real date."}), 400
 
     if not fields:
         return jsonify({"status": "ok"})

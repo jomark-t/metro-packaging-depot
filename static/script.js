@@ -2760,7 +2760,7 @@ const PRINT_STATUS_DOT = {
 };
 
 const PRINT_DEFAULTS = {
-  view: "open", group: "status", sort: "age", cols: "2", showControls: false,
+  view: "open", group: "status", sort: "age", cols: "2", showControls: false, mode: "board",
   fields: { logo: true, lid: true, unit: true, ink: true, amount: true, remark: true },
 };
 
@@ -2779,6 +2779,7 @@ function loadPrintPrefs() {
         sort: saved.sort || PRINT_DEFAULTS.sort,
         cols: saved.cols || PRINT_DEFAULTS.cols,
         showControls: !!saved.showControls,
+        mode: saved.mode === "week" ? "week" : "board",
         fields: Object.assign({}, PRINT_DEFAULTS.fields, saved.fields || {}),
       };
     }
@@ -3024,6 +3025,10 @@ function printSorted(list) {
 }
 
 function renderPrintBoard() {
+  if (printState.mode === "week") {
+    renderPrintWeek();
+    return;
+  }
   const board = document.getElementById("printBoard");
   const q = (document.getElementById("printSearch").value || "").trim().toLowerCase();
 
@@ -4560,11 +4565,38 @@ function openCardMenu(btn) {
   closeCardMenu();
   const orderId = btn.dataset.order;
 
+  const order = printOrders.find((o) => String(o.id) === String(orderId));
+
+  // scheduling from the menu as well as by dragging - a touch screen or a
+  // trackpad makes dragging across seven columns a nuisance
+  const days = weekDates()
+    .map((d) => {
+      const iso = isoDay(d);
+      const on = order && order.scheduled_date === iso;
+      return `<button type="button" class="cm-day w-full text-left px-3 py-1 hover:bg-gray-50 ${
+        on ? "text-brand-blue font-semibold" : ""
+      }" data-day="${iso}">${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}${on ? " ✓" : ""}</button>`;
+    })
+    .join("");
+
   const menu = document.createElement("div");
-  menu.className = "fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-44 text-sm";
+  menu.className = "fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-48 text-sm";
   menu.innerHTML = `
-    <button type="button" class="cm-delete w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-50">Delete order…</button>`;
+    <p class="px-3 pt-1 pb-1 text-[10px] uppercase tracking-wide font-mono text-gray-400">Print on</p>
+    ${days}
+    ${order && order.scheduled_date ? `<button type="button" class="cm-day w-full text-left px-3 py-1 text-gray-500 hover:bg-gray-50" data-day="">Not scheduled</button>` : ""}
+    <div class="border-t border-gray-100 mt-1 pt-1">
+      <button type="button" class="cm-delete w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-50">Delete order…</button>
+    </div>`;
   document.body.appendChild(menu);
+
+  menu.querySelectorAll(".cm-day").forEach((b) => {
+    b.addEventListener("click", () => {
+      closeCardMenu();
+      scheduleOrder(orderId, b.dataset.day);
+      if (printState.mode !== "week") loadPrintQueue();
+    });
+  });
 
   const r = btn.getBoundingClientRect();
   const top = r.bottom + 80 > window.innerHeight ? r.top - menu.offsetHeight - 4 : r.bottom + 4;
@@ -4635,4 +4667,183 @@ if (document.getElementById("printDeleteModal")) {
     closeDeleteModal();
     loadPrintQueue();
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// The press week
+//
+// A job's scheduled date is the day it goes on the press, which is not the
+// day the client needs it - you print on Tuesday for a Friday deadline.
+// Unscheduled open work sits on the left; drag it onto a day, or drop it
+// back to take it off the schedule again.
+// ---------------------------------------------------------------------------
+
+let weekStart = mondayOf(new Date());
+
+function mondayOf(d) {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = (copy.getDay() + 6) % 7; // Monday = 0
+  copy.setDate(copy.getDate() - day);
+  return copy;
+}
+
+function isoDay(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function weekDates() {
+  return [...Array(7)].map((_, i) => {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+}
+
+function setPrintMode(mode) {
+  printState.mode = mode;
+  savePrintPrefs();
+  document.getElementById("printBoard").classList.toggle("hidden", mode === "week");
+  document.getElementById("printWeek").classList.toggle("hidden", mode !== "week");
+  document.getElementById("printModeBoard").classList.toggle("print-mode-on", mode === "board");
+  document.getElementById("printModeWeek").classList.toggle("print-mode-on", mode === "week");
+  renderPrintBoard();
+}
+
+function weekChip(o) {
+  const ink = o.items.length ? o.items[0].ink_color : "";
+  return `
+    <div class="week-chip" draggable="true" data-order="${o.id}">
+      <span class="wc-client">${escapeHtml(o.client_name)}</span>
+      <span class="wc-meta">${o.quantity.toLocaleString("en-PH")} cups${
+        ink ? ` · ${escapeHtml(ink)}` : ""
+      }</span>
+      ${o.is_rush ? `<span class="print-chip c-rush mt-1 inline-block">Rush</span>` : ""}
+    </div>`;
+}
+
+function renderPrintWeek() {
+  const q = (document.getElementById("printSearch").value || "").trim().toLowerCase();
+  const open = printOrders.filter((o) => {
+    if (!q) return true;
+    return o.client_name.toLowerCase().includes(q);
+  });
+
+  const days = weekDates();
+  const first = days[0], last = days[6];
+  const sameMonth = first.getMonth() === last.getMonth();
+  document.getElementById("weekLabel").textContent =
+    `${first.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ` +
+    `${last.toLocaleDateString(undefined, sameMonth ? { day: "numeric" } : { month: "short", day: "numeric" })}`;
+
+  const todayIso = isoDay(new Date());
+  const scheduled = {};
+  days.forEach((d) => (scheduled[isoDay(d)] = []));
+  const unscheduled = [];
+  open.forEach((o) => {
+    if (o.scheduled_date && scheduled[o.scheduled_date]) scheduled[o.scheduled_date].push(o);
+    else if (!o.scheduled_date) unscheduled.push(o);
+  });
+
+  const weekCups = Object.values(scheduled).reduce(
+    (n, list) => n + list.reduce((m, o) => m + o.quantity, 0), 0);
+  document.getElementById("weekTotal").textContent =
+    weekCups ? `${weekCups.toLocaleString("en-PH")} cups this week` : "nothing scheduled yet";
+
+  const side = document.getElementById("weekUnscheduled");
+  side.dataset.day = "";
+  side.innerHTML =
+    `<div class="flex items-baseline gap-2 px-1 pb-1 border-b border-gray-100">
+       <h4 class="text-sm font-semibold">Not scheduled</h4>
+       <span class="text-[11px] font-mono text-gray-400">${unscheduled.length}</span>
+     </div>` +
+    (unscheduled.length
+      ? unscheduled.map(weekChip).join("")
+      : `<p class="text-xs text-gray-400 italic px-1 py-3">Everything open is on a day.</p>`);
+
+  document.getElementById("weekDays").innerHTML = days
+    .map((d) => {
+      const iso = isoDay(d);
+      const list = scheduled[iso];
+      const cups = list.reduce((n, o) => n + o.quantity, 0);
+      const isToday = iso === todayIso;
+      const isSunday = d.getDay() === 0;
+      return `
+        <div class="week-day border rounded-xl p-2 flex flex-col gap-2 ${
+          isToday ? "border-brand-blue bg-blue-50/40" : "border-gray-200 bg-white"
+        }" data-day="${iso}">
+          <div class="flex items-baseline justify-between gap-1 px-0.5">
+            <span class="text-xs font-semibold ${isSunday ? "text-gray-400" : ""}">${d.toLocaleDateString(undefined, { weekday: "short" })}</span>
+            <span class="text-[11px] font-mono ${isToday ? "text-brand-blue" : "text-gray-400"}">${d.getDate()}</span>
+          </div>
+          ${list.map(weekChip).join("")}
+          <span class="mt-auto text-[10px] font-mono ${cups ? "text-gray-500" : "text-gray-300"} px-0.5">${
+            cups ? cups.toLocaleString("en-PH") + " cups" : "—"
+          }</span>
+        </div>`;
+    })
+    .join("");
+
+  wireWeekDragging();
+}
+
+async function scheduleOrder(orderId, iso) {
+  const res = await fetch(`/api/print/orders/${orderId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scheduled_date: iso || "" }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.message || "Could not schedule that job.");
+    return;
+  }
+  const order = printOrders.find((o) => String(o.id) === String(orderId));
+  if (order) order.scheduled_date = iso || null;
+  renderPrintWeek();
+}
+
+function wireWeekDragging() {
+  document.querySelectorAll(".week-chip").forEach((chip) => {
+    chip.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", chip.dataset.order);
+      e.dataTransfer.effectAllowed = "move";
+      chip.classList.add("dragging");
+    });
+    chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+  });
+
+  const targets = [...document.querySelectorAll("[data-day]")];
+  targets.forEach((zone) => {
+    zone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      zone.classList.add("drop-target");
+    });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drop-target"));
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.classList.remove("drop-target");
+      const id = e.dataTransfer.getData("text/plain");
+      if (id) scheduleOrder(id, zone.dataset.day);
+    });
+  });
+}
+
+if (document.getElementById("printWeek")) {
+  document.getElementById("printModeBoard").addEventListener("click", () => setPrintMode("board"));
+  document.getElementById("printModeWeek").addEventListener("click", () => setPrintMode("week"));
+  document.getElementById("weekPrev").addEventListener("click", () => {
+    weekStart.setDate(weekStart.getDate() - 7);
+    renderPrintWeek();
+  });
+  document.getElementById("weekNext").addEventListener("click", () => {
+    weekStart.setDate(weekStart.getDate() + 7);
+    renderPrintWeek();
+  });
+  document.getElementById("weekToday").addEventListener("click", () => {
+    weekStart = mondayOf(new Date());
+    renderPrintWeek();
+  });
+  setPrintMode(printState.mode);
 }

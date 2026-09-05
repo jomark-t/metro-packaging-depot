@@ -138,6 +138,18 @@
   }
   .card:hover .print-card-menu, article:hover .print-card-menu { color: #9ca3af; }
   .print-card-menu:hover { color: #111827; background: #f3f4f6; }
+  /* week view */
+  .week-day { min-height: 8rem; }
+  .week-day.drop-target { background: #eef1fd; border-color: #1c33bb; }
+  .week-chip {
+    cursor: grab; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff;
+    padding: .4rem .5rem; font-size: .78rem; line-height: 1.3;
+  }
+  .week-chip:hover { border-color: #9ca3af; }
+  .week-chip.dragging { opacity: .4; }
+  .week-chip .wc-client { font-weight: 600; display: block; }
+  .week-chip .wc-meta { color: #6b7280; font-family: 'IBM Plex Mono', monospace; font-size: 10px; }
+  .print-mode-on { background: #111827; color: #fff; }
   .print-drawer-open { transform: none !important; }
   .tab-btn.active-tab, .payday-btn.active-payday { background: #ffffff; color: #1c33bb; }
   /* The <select>s in the header use white text/translucent background to
@@ -654,6 +666,10 @@
         <button class="print-view-btn" data-view="all">Everything <span class="text-xs font-mono opacity-60" data-n="all"></span></button>
       </div>
       <input id="printSearch" type="search" placeholder="Client, cup or ink…" class="ml-auto border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+      <div class="inline-flex rounded-lg border border-gray-300 overflow-hidden shrink-0">
+        <button id="printModeBoard" type="button" class="px-3 py-1.5 text-sm">Board</button>
+        <button id="printModeWeek" type="button" class="px-3 py-1.5 text-sm border-l border-gray-300">Week</button>
+      </div>
       <button id="printControlsBtn" type="button" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm hover:border-gray-400 transition shrink-0">View options</button>
     </div>
 
@@ -701,6 +717,23 @@
     </div>
 
     <div id="printBoard" class="flex flex-col gap-6"></div>
+
+    {# The press week. Jobs are assigned to the day they go on the press,
+       which is not the day the client needs them. #}
+    <div id="printWeek" class="hidden">
+      <div class="flex items-center gap-2 mb-3">
+        <button id="weekPrev" type="button" class="border border-gray-300 rounded-lg w-8 h-8 grid place-items-center hover:border-gray-400 transition" aria-label="Previous week">&#8249;</button>
+        <button id="weekToday" type="button" class="border border-gray-300 rounded-lg px-3 h-8 text-sm hover:border-gray-400 transition">This week</button>
+        <button id="weekNext" type="button" class="border border-gray-300 rounded-lg w-8 h-8 grid place-items-center hover:border-gray-400 transition" aria-label="Next week">&#8250;</button>
+        <h3 id="weekLabel" class="font-display font-semibold text-lg leading-none ml-1"></h3>
+        <span id="weekTotal" class="text-[11px] font-mono text-gray-400 ml-auto"></span>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-[15rem_minmax(0,1fr)] gap-4 items-start">
+        <div id="weekUnscheduled" class="border border-gray-200 bg-white rounded-xl shadow-sm p-2 flex flex-col gap-2"></div>
+        <div id="weekDays" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2"></div>
+      </div>
+      <p class="text-[11px] text-gray-400 mt-3">Drag a job onto a day, or use the &#8943; menu on any card. Drop it back on the left to unschedule it.</p>
+    </div>
   </div>
 
   {# Crossing into Payroll & HRMS on a shared computer asks for the same
