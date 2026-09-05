@@ -101,10 +101,12 @@
     font-family: 'IBM Plex Mono', monospace; font-style: normal;
     font-size: 9px; letter-spacing: .06em; color: #0b5a86; text-align: center;
   }
-  /* the colour sits beside the cup, not under it - one line reads faster */
+  /* the colour sits beside the cup, not under it - one line reads faster.
+     Same size and face as the cup name; only the weight and colour set it
+     apart, so the two read as one phrase rather than a name with a footnote. */
   .print-cup-colour {
-    display: inline-block; font-size: 11px; color: #6b7280; font-weight: 400;
-    font-family: 'IBM Plex Mono', monospace;
+    display: inline-block; font-size: inherit; font-family: inherit;
+    color: #6b7280; font-weight: 400;
   }
   .print-cup-sep { color: #d1d5db; margin: 0 .25rem; font-weight: 400; }
   .print-ink-chip {
