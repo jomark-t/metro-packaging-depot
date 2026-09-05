@@ -2935,8 +2935,16 @@ function printCard(o) {
     .join("");
 
   const extras = [];
-  if (f.remark && o.remarks) {
-    extras.push(`<p class="text-xs text-gray-500 bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>`);
+  if (f.remark) {
+    // rendered even when empty: a note you cannot add is not much use, and
+    // the placeholder is where you click to add one
+    extras.push(
+      `<div class="text-xs bg-gray-50 rounded-md px-2 py-1.5">
+         <span class="print-edit print-remark ${o.remarks ? "text-gray-600" : "text-gray-300 italic"}"
+               tabindex="0" role="button" data-order="${o.id}" data-field="remarks"
+               title="Click to edit the note">${escapeHtml(o.remarks || "add a note")}</span>
+       </div>`
+    );
   }
 
   return `
@@ -3300,7 +3308,7 @@ function printCellRaw(cell) {
   const field = cell.dataset.field;
   const text = cell.textContent.trim();
   if (field === "quantity") return text.replace(/[^0-9]/g, "");
-  return text === "—" || text === "add ink" ? "" : text;
+  return ["—", "add ink", "add a note", "— colour"].includes(text) ? "" : text;
 }
 
 // Save one edited cell. Deliberately does not reload the board: you are
@@ -3310,7 +3318,33 @@ function printCellRaw(cell) {
 async function savePrintCell(cell, raw, revert) {
   const itemId = cell.dataset.item;
   const productId = cell.dataset.product;
+  const orderId = cell.dataset.order;
   const field = cell.dataset.field;
+
+  // a note belongs to the order, not to one of its cup lines
+  if (orderId && field === "remarks") {
+    const text = String(raw).trim();
+    const res = await fetch(`/api/print/orders/${orderId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remarks: text }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.message || "Could not save that note.");
+      revert();
+      return;
+    }
+    cell.textContent = text || "add a note";
+    cell.classList.toggle("text-gray-600", !!text);
+    cell.classList.toggle("text-gray-300", !text);
+    cell.classList.toggle("italic", !text);
+    cell.classList.add("saved");
+    setTimeout(() => cell.classList.remove("saved"), 900);
+    const order = printOrders.find((o) => String(o.id) === String(orderId));
+    if (order) order.remarks = text || null;
+    return;
+  }
 
   // a price on the pricing page: a number, or blank to clear it
   if (productId) {
