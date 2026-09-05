@@ -3207,15 +3207,7 @@ function wirePrintBoard() {
       openStatusPopover(pill);
     });
   });
-  document.querySelectorAll(".print-edit").forEach((cell) => {
-    cell.addEventListener("click", () => beginPrintCellEdit(cell));
-    cell.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        beginPrintCellEdit(cell);
-      }
-    });
-  });
+  document.querySelectorAll(".print-edit").forEach(wireEditCell);
   document.querySelectorAll(".print-card-menu").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -3250,6 +3242,23 @@ function wirePrintBoard() {
 function printCupColours(productId) {
   if (!printCatalogue || !printCatalogue.colors) return [];
   return printCatalogue.colors[String(productId)] || [];
+}
+
+// Make a cell open its editor on click, or on Enter/Space when focused.
+//
+// The guard matters: once the editor exists it lives *inside* the cell, so
+// its keystrokes bubble up here. Without checking the target, every space
+// typed into a note or an ink name was swallowed by the preventDefault
+// below and never reached the input.
+function wireEditCell(cell) {
+  cell.addEventListener("click", () => beginPrintCellEdit(cell));
+  cell.addEventListener("keydown", (e) => {
+    if (e.target !== cell) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      beginPrintCellEdit(cell);
+    }
+  });
 }
 
 function beginPrintCellEdit(cell) {
@@ -3644,15 +3653,7 @@ async function openPrintClient(clientId) {
     <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>`;
 
   const nameCell = document.querySelector('[data-client-field="name"]');
-  if (nameCell) {
-    nameCell.addEventListener("click", () => beginPrintCellEdit(nameCell));
-    nameCell.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        beginPrintCellEdit(nameCell);
-      }
-    });
-  }
+  if (nameCell) wireEditCell(nameCell);
 
   const drawerBody = document.getElementById("printDrawerBody");
   const note = drawerBody.querySelector(".print-logo-note");
@@ -4308,15 +4309,7 @@ function renderPricing() {
     families.map((f) => familyBlock(f.name, f.items, cols)).join("") +
     (lids.length ? familyBlock("Lids", lids, lidCols) : "");
 
-  host.querySelectorAll(".print-edit").forEach((cell) => {
-    cell.addEventListener("click", () => beginPrintCellEdit(cell));
-    cell.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        beginPrintCellEdit(cell);
-      }
-    });
-  });
+  host.querySelectorAll(".print-edit").forEach(wireEditCell);
 }
 
 // ---------------------------------------------------------------------------
