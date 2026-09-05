@@ -2854,7 +2854,7 @@ function printCard(o) {
   if (o.is_rush) {
     chips.push(printChip(o.due_date ? `Due ${printShortDate(o.due_date)}` : "Rush", "bg-red-50 text-red-600 border-red-200"));
   }
-  if (o.needs_new_frame) chips.push(printChip("New frame", "bg-amber-50 text-amber-700 border-amber-200"));
+  // "needs a new frame" is a folded corner now, not a chip - see below
 
 
   // The cup lines, as a table. Cup, lid and quantity are editable in place
@@ -2913,7 +2913,15 @@ function printCard(o) {
   }
 
   return `
-    <article class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col hover:shadow-md hover:border-gray-300 transition" data-order="${o.id}">
+    <article class="relative bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col hover:shadow-md hover:border-gray-300 transition" data-order="${o.id}">
+      ${
+        // A folded corner rather than another chip: it costs no room in the
+        // header, so Rush keeps that row to itself, and a folded card reads
+        // from the corner of your eye while scanning past.
+        o.needs_new_frame
+          ? `<span class="print-frame-fold" title="Needs a new frame"><i>new</i></span>`
+          : ""
+      }
       <div class="flex items-center gap-2.5 px-3 pt-3 pb-2">
         ${f.logo ? printLogo(o.client_name, false) : ""}
         <div class="min-w-0 flex-1">

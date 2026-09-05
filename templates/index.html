@@ -86,6 +86,21 @@
   .print-edit:hover { border-color: #d1d5db; background: #fff; }
   .print-edit:focus-visible { outline: 2px solid #1c33bb; outline-offset: 1px; }
   .print-edit.saved { border-color: #07c067; background: #e6f9f0; border-style: solid; }
+  /* the folded corner that means "this job needs a new frame" */
+  .print-frame-fold {
+    position: absolute; top: 0; right: 0; width: 46px; height: 46px;
+    overflow: hidden; pointer-events: none; z-index: 1;
+  }
+  .print-frame-fold::before {
+    content: ""; position: absolute; top: 0; right: 0;
+    border-top: 46px solid #cfe6fb; border-left: 46px solid transparent;
+  }
+  .print-frame-fold i {
+    position: absolute; top: 9px; right: 0; width: 40px;
+    transform: rotate(45deg); transform-origin: center;
+    font-family: 'IBM Plex Mono', monospace; font-style: normal;
+    font-size: 9px; letter-spacing: .06em; color: #0b5a86; text-align: center;
+  }
   .print-ink-chip {
     display: inline-block; border-radius: 999px; padding: .1rem .5rem;
     font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: .02em;
