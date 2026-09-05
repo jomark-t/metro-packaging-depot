@@ -2955,7 +2955,10 @@ function printCard(o) {
           <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left block max-w-full" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
           <p class="text-[11px] text-gray-400 font-mono">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
         </div>
-        <div class="flex flex-wrap gap-1 justify-end shrink-0 max-w-[45%]">${chips.join("")}</div>
+        <div class="flex flex-wrap items-center gap-1 justify-end shrink-0 max-w-[45%]">
+          ${chips.join("")}
+          <button class="print-card-menu" type="button" data-order="${o.id}" aria-label="Order actions" title="Order actions">&#8943;</button>
+        </div>
       </div>
       <table class="print-lines"><thead>${head}</thead><tbody>${rows}</tbody></table>
       ${extras.length ? `<div class="px-3 pt-2 pb-3 flex flex-col gap-2">${extras.join("")}</div>` : ""}
@@ -3195,6 +3198,12 @@ function wirePrintBoard() {
         e.preventDefault();
         beginPrintCellEdit(cell);
       }
+    });
+  });
+  document.querySelectorAll(".print-card-menu").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openCardMenu(b);
     });
   });
   // paid is the one thing you flip constantly, so it's a click on the card
@@ -4387,5 +4396,104 @@ async function beginProductPick(cell, field) {
       e.preventDefault();
       finish(false);
     }
+  });
+}
+
+
+// ---------------------------------------------------------------------------
+// Card menu and deleting an order
+//
+// Delete lives behind a menu rather than on the card face. The card is
+// something you click twenty times a day to move work along, and a delete
+// button in that space is a mis-click waiting to happen.
+// ---------------------------------------------------------------------------
+
+let printCardMenu = null;
+
+function closeCardMenu() {
+  if (printCardMenu) {
+    printCardMenu.remove();
+    printCardMenu = null;
+  }
+}
+
+function openCardMenu(btn) {
+  closeCardMenu();
+  const orderId = btn.dataset.order;
+
+  const menu = document.createElement("div");
+  menu.className = "fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-44 text-sm";
+  menu.innerHTML = `
+    <button type="button" class="cm-delete w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-50">Delete order…</button>`;
+  document.body.appendChild(menu);
+
+  const r = btn.getBoundingClientRect();
+  const top = r.bottom + 80 > window.innerHeight ? r.top - menu.offsetHeight - 4 : r.bottom + 4;
+  menu.style.top = `${Math.max(8, top)}px`;
+  menu.style.left = `${Math.min(r.left - 120, window.innerWidth - menu.offsetWidth - 8)}px`;
+
+  menu.querySelector(".cm-delete").addEventListener("click", () => {
+    closeCardMenu();
+    askDeleteOrder(orderId);
+  });
+  printCardMenu = menu;
+}
+
+document.addEventListener("click", (e) => {
+  if (printCardMenu && !printCardMenu.contains(e.target) && !e.target.closest(".print-card-menu")) {
+    closeCardMenu();
+  }
+});
+
+let printDeleteId = null;
+
+function askDeleteOrder(orderId) {
+  const order = printOrders.find((o) => String(o.id) === String(orderId));
+  if (!order) return;
+  printDeleteId = orderId;
+
+  document.getElementById("printDeleteWhat").textContent =
+    `${order.client_name} · ${printShortDate(order.order_date)}`;
+  const lines = order.items.length;
+  document.getElementById("printDeleteDetail").textContent =
+    `${lines} line${lines === 1 ? "" : "s"} · ${order.quantity.toLocaleString("en-PH")} cups · ${printMoney(order.total)}`;
+
+  const modal = document.getElementById("printDeleteModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("printDeleteCancel").focus();
+}
+
+function closeDeleteModal() {
+  const modal = document.getElementById("printDeleteModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+  printDeleteId = null;
+}
+
+if (document.getElementById("printDeleteModal")) {
+  document.getElementById("printDeleteCancel").addEventListener("click", closeDeleteModal);
+  document.getElementById("printDeleteModal").addEventListener("click", (e) => {
+    if (e.target.id === "printDeleteModal") closeDeleteModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeCardMenu();
+      closeDeleteModal();
+    }
+  });
+  document.getElementById("printDeleteGo").addEventListener("click", async () => {
+    if (!printDeleteId) return;
+    const btn = document.getElementById("printDeleteGo");
+    btn.disabled = true;
+    const res = await fetch(`/api/print/orders/${printDeleteId}`, { method: "DELETE" });
+    btn.disabled = false;
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.message || "Could not delete that order.");
+      return;
+    }
+    closeDeleteModal();
+    loadPrintQueue();
   });
 }

@@ -129,6 +129,14 @@
   .print-money .pm-amount { color: #111827; font-weight: 500; }
   .print-lines td .print-line-status { margin-top: .18rem; cursor: pointer; }
   .print-lines td .print-line-status:hover { filter: brightness(.94); }
+  /* the card's own menu - quiet until the card is hovered, so it is never
+     the thing your eye lands on */
+  .print-card-menu {
+    color: #d1d5db; line-height: 1; padding: 0 .15rem; border-radius: 4px;
+    transition: color .15s;
+  }
+  .card:hover .print-card-menu, article:hover .print-card-menu { color: #9ca3af; }
+  .print-card-menu:hover { color: #111827; background: #f3f4f6; }
   .print-drawer-open { transform: none !important; }
   .tab-btn.active-tab, .payday-btn.active-payday { background: #ffffff; color: #1c33bb; }
   /* The <select>s in the header use white text/translucent background to
@@ -797,6 +805,22 @@
     </div>
     <div id="printDrawerBody" class="overflow-y-auto px-4 py-4 flex flex-col gap-5"></div>
   </aside>
+
+  {# Deleting an order takes its lines, its quantities and its money with
+     it, so the dialog says exactly what is about to go rather than asking
+     a bare "are you sure". #}
+  <div id="printDeleteModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 class="font-display font-semibold text-lg mb-1">Delete this order?</h3>
+      <p id="printDeleteWhat" class="text-sm text-gray-700 mb-1"></p>
+      <p id="printDeleteDetail" class="text-sm text-gray-500 mb-4"></p>
+      <p class="text-xs text-red-600 mb-4">This cannot be undone. If the client pulled out, set the lines to Cancelled instead — that keeps the history.</p>
+      <div class="flex justify-end gap-2">
+        <button id="printDeleteCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Keep it</button>
+        <button id="printDeleteGo" type="button" class="bg-red-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-red-700 transition">Delete order</button>
+      </div>
+    </div>
+  </div>
 
   {# New order form. #}
   <div id="printOrderModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
