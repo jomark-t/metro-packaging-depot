@@ -2909,7 +2909,7 @@ function printCard(o) {
                  title="Click to change the cup">${escapeHtml(i.label || "")}</span>
            ${
              printCupColours(i.product_id).length
-               ? `<span class="print-edit print-cup-colour" tabindex="0" role="button"
+               ? `<span class="print-cup-sep">·</span><span class="print-edit print-cup-colour" tabindex="0" role="button"
                         data-item="${i.id}" data-field="cup_color" data-cup="${i.product_id || ""}"
                         data-value="${escapeHtml(i.cup_color || "")}"
                         title="Colour of the cup itself"
