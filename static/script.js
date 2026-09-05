@@ -3541,14 +3541,13 @@ function poItemRow() {
   tr.innerHTML = `
     <td class="py-1 pr-2"><select class="po-cup w-full border border-gray-300 rounded px-2 py-1">${cupOptions}</select></td>
     <td class="py-1 pr-2"><select class="po-lid w-full border border-gray-300 rounded px-2 py-1" disabled><option value="">Pick a cup first</option></select></td>
+    <td class="py-1 pr-2"><input class="po-ink w-full border border-gray-300 rounded px-2 py-1" placeholder="Black" list="poInkList" /></td>
     <td class="py-1 pr-2"><input class="po-qty w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="1" /></td>
-    <td class="py-1 pr-2"><input class="po-unit w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="0.01" /></td>
     <td class="py-1"><button class="po-remove text-gray-400 hover:text-red-600" aria-label="Remove">&#10005;</button></td>`;
 
   const cupSel = tr.querySelector(".po-cup");
   const lidSel = tr.querySelector(".po-lid");
   const qty = tr.querySelector(".po-qty");
-  const unit = tr.querySelector(".po-unit");
 
   // the lid list only ever offers what fits the chosen cup
   const fillLids = () => {
@@ -3560,19 +3559,7 @@ function poItemRow() {
       options.map((l) => `<option value="${l.id}">${escapeHtml(l.family)}</option>`).join("");
   };
 
-  const repriceUnit = () => {
-    const cup = cat.cups.find((c) => String(c.id) === cupSel.value);
-    const lid = cat.lids.find((l) => String(l.id) === lidSel.value);
-    if (!cup) return;
-    unit.value = priceFor(cup, lid, Number(qty.value || 0)).toFixed(2);
-  };
-
-  cupSel.addEventListener("change", () => {
-    fillLids();
-    repriceUnit();
-  });
-  lidSel.addEventListener("change", repriceUnit);
-  qty.addEventListener("input", repriceUnit);
+  cupSel.addEventListener("change", fillLids);
   tr.querySelector(".po-remove").addEventListener("click", () => tr.remove());
   return tr;
 }
@@ -3582,7 +3569,6 @@ async function openPrintOrderForm() {
   document.getElementById("poClient").value = "";
   document.getElementById("poDate").value = new Date().toISOString().slice(0, 10);
   document.getElementById("poDue").value = "";
-  document.getElementById("poInk").value = "";
   document.getElementById("poRemarks").value = "";
   ["poRush", "poFrame", "poPaid"].forEach((id) => (document.getElementById(id).checked = false));
 
@@ -3592,6 +3578,17 @@ async function openPrintOrderForm() {
 
   const list = document.getElementById("poClientList");
   list.innerHTML = printClients.map((c) => `<option value="${escapeHtml(c.name)}"></option>`).join("");
+
+  // suggest the inks already on the board rather than making them be typed
+  // from memory
+  const inks = [...new Set(printOrders.flatMap((o) => o.items.map((i) => i.ink_color)).filter(Boolean))].sort();
+  let inkList = document.getElementById("poInkList");
+  if (!inkList) {
+    inkList = document.createElement("datalist");
+    inkList.id = "poInkList";
+    document.body.appendChild(inkList);
+  }
+  inkList.innerHTML = inks.map((i) => `<option value="${escapeHtml(i)}"></option>`).join("");
 
   const modal = document.getElementById("printOrderModal");
   modal.classList.remove("hidden");
@@ -3616,9 +3613,10 @@ async function savePrintOrder() {
         lid_product_id: lid ? lid.id : null,
         label: cup ? cup.label : "",
         lid: lid ? lid.family : "",
-        ink: document.getElementById("poInk").value.trim(),
+        // ink is per line: one order can print different colours on
+        // different cups
+        ink: tr.querySelector(".po-ink").value.trim(),
         quantity: Number(tr.querySelector(".po-qty").value || 0),
-        unit_price: Number(tr.querySelector(".po-unit").value || 0),
       };
     })
     .filter((i) => i.product_id);

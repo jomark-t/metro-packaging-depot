@@ -2973,6 +2973,35 @@ def api_print_orders():
     })
 
 
+def price_line(cur, product_id, lid_product_id, quantity):
+    """What one line costs: the print tier for its quantity, plus its lid.
+
+    Worked out here rather than sent from the form - the price list is the
+    only place a price should come from, and a number typed into a browser
+    is not the price list."""
+    total = 0.0
+    if product_id:
+        cur.execute(
+            "SELECT print_only_1k, print_only_sub1k FROM print_product_prices WHERE product_id=%s",
+            (product_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            tier = row["print_only_1k"] if quantity >= 1000 else row["print_only_sub1k"]
+            if tier is None:
+                tier = row["print_only_sub1k"] if row["print_only_1k"] is None else row["print_only_1k"]
+            total += float(tier or 0)
+    if lid_product_id:
+        cur.execute(
+            "SELECT retail, wholesale FROM print_product_prices WHERE product_id=%s",
+            (lid_product_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            total += float(row["wholesale"] if row["wholesale"] is not None else (row["retail"] or 0))
+    return round(total, 2)
+
+
 @app.route("/api/print/orders", methods=["POST"])
 @manager_required
 def api_print_order_create():
@@ -2981,7 +3010,7 @@ def api_print_order_create():
     if not client_name:
         return jsonify({"status": "error", "message": "Pick a client for this order."}), 400
 
-    items = [i for i in (data.get("items") or []) if (i.get("label") or "").strip()]
+    items = [i for i in (data.get("items") or []) if i.get("product_id") or (i.get("label") or "").strip()]
     if not items:
         return jsonify({"status": "error", "message": "An order needs at least one cup line."}), 400
 
@@ -3019,17 +3048,21 @@ def api_print_order_create():
     order_id = cur.fetchone()["id"]
 
     for i in items:
+        quantity = int(i.get("quantity") or 0)
+        product_id = i.get("product_id") or None
+        lid_product_id = i.get("lid_product_id") or None
+        unit = price_line(cur, product_id, lid_product_id, quantity)
         cur.execute(
             """INSERT INTO print_order_items
                  (order_id, product_id, lid_product_id, item_text, lid_text,
                   ink_color, quantity, unit_price, status)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (
-                order_id, i.get("product_id") or None, i.get("lid_product_id") or None,
+                order_id, product_id, lid_product_id,
                 (i.get("label") or "").strip(),
                 (i.get("lid") or "").strip() or None,
                 (i.get("ink") or "").strip() or None,
-                int(i.get("quantity") or 0), float(i.get("unit_price") or 0),
+                quantity, unit,
                 i["status"] if i.get("status") in PRINT_STATUSES else "not_started",
             ),
         )

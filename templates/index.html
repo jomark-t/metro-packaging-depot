@@ -779,10 +779,6 @@
           <span class="text-xs text-gray-500 block mb-1">Due date <span class="text-gray-400">(optional)</span></span>
           <input id="poDue" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
         </label>
-        <label class="text-sm">
-          <span class="text-xs text-gray-500 block mb-1">Ink colour</span>
-          <input id="poInk" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Black, White, Brown…" />
-        </label>
       </div>
 
       <div class="flex flex-wrap gap-4 mb-4 text-sm">
@@ -798,15 +794,15 @@
             <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400">
               <th class="text-left py-1">Cup</th>
               <th class="text-left py-1">Lid</th>
+              <th class="text-left py-1 w-32">Ink</th>
               <th class="text-right py-1 w-24">Qty</th>
-              <th class="text-right py-1 w-24">Unit ₱</th>
               <th class="w-8"></th>
             </tr>
           </thead>
           <tbody id="poItems"></tbody>
         </table>
       </div>
-      <p class="text-[11px] text-gray-400 mb-3">The lid list only offers what fits the cup you picked, and the price fills itself in.</p>
+      <p class="text-[11px] text-gray-400 mb-3">The lid list only offers what fits the cup you picked. Pricing comes from the price list, so there is nothing to type.</p>
       <button id="poAddRow" class="text-sm text-brand-blue hover:underline mb-4">+ Add another cup</button>
 
       <label class="text-sm block mb-4">
