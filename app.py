@@ -445,11 +445,13 @@ def init_db():
             cost NUMERIC(10,2),
             retail NUMERIC(10,2),
             wholesale NUMERIC(10,2),
-            wholesale_lid NUMERIC(10,2),
+            -- printing is priced per cup and the lid is added on top, which
+            -- is how the price sheet reads: two tiers either side of 1,000
             print_only_1k NUMERIC(10,2),
-            lid_and_print_1k NUMERIC(10,2),
             print_only_sub1k NUMERIC(10,2),
-            lid_and_print_sub1k NUMERIC(10,2),
+            -- the two discounted-client columns
+            discounted_1k NUMERIC(10,2),
+            discounted_no_min NUMERIC(10,2),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
@@ -489,6 +491,10 @@ def init_db():
             id SERIAL PRIMARY KEY,
             order_id INTEGER NOT NULL REFERENCES print_orders(id) ON DELETE CASCADE,
             product_id INTEGER REFERENCES print_products(id),
+            -- the lid is a product too, so it can be picked from a list
+            -- rather than typed; the _text columns keep whatever the sheet
+            -- originally said, for tracing a row back
+            lid_product_id INTEGER REFERENCES print_products(id),
             item_text TEXT,
             lid_text TEXT,
             ink_color TEXT,
@@ -503,6 +509,14 @@ def init_db():
             notes TEXT
         )"""
     )
+    cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS lid_product_id INTEGER REFERENCES print_products(id)")
+    for col in ("discounted_1k", "discounted_no_min"):
+        cur.execute(f"ALTER TABLE print_product_prices ADD COLUMN IF NOT EXISTS {col} NUMERIC(10,2)")
+    # the combined lid-and-print columns are gone: the price sheet now
+    # prices the print and the lid separately
+    for col in ("lid_and_print_1k", "lid_and_print_sub1k", "wholesale_lid"):
+        cur.execute(f"ALTER TABLE print_product_prices DROP COLUMN IF EXISTS {col}")
+
     # these tables were first created with REAL money columns; move any
     # such column to NUMERIC once, guarded so a boot on the right type is
     # a no-op rather than a table rewrite
@@ -512,11 +526,8 @@ def init_db():
         ("print_product_prices", "cost", "NUMERIC(10,2)"),
         ("print_product_prices", "retail", "NUMERIC(10,2)"),
         ("print_product_prices", "wholesale", "NUMERIC(10,2)"),
-        ("print_product_prices", "wholesale_lid", "NUMERIC(10,2)"),
         ("print_product_prices", "print_only_1k", "NUMERIC(10,2)"),
-        ("print_product_prices", "lid_and_print_1k", "NUMERIC(10,2)"),
         ("print_product_prices", "print_only_sub1k", "NUMERIC(10,2)"),
-        ("print_product_prices", "lid_and_print_sub1k", "NUMERIC(10,2)"),
     ):
         cur.execute(
             """SELECT 1 FROM information_schema.columns
@@ -3010,10 +3021,12 @@ def api_print_order_create():
     for i in items:
         cur.execute(
             """INSERT INTO print_order_items
-                 (order_id, item_text, lid_text, ink_color, quantity, unit_price, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                 (order_id, product_id, lid_product_id, item_text, lid_text,
+                  ink_color, quantity, unit_price, status)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (
-                order_id, (i.get("label") or "").strip(),
+                order_id, i.get("product_id") or None, i.get("lid_product_id") or None,
+                (i.get("label") or "").strip(),
                 (i.get("lid") or "").strip() or None,
                 (i.get("ink") or "").strip() or None,
                 int(i.get("quantity") or 0), float(i.get("unit_price") or 0),
@@ -3183,19 +3196,171 @@ def api_print_order_delete(order_id):
     return jsonify({"status": "ok"})
 
 
+# Which lids fit which cup. Confirmed with Jomark, and the reason the order
+# form can offer a list instead of a free-text box: the rules live here, in
+# one place, rather than in whoever is typing.
+#
+#   diameters  - the lid sizes that physically fit
+#   no_hard    - the cup cannot take a hard lid whatever the diameter
+#   only_hard  - the cup takes nothing but hard lids
+LID_RULES = {
+    "Double Wall":            {"diameters": ["90"]},
+    "Double Wall BLUE":       {"diameters": ["90"]},
+    "Paper Cup":              {"diameters": ["90"], "no_hard": True},
+    "PET 95mm":               {"diameters": ["95"]},
+    "PET 98mm":               {"diameters": ["98"]},
+    "PET 98 Black - Thick":   {"diameters": ["98"]},
+    "PET U 90 - Thick":       {"diameters": ["90"]},
+    "PET U 90 Black  - Thick": {"diameters": ["90"]},
+    "PPY":                    {"diameters": ["95"]},
+    "PPU":                    {"diameters": ["95"]},
+    "Dabba":                  {"diameters": ["Dabba"]},
+}
+# the 8oz Double Wall is the exception: 80mm, and hard lids only
+LID_RULES_BY_SIZE = {
+    ("Double Wall", "8oz"): {"diameters": ["80"], "only_hard": True},
+    ("Double Wall BLUE", "8oz"): {"diameters": ["80"], "only_hard": True},
+}
+
+
+def _lid_fits(lid_name, rule):
+    name = lid_name.strip()
+    is_hard = "hard lid" in name.lower()
+    if rule.get("no_hard") and is_hard:
+        return False
+    if rule.get("only_hard") and not is_hard:
+        return False
+    for dia in rule["diameters"]:
+        if dia == "Dabba":
+            if name.lower().startswith("dabba"):
+                return True
+        elif name.startswith(dia + " "):
+            return True
+    return False
+
+
+@app.route("/api/print/catalogue")
+@manager_required
+def api_print_catalogue():
+    """Cups, lids, and which lids go on which cup.
+
+    The order form uses this to fill its dropdowns, so a cup or a lid can
+    only ever be one of the things actually on the price list."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT p.id, p.family, p.size, p.kind, p.moq,
+                  pr.cost, pr.retail, pr.wholesale,
+                  pr.print_only_1k, pr.print_only_sub1k,
+                  pr.discounted_1k, pr.discounted_no_min
+           FROM print_products p
+           LEFT JOIN print_product_prices pr ON pr.product_id = p.id
+           WHERE p.is_active
+           ORDER BY p.kind DESC, p.family, p.size"""
+    )
+    cups, lids = [], []
+    for r in cur.fetchall():
+        row = dict(r)
+        for money in ("cost", "retail", "wholesale", "print_only_1k",
+                      "print_only_sub1k", "discounted_1k", "discounted_no_min"):
+            row[money] = float(row[money]) if row[money] is not None else None
+        row["label"] = f"{row['family']} {row['size']}".strip()
+        (cups if row["kind"] == "cup" else lids).append(row)
+
+    # cost is a manager-only figure even inside the admin app - it never
+    # goes to a screen that could be shown to a client
+    show_cost = bool(session.get("is_superuser"))
+    if not show_cost:
+        for row in cups + lids:
+            row.pop("cost", None)
+
+    fits = {}
+    for cup in cups:
+        rule = LID_RULES_BY_SIZE.get((cup["family"], cup["size"])) or LID_RULES.get(cup["family"])
+        fits[str(cup["id"])] = (
+            [l["id"] for l in lids if _lid_fits(l["family"], rule)] if rule else [l["id"] for l in lids]
+        )
+
+    return jsonify({"cups": cups, "lids": lids, "fits": fits, "shows_cost": show_cost})
+
+
+@app.route("/api/print/products/<int:product_id>", methods=["POST"])
+@manager_required
+def api_print_product_price_update(product_id):
+    """Edit one price on the price list."""
+    data = request.get_json(force=True)
+    fields = {}
+    for key in ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k",
+                "discounted_1k", "discounted_no_min"):
+        if key in data:
+            raw = data[key]
+            if raw in (None, ""):
+                fields[key] = None
+                continue
+            try:
+                value = round(float(raw), 2)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "That price isn't a number."}), 400
+            if value < 0:
+                return jsonify({"status": "error", "message": "A price can't be negative."}), 400
+            fields[key] = value
+    if "moq" in data:
+        try:
+            fields["moq"] = int(data["moq"]) if data["moq"] not in (None, "") else None
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "MOQ must be a whole number."}), 400
+
+    if not fields:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT family, size FROM print_products WHERE id=%s", (product_id,))
+    prod = cur.fetchone()
+    if prod is None:
+        return jsonify({"status": "error", "message": "No such product"}), 404
+
+    moq = fields.pop("moq", "absent")
+    if moq != "absent":
+        cur.execute("UPDATE print_products SET moq=%s WHERE id=%s", (moq, product_id))
+    if fields:
+        cols = ", ".join(f"{k}=%s" for k in fields)
+        cur.execute(
+            f"""INSERT INTO print_product_prices (product_id) VALUES (%s)
+                ON CONFLICT (product_id) DO NOTHING""",
+            (product_id,),
+        )
+        cur.execute(f"UPDATE print_product_prices SET {cols} WHERE product_id=%s",
+                    (*fields.values(), product_id))
+
+    record_audit(cur, "Updated print price",
+                 f"{prod['family']} {prod['size']}".strip(), fields)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/print/clients")
 @manager_required
 def api_print_clients():
-    """Every client, for the picker on the new-order form."""
+    """Every client. `with_totals` adds the figures the Clients page shows."""
     cur = get_db().cursor()
     cur.execute(
-        """SELECT c.id, c.name, c.instagram, c.facebook, c.is_discounted,
-                  COUNT(o.id) AS order_count
+        """SELECT c.id, c.name, c.instagram, c.facebook, c.phone, c.email,
+                  c.contact_person, c.is_discounted,
+                  COUNT(DISTINCT o.id) AS order_count,
+                  COALESCE(SUM(i.quantity), 0) AS cups,
+                  COALESCE(SUM(CASE WHEN o.is_paid THEN 0
+                                    ELSE i.quantity * i.unit_price END), 0) AS owed
            FROM print_clients c
            LEFT JOIN print_orders o ON o.client_id = c.id
+           LEFT JOIN print_order_items i ON i.order_id = o.id
            GROUP BY c.id ORDER BY c.name"""
     )
-    return jsonify({"clients": [dict(r) for r in cur.fetchall()]})
+    clients = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row["owed"] = float(row["owed"] or 0)
+        clients.append(row)
+    return jsonify({"clients": clients})
 
 
 @app.route("/api/print/clients/<int:client_id>")

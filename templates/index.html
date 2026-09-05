@@ -245,6 +245,8 @@
       {# Cup printing - the order book for the printing side of the shop. #}
       {% if current_user.is_manager %}
       <button id="tabPrintBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button>
+      <button id="tabPrintClientsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Clients</button>
+      <button id="tabPricingBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Pricing</button>
       {% endif %}
       {# The audit trail spans everyone's pay and login changes, including
          the managers' own - superuser only. #}
@@ -703,6 +705,48 @@
   </div>
   {% endif %}
 
+  <div id="printClientsView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Clients</h2>
+        <p id="printClientsSubtitle" class="text-sm text-gray-500">Everyone we print for.</p>
+      </div>
+      <input id="printClientSearch" type="search" placeholder="Search clients…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+    </div>
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+            <th class="text-left px-3 py-2">Client</th>
+            <th class="text-left px-3 py-2">Instagram</th>
+            <th class="text-left px-3 py-2">Facebook</th>
+            <th class="text-left px-3 py-2">Phone</th>
+            <th class="text-right px-3 py-2">Orders</th>
+            <th class="text-right px-3 py-2">Cups</th>
+            <th class="text-right px-3 py-2">Owed</th>
+          </tr>
+        </thead>
+        <tbody id="printClientsBody" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="pricingView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Cup Pricing</h2>
+        <p id="pricingSubtitle" class="text-sm text-gray-500">The price list the queue prices from.</p>
+      </div>
+      <input id="pricingSearch" type="search" placeholder="Search cups or lids…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+    </div>
+    <p class="text-xs text-gray-500 mb-4">
+      Printing is priced per cup, and the lid is added on top — a line in the
+      queue costs the print tier for its quantity plus its lid. Click any
+      figure to change it.
+    </p>
+    <div id="pricingTables" class="flex flex-col gap-6"></div>
+  </div>
+
   {# Client details, opened from a client name on any card. #}
   <div id="printScrim" class="fixed inset-0 bg-black/40 z-40 hidden"></div>
   <aside id="printDrawer" class="fixed top-0 right-0 bottom-0 w-full sm:w-[27rem] bg-white border-l border-gray-200 shadow-2xl z-50 translate-x-full transition-transform duration-200 flex flex-col">
@@ -762,6 +806,7 @@
           <tbody id="poItems"></tbody>
         </table>
       </div>
+      <p class="text-[11px] text-gray-400 mb-3">The lid list only offers what fits the cup you picked, and the price fills itself in.</p>
       <button id="poAddRow" class="text-sm text-brand-blue hover:underline mb-4">+ Add another cup</button>
 
       <label class="text-sm block mb-4">

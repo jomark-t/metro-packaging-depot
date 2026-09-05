@@ -448,6 +448,10 @@ const tabActivityBtn = document.getElementById("tabActivityBtn");
 const activityView = document.getElementById("activityView");
 const tabPrintBtn = document.getElementById("tabPrintBtn");
 const printView = document.getElementById("printView");
+const tabPrintClientsBtn = document.getElementById("tabPrintClientsBtn");
+const printClientsView = document.getElementById("printClientsView");
+const tabPricingBtn = document.getElementById("tabPricingBtn");
+const pricingView = document.getElementById("pricingView");
 const tabAdminBtn = document.getElementById("tabAdminBtn");
 const adminView = document.getElementById("adminView");
 const tabMyPayBtn = document.getElementById("tabMyPayBtn");
@@ -472,6 +476,8 @@ if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, contr
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
 if (tabPrintBtn) TABS.print = { btn: tabPrintBtn, view: printView, controls: null };
+if (tabPrintClientsBtn) TABS.printclients = { btn: tabPrintClientsBtn, view: printClientsView, controls: null };
+if (tabPricingBtn) TABS.pricing = { btn: tabPricingBtn, view: pricingView, controls: null };
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
 if (tabMyPayBtn) TABS.mypay = { btn: tabMyPayBtn, view: myPayView, controls: null };
 if (tabMyInfoBtn) TABS.myinfo = { btn: tabMyInfoBtn, view: myInfoView, controls: null };
@@ -506,6 +512,12 @@ function showTab(tab) {
   if (tab === "print") {
     loadPrintQueue();
   }
+  if (tab === "printclients") {
+    loadPrintClientsPage();
+  }
+  if (tab === "pricing") {
+    loadPricing();
+  }
   if (tab === "mypay") {
     loadMyPay();
   }
@@ -529,6 +541,8 @@ if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payrol
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
 if (tabPrintBtn) tabPrintBtn.addEventListener("click", () => showTab("print"));
+if (tabPrintClientsBtn) tabPrintClientsBtn.addEventListener("click", () => showTab("printclients"));
+if (tabPricingBtn) tabPricingBtn.addEventListener("click", () => showTab("pricing"));
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
 if (tabMyPayBtn) tabMyPayBtn.addEventListener("click", () => showTab("mypay"));
 if (tabMyInfoBtn) tabMyInfoBtn.addEventListener("click", () => showTab("myinfo"));
@@ -3258,7 +3272,42 @@ function printCellRaw(cell) {
 // instead, and the next real load reconciles everything.
 async function savePrintCell(cell, raw, revert) {
   const itemId = cell.dataset.item;
+  const productId = cell.dataset.product;
   const field = cell.dataset.field;
+
+  // a price on the pricing page: a number, or blank to clear it
+  if (productId) {
+    const text = String(raw).trim();
+    const money = text === "" || text === "—" ? "" : Number(text);
+    if (money !== "" && (!Number.isFinite(money) || money < 0)) {
+      alert("A price must be a number, zero or more.");
+      revert();
+      return;
+    }
+    const res = await fetch(`/api/print/products/${productId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: money }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.message || "Could not save that price.");
+      revert();
+      return;
+    }
+    cell.textContent = money === "" ? "—" : Number(money).toFixed(2);
+    cell.classList.add("saved");
+    setTimeout(() => cell.classList.remove("saved"), 900);
+    // the catalogue is cached, so keep it in step with what was just saved
+    if (printCatalogue) {
+      for (const list of [printCatalogue.cups, printCatalogue.lids]) {
+        const hit = list.find((x) => String(x.id) === String(productId));
+        if (hit) hit[field] = money === "" ? null : money;
+      }
+    }
+    return;
+  }
+
   const value = field === "quantity" ? Number(raw || 0) : String(raw).trim();
 
   if (field === "quantity" && (!Number.isFinite(value) || value < 0)) {
@@ -3483,18 +3532,53 @@ async function openPrintClient(clientId) {
 // ---------------------------------------------------------------------------
 
 function poItemRow() {
+  const cat = printCatalogue || { cups: [], lids: [], fits: {} };
+  const cupOptions =
+    `<option value="">Pick a cup…</option>` +
+    cat.cups.map((c) => `<option value="${c.id}">${escapeHtml(c.label)}</option>`).join("");
+
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td class="py-1 pr-2"><input class="po-label w-full border border-gray-300 rounded px-2 py-1" placeholder="Dabba 16oz" /></td>
-    <td class="py-1 pr-2"><input class="po-lid w-full border border-gray-300 rounded px-2 py-1" placeholder="Strawless" /></td>
+    <td class="py-1 pr-2"><select class="po-cup w-full border border-gray-300 rounded px-2 py-1">${cupOptions}</select></td>
+    <td class="py-1 pr-2"><select class="po-lid w-full border border-gray-300 rounded px-2 py-1" disabled><option value="">Pick a cup first</option></select></td>
     <td class="py-1 pr-2"><input class="po-qty w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="1" /></td>
     <td class="py-1 pr-2"><input class="po-unit w-full border border-gray-300 rounded px-2 py-1 text-right" type="number" min="0" step="0.01" /></td>
     <td class="py-1"><button class="po-remove text-gray-400 hover:text-red-600" aria-label="Remove">&#10005;</button></td>`;
+
+  const cupSel = tr.querySelector(".po-cup");
+  const lidSel = tr.querySelector(".po-lid");
+  const qty = tr.querySelector(".po-qty");
+  const unit = tr.querySelector(".po-unit");
+
+  // the lid list only ever offers what fits the chosen cup
+  const fillLids = () => {
+    const allowed = (cat.fits[cupSel.value] || []).map(String);
+    const options = cat.lids.filter((l) => allowed.includes(String(l.id)));
+    lidSel.disabled = !cupSel.value;
+    lidSel.innerHTML =
+      `<option value="">${cupSel.value ? "No lid" : "Pick a cup first"}</option>` +
+      options.map((l) => `<option value="${l.id}">${escapeHtml(l.family)}</option>`).join("");
+  };
+
+  const repriceUnit = () => {
+    const cup = cat.cups.find((c) => String(c.id) === cupSel.value);
+    const lid = cat.lids.find((l) => String(l.id) === lidSel.value);
+    if (!cup) return;
+    unit.value = priceFor(cup, lid, Number(qty.value || 0)).toFixed(2);
+  };
+
+  cupSel.addEventListener("change", () => {
+    fillLids();
+    repriceUnit();
+  });
+  lidSel.addEventListener("change", repriceUnit);
+  qty.addEventListener("input", repriceUnit);
   tr.querySelector(".po-remove").addEventListener("click", () => tr.remove());
   return tr;
 }
 
-function openPrintOrderForm() {
+async function openPrintOrderForm() {
+  await loadPrintCatalogue();
   document.getElementById("poClient").value = "";
   document.getElementById("poDate").value = new Date().toISOString().slice(0, 10);
   document.getElementById("poDue").value = "";
@@ -3522,18 +3606,25 @@ function closePrintOrderForm() {
 }
 
 async function savePrintOrder() {
+  const cat = printCatalogue || { cups: [], lids: [] };
   const items = [...document.querySelectorAll("#poItems tr")]
-    .map((tr) => ({
-      label: tr.querySelector(".po-label").value.trim(),
-      lid: tr.querySelector(".po-lid").value.trim(),
-      ink: document.getElementById("poInk").value.trim(),
-      quantity: Number(tr.querySelector(".po-qty").value || 0),
-      unit_price: Number(tr.querySelector(".po-unit").value || 0),
-    }))
-    .filter((i) => i.label);
+    .map((tr) => {
+      const cup = cat.cups.find((c) => String(c.id) === tr.querySelector(".po-cup").value);
+      const lid = cat.lids.find((l) => String(l.id) === tr.querySelector(".po-lid").value);
+      return {
+        product_id: cup ? cup.id : null,
+        lid_product_id: lid ? lid.id : null,
+        label: cup ? cup.label : "",
+        lid: lid ? lid.family : "",
+        ink: document.getElementById("poInk").value.trim(),
+        quantity: Number(tr.querySelector(".po-qty").value || 0),
+        unit_price: Number(tr.querySelector(".po-unit").value || 0),
+      };
+    })
+    .filter((i) => i.product_id);
 
   if (!items.length) {
-    alert("Add at least one cup line before saving.");
+    alert("Pick a cup on at least one line before saving.");
     return;
   }
 
@@ -3819,4 +3910,194 @@ if (appSwitchBtn) {
   }
   if (remembered === "payroll" && !payrollUnlocked) remembered = "admin";
   applyApp(remembered);
+}
+
+
+// ---------------------------------------------------------------------------
+// Catalogue - the cups and lids from the price list, and which lid fits
+// which cup. Loaded once and shared by the order form and the pricing page.
+// ---------------------------------------------------------------------------
+
+let printCatalogue = null;
+
+async function loadPrintCatalogue() {
+  if (printCatalogue) return printCatalogue;
+  const res = await fetch("/api/print/catalogue");
+  if (!res.ok) return null;
+  printCatalogue = await res.json();
+  return printCatalogue;
+}
+
+// what a line costs: the print tier for its quantity, plus the lid
+function priceFor(cup, lid, qty) {
+  if (!cup) return 0;
+  const tier = qty >= 1000 ? cup.print_only_1k : cup.print_only_sub1k;
+  const print = tier != null ? tier : (cup.print_only_sub1k != null ? cup.print_only_sub1k : cup.print_only_1k) || 0;
+  const lidPrice = lid ? (lid.wholesale != null ? lid.wholesale : lid.retail) || 0 : 0;
+  return Math.round((print + lidPrice) * 100) / 100;
+}
+
+// ---------------------------------------------------------------------------
+// Clients page
+// ---------------------------------------------------------------------------
+
+let printClientRows = [];
+
+async function loadPrintClientsPage() {
+  const body = document.getElementById("printClientsBody");
+  const res = await fetch("/api/print/clients?with_totals=1");
+  if (!res.ok) {
+    body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">Could not load the clients.</td></tr>`;
+    return;
+  }
+  const data = await res.json();
+  printClientRows = data.clients;
+  renderPrintClients();
+}
+
+function renderPrintClients() {
+  const q = (document.getElementById("printClientSearch").value || "").trim().toLowerCase();
+  const rows = printClientRows.filter((c) => !q || c.name.toLowerCase().includes(q));
+  const owed = rows.reduce((n, c) => n + Number(c.owed || 0), 0);
+
+  document.getElementById("printClientsSubtitle").textContent =
+    `${rows.length} client${rows.length === 1 ? "" : "s"} · ${printMoney(owed)} outstanding`;
+
+  const body = document.getElementById("printClientsBody");
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-400 italic">Nobody matches that.</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .map(
+      (c) => `
+      <tr class="hover:bg-gray-50">
+        <td class="px-3 py-2">
+          <button class="print-client-btn font-medium hover:text-brand-blue text-left" data-client="${c.id}">${escapeHtml(c.name)} &rsaquo;</button>
+        </td>
+        <td class="px-3 py-2 ${c.instagram ? "" : "text-gray-300"}">${escapeHtml(c.instagram || "—")}</td>
+        <td class="px-3 py-2 ${c.facebook ? "" : "text-gray-300"}">${escapeHtml(c.facebook || "—")}</td>
+        <td class="px-3 py-2 ${c.phone ? "" : "text-gray-300"}">${escapeHtml(c.phone || "—")}</td>
+        <td class="px-3 py-2 text-right font-mono">${c.order_count}</td>
+        <td class="px-3 py-2 text-right font-mono">${Number(c.cups || 0).toLocaleString("en-PH")}</td>
+        <td class="px-3 py-2 text-right font-mono ${Number(c.owed) > 0 ? "text-red-600" : "text-gray-300"}">${
+          Number(c.owed) > 0 ? printMoney(c.owed) : "—"
+        }</td>
+      </tr>`
+    )
+    .join("");
+
+  body.querySelectorAll(".print-client-btn").forEach((b) => {
+    b.addEventListener("click", () => openPrintClient(b.dataset.client));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cup pricing page
+// ---------------------------------------------------------------------------
+
+const PRICE_COLUMNS = [
+  ["cost", "Cost"],
+  ["retail", "Retail"],
+  ["wholesale", "Wholesale"],
+  ["print_only_1k", "Print 1000+"],
+  ["print_only_sub1k", "Print <1000"],
+  ["discounted_1k", "Disc. P0.7"],
+  ["discounted_no_min", "Disc. no min"],
+];
+
+async function loadPricing() {
+  const cat = await loadPrintCatalogue();
+  const host = document.getElementById("pricingTables");
+  if (!cat) {
+    host.innerHTML = `<p class="text-sm text-gray-500 py-8 text-center">Could not load the price list.</p>`;
+    return;
+  }
+  renderPricing();
+}
+
+function priceTable(title, items, columns, note) {
+  const q = (document.getElementById("pricingSearch").value || "").trim().toLowerCase();
+  const rows = items.filter((p) => !q || p.label.toLowerCase().includes(q));
+  if (!rows.length) return "";
+
+  // group the cups under their family so the eye can find a run of sizes
+  let lastFamily = null;
+  const body = rows
+    .map((p) => {
+      const head =
+        p.family !== lastFamily
+          ? `<tr class="bg-gray-50"><td colspan="${columns.length + 1}" class="px-3 py-1 text-[11px] font-mono uppercase tracking-wide text-gray-500">${escapeHtml(p.family)}</td></tr>`
+          : "";
+      lastFamily = p.family;
+      const cells = columns
+        .map(
+          ([key, _]) =>
+            `<td class="px-3 py-1.5 text-right">
+               <span class="print-edit price-cell font-mono" tabindex="0" role="button"
+                     data-product="${p.id}" data-field="${key}" title="Click to edit"
+                     >${p[key] == null ? "—" : Number(p[key]).toFixed(2)}</span>
+             </td>`
+        )
+        .join("");
+      return `${head}<tr class="hover:bg-gray-50">
+        <td class="px-3 py-1.5">${escapeHtml(p.size || p.family)}</td>${cells}</tr>`;
+    })
+    .join("");
+
+  return `
+    <section>
+      <div class="flex items-baseline gap-2 mb-2">
+        <h3 class="font-display font-semibold text-lg leading-none">${title}</h3>
+        <span class="text-[11px] font-mono text-gray-400">${rows.length}</span>
+        ${note ? `<span class="text-xs text-gray-400">${note}</span>` : ""}
+      </div>
+      <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+              <th class="text-left px-3 py-2">Size</th>
+              ${columns.map(([, label]) => `<th class="text-right px-3 py-2 whitespace-nowrap">${label}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">${body}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function renderPricing() {
+  const cat = printCatalogue;
+  const cols = PRICE_COLUMNS.filter(([k]) => cat.shows_cost || k !== "cost");
+  const lidCols = cols.filter(([k]) => ["cost", "retail", "wholesale"].includes(k));
+
+  document.getElementById("pricingSubtitle").textContent =
+    `${cat.cups.length} cups · ${cat.lids.length} lids`;
+
+  document.getElementById("pricingTables").innerHTML =
+    priceTable("Cups", cat.cups, cols, "") +
+    priceTable("Lids", cat.lids, lidCols, "added on top of the print price");
+
+  document.querySelectorAll("#pricingTables .print-edit").forEach((cell) => {
+    cell.addEventListener("click", () => beginPrintCellEdit(cell));
+    cell.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        beginPrintCellEdit(cell);
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+
+if (tabPrintClientsBtn) {
+  document.getElementById("printClientSearch").addEventListener("input", renderPrintClients);
+}
+if (tabPricingBtn) {
+  document.getElementById("pricingSearch").addEventListener("input", () => {
+    if (printCatalogue) renderPricing();
+  });
 }
