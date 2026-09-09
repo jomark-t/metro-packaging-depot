@@ -44,11 +44,10 @@ if not SECRET_KEY:
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_LOCKOUT_MINUTES = 15
 
-# Sessions are deliberately short-lived: the cookie is a browser-session
-# cookie (gone when the browser closes, never written to disk) and any
-# session idle for this long is dropped, so the PIN is always re-entered
-# rather than a logged-in tab being left open on the shop floor.
-SESSION_IDLE_MINUTES = 30
+# The session cookie is a browser-session cookie - gone when the browser
+# closes, never written to disk. There is deliberately no idle timeout on
+# top of that: the shop floor machine is used in long stretches and being
+# thrown back to the PIN mid-task was costing more than it protected.
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -79,6 +78,12 @@ STAFF = [
     {"name": "Macky", "full_name": "Mark Jay Siruma", "role": "Machine Operator", "category": "machine", "employment": "Permanent", "target": None, "daily_rate": 400, "pto_entitlement": 5},
     {"name": "Joshua", "full_name": "Joshua Hermida", "role": "Machine Operator", "category": "machine", "employment": "Permanent", "target": None, "daily_rate": 350, "pto_entitlement": 5},
 ]
+
+# The order categories appear in across the schedule table, the PDF and
+# the Employees list. Machine operators sit at the end because their row
+# is the fixed Mon-Fri block everyone reads last; a new sales hire lands
+# beside the other sales staff rather than after them.
+CATEGORY_ORDER = ("manager", "sales", "sales_pt", "machine")
 
 # Categories the app understands. The scheduling algorithm has behaviour
 # keyed to these, so a new employee has to be one of them.
@@ -617,12 +622,19 @@ ROSTER_FIELDS = (
 
 def fetch_roster(cur, include_archived=False):
     """Everyone currently on the books, in the order the schedule table
-    shows them (insertion order - new hires append to the right)."""
+    shows them: by CATEGORY_ORDER, then insertion order within a category.
+
+    Sorted here rather than in SQL so the one tuple above governs every
+    caller - the table, the PDF and the payroll list all come through
+    this function."""
     sql = f"SELECT {ROSTER_FIELDS} FROM staff"
     if not include_archived:
         sql += " WHERE active"
     cur.execute(sql + " ORDER BY id")
-    return [dict(r) for r in cur.fetchall()]
+    rows = [dict(r) for r in cur.fetchall()]
+    rank = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+    # an unknown category sorts after the known ones rather than crashing
+    return sorted(rows, key=lambda r: (rank.get(r["category"], len(rank)), r["id"]))
 
 
 def roster(include_archived=False):
@@ -1665,20 +1677,6 @@ def compute_thirteenth_month(db, year):
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
-def _session_expired():
-    """True if the session has been idle past SESSION_IDLE_MINUTES. Each
-    authenticated request refreshes the stamp, so this only fires on a
-    genuinely abandoned session."""
-    last_seen = session.get("last_seen")
-    if not last_seen:
-        return True
-    try:
-        idle = datetime.now() - datetime.fromisoformat(last_seen)
-    except (TypeError, ValueError):
-        return True
-    return idle > timedelta(minutes=SESSION_IDLE_MINUTES)
-
-
 # ---------------------------------------------------------------------------
 # Development-only auto-login
 #
@@ -1712,7 +1710,7 @@ def _dev_auto_login():
     """Sign in as DEV_AUTO_LOGIN when there is no session, locally only."""
     if not _dev_login_allowed():
         return None
-    if "user_id" in session and not _session_expired():
+    if "user_id" in session:
         return None
 
     cur = get_db().cursor()
@@ -1731,16 +1729,14 @@ def _dev_auto_login():
     session["display_name"] = user["display_name"]
     session["is_superuser"] = user["is_superuser"]
     session["staff_name"] = user["staff_name"]
-    session["last_seen"] = datetime.now().isoformat()
     # skip the payroll PIN too - the point is to develop without prompts.
     # Call POST /api/payroll/lock to put the lock back and exercise it.
     session["payroll_unlocked_at"] = datetime.now().isoformat()
     return None
 
 
-# How long a payroll unlock lasts. Well short of SESSION_IDLE_MINUTES on
-# purpose: the point is the shared computer in the shop, where the risk is
-# a manager walking away from an unlocked screen, not an abandoned session.
+# How long a payroll unlock lasts. The point is the shared computer in the
+# shop, where the risk is a manager walking away from an unlocked screen.
 PAYROLL_UNLOCK_MINUTES = 10
 
 # Everything under these paths needs a fresh PIN from a manager. The two
@@ -1761,7 +1757,13 @@ def payroll_unlocked():
 
     Only meaningful for managers: they are the ones who can be in the
     Admin app with payroll a click away. Everyone else has one app, so
-    there is nothing to unlock."""
+    there is nothing to unlock.
+
+    The superuser is exempt: it is the owner's own account, it is the one
+    that can already change every PIN in the app, and a second prompt on
+    the way to payroll guards nothing it does not already hold."""
+    if session.get("is_superuser"):
+        return True
     if not is_manager():
         return True
     stamp = session.get("payroll_unlocked_at")
@@ -1801,12 +1803,6 @@ def login_required(view):
             if request.path.startswith("/api/"):
                 return jsonify({"status": "error", "message": "Login required"}), 401
             return redirect(url_for("login_page"))
-        if _session_expired():
-            session.clear()
-            if request.path.startswith("/api/"):
-                return jsonify({"status": "error", "message": "Session expired - please log in again"}), 401
-            return redirect(url_for("login_page"))
-        session["last_seen"] = datetime.now().isoformat()
         return view(*args, **kwargs)
 
     return wrapped
@@ -1885,7 +1881,7 @@ def superuser_required(view):
 
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
-    if "user_id" in session and not _session_expired():
+    if "user_id" in session:
         return redirect(url_for("index"))
     session.clear()
 
@@ -1920,7 +1916,6 @@ def login_page():
             session["display_name"] = user["display_name"]
             session["is_superuser"] = user["is_superuser"]
             session["staff_name"] = user["staff_name"]
-            session["last_seen"] = datetime.now().isoformat()
             # a browser-session cookie, not a persistent one - closing the
             # browser ends the session and the PIN is required again
             session.permanent = False
@@ -2105,6 +2100,9 @@ def api_staff_list():
         row = dict(r)
         row["archived_at"] = row["archived_at"].isoformat() if row["archived_at"] else None
         rows.append(row)
+    # same grouping as the schedule table, with leavers still last
+    rank = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+    rows.sort(key=lambda r: (not r["active"], rank.get(r["category"], len(rank))))
     # a list, not the dict - jsonify sorts object keys, which would put
     # "machine" first and make Machine Operator the default choice
     categories = [{"value": value, "label": label} for value, label in STAFF_CATEGORIES.items()]

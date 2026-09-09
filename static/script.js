@@ -3976,7 +3976,10 @@ const APP_HOME = { payroll: "dashboard", admin: "print" };
 let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't
 // re-prompt, and an expired one does
-let payrollUnlocked = document.body.dataset.payrollUnlocked === "1";
+// The superuser never has to unlock payroll, so the flag is sticky for
+// them - leaving the app must not arm the PIN prompt again.
+const payrollAlwaysUnlocked = document.body.dataset.superuser === "1";
+let payrollUnlocked = payrollAlwaysUnlocked || document.body.dataset.payrollUnlocked === "1";
 let pendingApp = null; // the app to enter once the PIN lands
 
 function appTabButtons(app) {
@@ -4022,7 +4025,7 @@ function switchApp(app) {
     openPayrollLock();
     return;
   }
-  if (app === "admin" && payrollUnlocked) {
+  if (app === "admin" && payrollUnlocked && !payrollAlwaysUnlocked) {
     // leaving payroll drops the unlock, so coming back asks again
     fetch("/api/payroll/lock", { method: "POST" }).catch(() => {});
     payrollUnlocked = false;
