@@ -446,8 +446,12 @@ const tabPayrollBtn = document.getElementById("tabPayrollBtn");
 const tabEmployeesBtn = document.getElementById("tabEmployeesBtn");
 const tabActivityBtn = document.getElementById("tabActivityBtn");
 const activityView = document.getElementById("activityView");
+const tabStatusBtn = document.getElementById("tabStatusBtn");
+const statusView = document.getElementById("statusView");
 const tabPrintBtn = document.getElementById("tabPrintBtn");
 const printView = document.getElementById("printView");
+const tabCupPrintsBtn = document.getElementById("tabCupPrintsBtn");
+const cupPrintsView = document.getElementById("cupPrintsView");
 const tabPrintClientsBtn = document.getElementById("tabPrintClientsBtn");
 const printClientsView = document.getElementById("printClientsView");
 const tabPricingBtn = document.getElementById("tabPricingBtn");
@@ -475,7 +479,9 @@ if (tabLeaveBtn) TABS.leave = { btn: tabLeaveBtn, view: leaveView, controls: nul
 if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, controls: payrollControls };
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
+if (tabStatusBtn) TABS.status = { btn: tabStatusBtn, view: statusView, controls: null };
 if (tabPrintBtn) TABS.print = { btn: tabPrintBtn, view: printView, controls: null };
+if (tabCupPrintsBtn) TABS.cupprints = { btn: tabCupPrintsBtn, view: cupPrintsView, controls: null };
 if (tabPrintClientsBtn) TABS.printclients = { btn: tabPrintClientsBtn, view: printClientsView, controls: null };
 if (tabPricingBtn) TABS.pricing = { btn: tabPricingBtn, view: pricingView, controls: null };
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
@@ -509,8 +515,14 @@ function showTab(tab) {
   if (tab === "admin") {
     loadAdminUsers();
   }
+  if (tab === "status") {
+    loadStatusBoard();
+  }
   if (tab === "print") {
     loadPrintQueue();
+  }
+  if (tab === "cupprints") {
+    loadCupPrints();
   }
   if (tab === "printclients") {
     loadPrintClientsPage();
@@ -540,7 +552,9 @@ if (tabLeaveBtn) tabLeaveBtn.addEventListener("click", () => showTab("leave"));
 if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payroll"));
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
+if (tabStatusBtn) tabStatusBtn.addEventListener("click", () => showTab("status"));
 if (tabPrintBtn) tabPrintBtn.addEventListener("click", () => showTab("print"));
+if (tabCupPrintsBtn) tabCupPrintsBtn.addEventListener("click", () => showTab("cupprints"));
 if (tabPrintClientsBtn) tabPrintClientsBtn.addEventListener("click", () => showTab("printclients"));
 if (tabPricingBtn) tabPricingBtn.addEventListener("click", () => showTab("pricing"));
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
@@ -2767,6 +2781,11 @@ const PRINT_DEFAULTS = {
 let printState = loadPrintPrefs();
 let printOrders = [];
 let printClients = [];
+// Cups, lids, and which lids fit which cup - declared early because the
+// app-switcher setup (near the bottom of this file) can synchronously
+// chain into code that reads this on a cold load, before a declaration
+// placed near where it's used would be done with its temporal dead zone.
+let printCatalogue = null;
 
 function loadPrintPrefs() {
   try {
@@ -3547,6 +3566,434 @@ async function loadPrintQueue() {
 }
 
 // ---------------------------------------------------------------------------
+// Status board - the landing tab. Four buckets by how far along an order
+// is (not started / ongoing / done / done & paid), a compact card per
+// order, drag between columns or click a line's status to move it along.
+//
+// Shares its data with Cup Prints (both read the "all" view so finished
+// and cancelled work is visible too, unlike the Board's default "open"
+// filter) but keeps its own copy rather than printOrders - the Board's
+// list is filtered by printState.view and would be the wrong shape here.
+// ---------------------------------------------------------------------------
+
+let printAllOrders = [];
+let statusQuery = "";
+const statusExpanded = new Set(); // order ids currently expanded
+
+const STATUS_COLUMNS = [
+  { key: "not_started", label: "Not started", dot: "#9ca3af" },
+  { key: "ongoing", label: "Ongoing", dot: "#1c33bb" },
+  { key: "done", label: "Done", dot: "#07c067" },
+  { key: "done_paid", label: "Done & paid", dot: "#b88c53" },
+];
+
+// The API already rolls a whole order up to one status (ongoing wins over
+// partial wins over not-started, done only once every line is) - reuse
+// that rather than re-deriving it from the lines here. Cancelled orders
+// sit outside all four buckets, the same way "open" already excludes them.
+function statusBucket(o) {
+  if (o.status === "done") return o.is_paid ? "done_paid" : "done";
+  if (o.status === "ongoing" || o.status === "partial") return "ongoing";
+  if (o.status === "not_started") return "not_started";
+  return null;
+}
+
+async function fetchAllPrintOrders() {
+  const res = await fetch("/api/print/orders?view=all");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "Could not load the print queue.");
+  }
+  const data = await res.json();
+  printAllOrders = data.orders;
+  return data;
+}
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || "That didn't save.");
+  }
+}
+
+async function setItemStatus(itemId, status) {
+  await postJSON(`/api/print/items/${itemId}`, { status });
+}
+
+async function setOrderPaid(orderId, isPaid) {
+  await postJSON(`/api/print/orders/${orderId}`, { is_paid: isPaid });
+}
+
+// Dragging a card onto a column bulk-sets every line on the order to
+// match, and done & paid marks it paid in the same move - the four
+// columns are meant to be a complete description of the order, not just
+// its first line.
+async function applyStatusBucket(order, bucketKey) {
+  const lineStatus = bucketKey === "not_started" ? "not_started" : bucketKey === "ongoing" ? "ongoing" : "done";
+  await Promise.all(order.items.map((i) => setItemStatus(i.id, lineStatus)));
+  await setOrderPaid(order.id, bucketKey === "done_paid");
+}
+
+async function loadStatusBoard() {
+  const board = document.getElementById("statusBoard");
+  try {
+    await fetchAllPrintOrders();
+  } catch (err) {
+    board.innerHTML = `<p class="text-sm text-gray-500 py-10 text-center">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  renderStatusBoard();
+}
+
+function statusCardHTML(o) {
+  const bucket = statusBucket(o);
+  const isOpen = statusExpanded.has(o.id);
+  const linesHTML = o.items
+    .map((i) => {
+      const lid = i.lid_label && i.lid_label !== "—" ? ` <span class="text-gray-400">&middot; ${escapeHtml(i.lid_label)}</span>` : "";
+      return `
+        <div class="flex items-center gap-2">
+          <span class="flex-1 min-w-0 truncate">${escapeHtml(i.label || "")}${lid}</span>
+          <span class="font-mono text-[11px] text-gray-400 shrink-0">${Number(i.quantity).toLocaleString("en-PH")}</span>
+          <button type="button" class="kb-line-pill print-chip shrink-0 ${PRINT_STATUS_TONE[i.status] || ""}"
+                  data-item="${i.id}" data-status="${i.status}">${escapeHtml(PRINT_STATUS_LABEL[i.status] || i.status)}</button>
+        </div>`;
+    })
+    .join("");
+
+  let payRow = "";
+  if (bucket === "done" || bucket === "done_paid") {
+    const paid = bucket === "done_paid";
+    payRow = `
+      <div class="flex justify-end">
+        <button type="button" class="kb-pay-btn text-[11px] font-mono uppercase tracking-wide rounded-lg px-2.5 py-1 ${paid ? "is-paid" : "text-gray-400"}"
+                data-paytoggle="${o.id}">${paid ? "Paid ✓" : "Mark paid"}</button>
+      </div>`;
+  }
+
+  return `
+    <article class="kb-card bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" draggable="true" data-order-card="${o.id}">
+      <button type="button" class="kb-card-face flex items-center gap-2.5 w-full text-left px-2.5 py-2" data-toggle="${o.id}">
+        ${printLogo(o.client_name, false, o.logo_filename)}
+        <span class="flex-1 min-w-0 font-display font-semibold text-[14px] leading-tight truncate">${escapeHtml(o.client_name)}</span>
+        <svg class="kb-card-chevron shrink-0 text-gray-400" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="kb-card-details"><div><div class="px-2.5 pb-2.5 flex flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-[11px] text-gray-500"><b class="text-gray-900 font-semibold">${Number(o.quantity).toLocaleString("en-PH")}</b> cups</span>
+          ${o.due_date ? printChip(`Due ${printShortDate(o.due_date)}`, "bg-gray-50 text-gray-500 border-gray-200") : ""}
+          ${o.is_rush ? printChip("Rush", "bg-red-50 text-red-600 border-red-200") : ""}
+          ${o.needs_new_frame ? printChip("New logo", "bg-amber-50 text-amber-700 border-amber-200") : ""}
+        </div>
+        <div class="flex flex-col gap-1 text-[12.5px] border-t border-gray-100 pt-2">${linesHTML}</div>
+        ${o.remarks ? `<p class="text-[11.5px] text-gray-600 italic bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>` : ""}
+        ${payRow}
+      </div></div></div>
+    </article>`;
+}
+
+function renderStatusBoard() {
+  const q = statusQuery.trim().toLowerCase();
+  const visible = printAllOrders.filter((o) => !q || o.client_name.toLowerCase().includes(q));
+
+  document.getElementById("statusSubtitle").textContent =
+    `${visible.filter((o) => statusBucket(o) && statusBucket(o) !== "done_paid").length} open job${visible.length === 1 ? "" : "s"} · drag a card, or click it open`;
+
+  const board = document.getElementById("statusBoard");
+  board.innerHTML = STATUS_COLUMNS.map((col) => {
+    const list = visible.filter((o) => statusBucket(o) === col.key);
+    const cups = list.reduce((s, o) => s + o.quantity, 0);
+    const body = list.length
+      ? list.map(statusCardHTML).join("")
+      : `<p class="text-xs text-gray-400 italic border border-dashed border-gray-300 rounded-lg text-center py-4 px-2">Nothing here${q ? ` for "${escapeHtml(statusQuery.trim())}"` : ""}.</p>`;
+    return `
+      <div class="kb-col shrink-0" style="width:17rem">
+        <div class="flex items-center gap-2 px-3 pt-3 pb-2">
+          <span class="w-2 h-2 rounded-full shrink-0" style="background:${col.dot}"></span>
+          <h3 class="text-[14.5px] font-semibold flex-1 min-w-0">${col.label}</h3>
+          <span class="text-[11px] font-mono font-semibold bg-white/70 rounded-full px-2 py-0.5">${list.length}</span>
+        </div>
+        <p class="text-[11px] font-mono text-gray-400 px-3 -mt-1 mb-1">${cups ? Number(cups).toLocaleString("en-PH") + " cups" : "—"}</p>
+        <div class="kb-col-body px-2 pb-2" data-bucket="${col.key}">${body}</div>
+      </div>`;
+  }).join("");
+
+  wireStatusBoard();
+}
+
+// FLIP: capture where every card sits before a mutation, apply it, wait
+// for the server, re-render, then animate each surviving card from its
+// old spot to its new one - covers the card that moved and any
+// neighbours that shift to fill the gap.
+async function withStatusFlip(mutate) {
+  const board = document.getElementById("statusBoard");
+  const before = {};
+  board.querySelectorAll("[data-order-card]").forEach((el) => {
+    before[el.dataset.orderCard] = el.getBoundingClientRect();
+  });
+
+  try {
+    await mutate();
+    await fetchAllPrintOrders();
+  } catch (err) {
+    alert(err.message || "Could not update that order.");
+  }
+  renderStatusBoard();
+
+  requestAnimationFrame(() => {
+    document.querySelectorAll("[data-order-card]").forEach((el) => {
+      const prev = before[el.dataset.orderCard];
+      if (!prev) return;
+      const next = el.getBoundingClientRect();
+      const dx = prev.left - next.left, dy = prev.top - next.top;
+      if (!dx && !dy) return;
+      el.style.transition = "none";
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+      requestAnimationFrame(() => {
+        el.style.transition = "transform .3s cubic-bezier(.2,.8,.2,1)";
+        el.style.transform = "";
+      });
+    });
+  });
+}
+
+function wireStatusBoard() {
+  const board = document.getElementById("statusBoard");
+
+  // expand / collapse - a plain class toggle, never through a re-render,
+  // so the grid-rows transition has a real "before" state to animate from
+  board.querySelectorAll("[data-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.toggle;
+      const card = btn.closest(".kb-card");
+      if (card.classList.toggle("expanded")) statusExpanded.add(id);
+      else statusExpanded.delete(id);
+    });
+  });
+
+  board.querySelectorAll("[data-item][data-status]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const next = { not_started: "ongoing", ongoing: "done", done: "not_started" }[btn.dataset.status] || "ongoing";
+      withStatusFlip(() => setItemStatus(btn.dataset.item, next));
+    });
+  });
+
+  board.querySelectorAll("[data-paytoggle]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const order = printAllOrders.find((o) => String(o.id) === btn.dataset.paytoggle);
+      if (order) withStatusFlip(() => setOrderPaid(order.id, !order.is_paid));
+    });
+  });
+
+  board.querySelectorAll(".kb-card").forEach((card) => {
+    card.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", card.dataset.orderCard);
+      e.dataTransfer.effectAllowed = "move";
+      requestAnimationFrame(() => card.classList.add("dragging"));
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+  });
+
+  board.querySelectorAll(".kb-col-body").forEach((zone) => {
+    zone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      zone.classList.add("drag-over");
+    });
+    zone.addEventListener("dragleave", (e) => {
+      if (!zone.contains(e.relatedTarget)) zone.classList.remove("drag-over");
+    });
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.classList.remove("drag-over");
+      const id = e.dataTransfer.getData("text/plain");
+      const order = printAllOrders.find((o) => String(o.id) === id);
+      if (!order || statusBucket(order) === zone.dataset.bucket) return;
+      withStatusFlip(() => applyStatusBucket(order, zone.dataset.bucket));
+    });
+  });
+}
+
+if (document.getElementById("statusSearch")) {
+  document.getElementById("statusSearch").addEventListener("input", (e) => {
+    statusQuery = e.target.value;
+    renderStatusBoard();
+  });
+}
+if (document.getElementById("statusNewBtn")) {
+  document.getElementById("statusNewBtn").addEventListener("click", openPrintOrderForm);
+}
+
+// ---------------------------------------------------------------------------
+// Cup Prints - a spreadsheet over the same orders, shaped like the sheet
+// this app replaced: one row per cup line, an order's shared fields
+// (date, deadline, client, new logo, paid, remarks) spanning its rows.
+// ---------------------------------------------------------------------------
+
+let cupPrintsQuery = "";
+
+const CUP_COLOR_HEX = {
+  Black: "#1c1c1c", White: "#9096b3", Orange: "#c2600e", Red: "#c23b3b",
+  "Kraft (Brown)": "#8a5a34", Grey: "#6b7280", Green: "#1f7a45", Blue: "#2d5fd6",
+};
+
+async function loadCupPrints() {
+  const body = document.getElementById("cupPrintsBody");
+  try {
+    await fetchAllPrintOrders();
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
+    return;
+  }
+  renderCupPrints();
+}
+
+function cupColorCellHTML(name) {
+  if (!name) return `<span class="text-gray-300">—</span>`;
+  const hex = CUP_COLOR_HEX[name] || "#565c7b";
+  return `<span class="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style="background:${hex};box-shadow:inset 0 0 0 1px rgba(0,0,0,.14)"></span>` +
+         `<span class="font-semibold text-[12px] align-middle" style="color:${hex}">${escapeHtml(name)}</span>`;
+}
+
+function cupYesNoSelect(kind, orderId, current) {
+  const cls = kind === "logo" ? "cps-sel-logo" : `cps-sel-paid ${current ? "v-yes" : "v-no"}`;
+  const val = current ? "Yes" : "No";
+  return `<select class="cps-select ${cls}" data-kind="${kind}" data-order="${orderId}">` +
+    ["Yes", "No"].map((o) => `<option${o === val ? " selected" : ""}>${o}</option>`).join("") +
+    `</select>`;
+}
+
+function cupStatusSelect(orderId, itemId, current) {
+  const opts = [["not_started", "Not Started"], ["ongoing", "Ongoing"], ["done", "Done"]];
+  const known = opts.some((p) => p[0] === current) ? current : "not_started";
+  return `<select class="cps-select cps-sel-status st-${known}" data-kind="status" data-order="${orderId}" data-item="${itemId}">` +
+    opts.map((p) => `<option value="${p[0]}"${p[0] === current ? " selected" : ""}>${p[1]}</option>`).join("") +
+    `</select>`;
+}
+
+function cupRemarksHTML(o) {
+  const has = !!o.remarks;
+  return `<span class="cps-remarks${has ? "" : " is-empty"}" data-remarks="${o.id}" tabindex="0" role="button">${
+    has ? escapeHtml(o.remarks) : "add a note"
+  }</span>`;
+}
+
+function cupPrintsRowsHTML(list) {
+  const out = [];
+  list.forEach((o, gi) => {
+    o.items.forEach((i, li) => {
+      const first = li === 0;
+      const cells = [];
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-mono text-[11px] text-gray-500 whitespace-nowrap">${printShortDate(o.order_date)}</td>`);
+      if (first) {
+        const rush = o.is_rush ? `<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 ml-1.5 align-middle" title="Rush"></span>` : "";
+        cells.push(`<td rowspan="${o.items.length}" class="whitespace-nowrap">${o.due_date ? printShortDate(o.due_date) : "—"}${rush}</td>`);
+      }
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-display font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}</td>`);
+      cells.push(`<td class="font-medium whitespace-nowrap">${escapeHtml(i.label || "")}</td>`);
+      cells.push(`<td class="text-gray-500 whitespace-nowrap">${escapeHtml(i.lid_label && i.lid_label !== "—" ? i.lid_label : "—")}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
+      cells.push(`<td class="font-mono text-right whitespace-nowrap">${Number(i.quantity).toLocaleString("en-PH")}</td>`);
+      cells.push(`<td class="whitespace-nowrap">${cupColorCellHTML(i.cup_color)}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("paid", o.id, o.is_paid)}</td>`);
+      cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}" style="max-width:12rem">${cupRemarksHTML(o)}</td>`);
+      out.push(`<tr class="${first && gi > 0 ? "group-start" : ""}">${cells.join("")}</tr>`);
+    });
+    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="11"></td></tr>`);
+  });
+  return out.join("");
+}
+
+function renderCupPrints() {
+  const q = cupPrintsQuery.trim().toLowerCase();
+  const visible = printAllOrders
+    .filter((o) => !q || o.client_name.toLowerCase().includes(q))
+    .slice()
+    .sort((a, b) => (a.order_date < b.order_date ? 1 : a.order_date > b.order_date ? -1 : 0)); // newest first
+
+  document.getElementById("cupPrintsBody").innerHTML = visible.length
+    ? cupPrintsRowsHTML(visible)
+    : `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
+
+  const total = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + i.quantity * Number(i.unit_price || 0), 0), 0);
+  document.getElementById("cupPrintsTotal").textContent = printMoney(total);
+
+  wireCupPrints();
+}
+
+function wireCupPrints() {
+  const body = document.getElementById("cupPrintsBody");
+
+  body.querySelectorAll("select.cps-select").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const orderId = sel.dataset.order;
+      const kind = sel.dataset.kind;
+      try {
+        if (kind === "logo") await postJSON(`/api/print/orders/${orderId}`, { needs_new_frame: sel.value === "Yes" });
+        else if (kind === "paid") await postJSON(`/api/print/orders/${orderId}`, { is_paid: sel.value === "Yes" });
+        else if (kind === "status") await setItemStatus(sel.dataset.item, sel.value);
+        await fetchAllPrintOrders();
+      } catch (err) {
+        alert(err.message || "Could not update that order.");
+      }
+      renderCupPrints();
+    });
+  });
+
+  body.querySelectorAll("[data-remarks]").forEach((span) => {
+    function edit() {
+      const order = printAllOrders.find((o) => String(o.id) === span.dataset.remarks);
+      const input = document.createElement("input");
+      input.className = "print-cell-input w-full text-[11px]";
+      input.value = (order && order.remarks) || "";
+      span.replaceWith(input);
+      input.focus();
+      input.select();
+      let committed = false;
+      async function commit() {
+        if (committed) return;
+        committed = true;
+        const val = input.value.trim();
+        if (val !== ((order && order.remarks) || "")) {
+          try {
+            await postJSON(`/api/print/orders/${order.id}`, { remarks: val });
+            await fetchAllPrintOrders();
+          } catch (err) {
+            alert(err.message || "Could not save that note.");
+          }
+        }
+        renderCupPrints();
+      }
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") input.blur();
+        if (e.key === "Escape") { committed = true; renderCupPrints(); }
+      });
+    }
+    span.addEventListener("click", edit);
+    span.addEventListener("keydown", (e) => { if (e.key === "Enter") edit(); });
+  });
+}
+
+if (document.getElementById("cupPrintsSearch")) {
+  document.getElementById("cupPrintsSearch").addEventListener("input", (e) => {
+    cupPrintsQuery = e.target.value;
+    renderCupPrints();
+  });
+}
+if (document.getElementById("cupPrintsNewBtn")) {
+  document.getElementById("cupPrintsNewBtn").addEventListener("click", openPrintOrderForm);
+}
+
+// ---------------------------------------------------------------------------
 // Client drawer
 // ---------------------------------------------------------------------------
 
@@ -3736,6 +4183,7 @@ function poItemRow() {
     <td class="py-1 pr-2">
       <select class="po-cup w-full border border-gray-300 rounded px-2 py-1">${cupOptions}</select>
       <select class="po-cup-colour w-full border border-gray-200 rounded px-2 py-1 mt-1 text-xs hidden"></select>
+      <input class="po-cup-colour-text w-full border border-gray-200 rounded px-2 py-1 mt-1 text-xs hidden" placeholder="Cup colour (optional)" />
     </td>
     <td class="py-1 pr-2"><select class="po-lid w-full border border-gray-300 rounded px-2 py-1" disabled><option value="">Pick a cup first</option></select></td>
     <td class="py-1 pr-2"><input class="po-ink w-full border border-gray-300 rounded px-2 py-1" placeholder="Black" list="poInkList" /></td>
@@ -3756,13 +4204,21 @@ function poItemRow() {
       options.map((l) => `<option value="${l.id}">${escapeHtml(l.family)}</option>`).join("");
   };
 
+  // Most cups don't have a fixed colour list - only Double Wall does - so
+  // for everything else this falls back to free text rather than hiding
+  // colour away until someone edits the card after the order is saved.
   const colourSel = tr.querySelector(".po-cup-colour");
+  const colourText = tr.querySelector(".po-cup-colour-text");
   const fillColours = () => {
     const options = printCupColours(cupSel.value);
-    colourSel.classList.toggle("hidden", !options.length);
+    const hasList = options.length > 0;
+    colourSel.classList.toggle("hidden", !hasList);
+    colourText.classList.toggle("hidden", hasList || !cupSel.value);
     colourSel.innerHTML =
       `<option value="">Cup colour…</option>` +
       options.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+    if (hasList) colourText.value = "";
+    else colourSel.value = "";
   };
 
   cupSel.addEventListener("change", () => {
@@ -3826,7 +4282,9 @@ async function savePrintOrder() {
         // ink is per line: one order can print different colours on
         // different cups
         ink: tr.querySelector(".po-ink").value.trim(),
-        cup_color: tr.querySelector(".po-cup-colour").value.trim(),
+        // whichever control is live for this cup - the dropdown for
+        // Double Wall's fixed list, free text for everything else
+        cup_color: (tr.querySelector(".po-cup-colour").value || tr.querySelector(".po-cup-colour-text").value).trim(),
         quantity: Number(tr.querySelector(".po-qty").value || 0),
       };
     })
@@ -3969,9 +4427,9 @@ const appMenu = document.getElementById("appMenu");
 const appLabel = document.getElementById("appLabel");
 const payrollLockModal = document.getElementById("payrollLockModal");
 
-const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Admin" };
+const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing" };
 // where each app opens: the first thing you want to see in it
-const APP_HOME = { payroll: "dashboard", admin: "print" };
+const APP_HOME = { payroll: "dashboard", admin: "status" };
 
 let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't
@@ -4128,9 +4586,16 @@ if (appSwitchBtn) {
 // ---------------------------------------------------------------------------
 // Catalogue - the cups and lids from the price list, and which lid fits
 // which cup. Loaded once and shared by the order form and the pricing page.
+//
+// The variable itself is declared way up near printOrders/printClients,
+// not here - the app-switcher setup below reads the last-used app from
+// localStorage and, for a remembered "admin" app, synchronously chains
+// into loadPrintQueue() -> loadPrintCatalogue() before the script has
+// finished its first pass. A `let` declared here would still be in its
+// temporal dead zone at that point, throwing "Cannot access
+// 'printCatalogue' before initialization" on every cold load that lands
+// on Cup Printing.
 // ---------------------------------------------------------------------------
-
-let printCatalogue = null;
 
 async function loadPrintCatalogue() {
   if (printCatalogue) return printCatalogue;

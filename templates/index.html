@@ -160,6 +160,53 @@
      native popup that browsers render with its own (usually white)
      background - inheriting that white text made options unreadable. */
   select option { color: #111827; background: #ffffff; }
+
+  /* Status board: one column per bucket, a compact card per order. */
+  .kb-col { background: #e4e7f3; border-radius: 14px; display: flex; flex-direction: column; min-height: 20rem; max-height: calc(100vh - 15rem); }
+  .kb-col-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; }
+  .kb-col-body.drag-over { background-color: rgba(28,51,187,.08); }
+  .kb-card { cursor: grab; }
+  .kb-card:active { cursor: grabbing; }
+  .kb-card.dragging { opacity: .35; }
+  .kb-card-chevron { transition: transform .2s ease; }
+  .kb-card.expanded .kb-card-chevron { transform: rotate(180deg); }
+  /* the expand/collapse animation: 0fr->1fr rather than a max-height
+     guess, so it always lands on the content's real height */
+  .kb-card-details { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s cubic-bezier(.4,0,.2,1); }
+  .kb-card.expanded .kb-card-details { grid-template-rows: 1fr; }
+  .kb-card-details > div { overflow: hidden; }
+  .kb-line-pill { border: none; }
+  .kb-line-pill:hover { filter: brightness(.96); }
+  .kb-pay-btn { border: 1px solid #e5e7eb; }
+  .kb-pay-btn:hover { border-color: #b88c53; color: #8a6636; }
+  .kb-pay-btn.is-paid { background: #f6ecdb; border-color: #e4cda3; color: #8a6636; }
+
+  /* Cup Prints: a spreadsheet over the same orders. Every row's own top
+     border marks a new order's block now that there's no colour band. */
+  .cps-table { width: 100%; border-collapse: collapse; min-width: 62rem; }
+  .cps-table thead th {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .06em; font-weight: 600; color: #6b7280; text-align: left;
+    padding: .55rem .6rem; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; white-space: nowrap;
+  }
+  .cps-table thead th.r { text-align: right; }
+  .cps-table td { padding: .45rem .6rem; font-size: .8rem; border-bottom: 1px solid #f3f4f6; vertical-align: middle; background: #fff; }
+  .cps-table tr.group-start td { border-top: 1px solid #e5e7eb; }
+  .cps-table tr.spacer td { height: 6px; padding: 0; border: none; background: #eef0f7; }
+  .cps-select {
+    font-size: 11px; font-weight: 600; border: none; border-radius: 7px;
+    padding: .25rem 1.3rem .25rem .55rem; appearance: none; -webkit-appearance: none; cursor: pointer; white-space: nowrap;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%237a80a0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>');
+    background-repeat: no-repeat; background-position: right .4rem center; background-size: 9px;
+  }
+  .cps-sel-logo { background-color: #eef0fc; color: #15268f; }
+  .cps-sel-paid.v-yes { background-color: #e4f9ee; color: #067a48; }
+  .cps-sel-paid.v-no { background-color: #f3f4f6; color: #4b5563; }
+  .cps-sel-status.st-not_started { background-color: #f3f4f6; color: #4b5563; }
+  .cps-sel-status.st-ongoing { background-color: #eef0fc; color: #15268f; }
+  .cps-sel-status.st-done { background-color: #e4f9ee; color: #067a48; }
+  .cps-remarks { font-size: 11px; font-style: italic; color: #6b7280; cursor: text; display: block; max-width: 12rem; }
+  .cps-remarks.is-empty { color: #b0b5c9; }
 </style>
 </head>
 <body class="bg-[#F3F4F8] text-black" data-payroll-unlocked="{{ 1 if current_user.payroll_unlocked else 0 }}" data-superuser="{{ 1 if current_user.is_superuser else 0 }}">
@@ -196,8 +243,8 @@
         </button>
         <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="admin">
           <span class="flex-1">
-            <span class="block text-sm text-gray-900">Admin</span>
-            <span class="block text-[11px] text-gray-400">Cup printing and clients</span>
+            <span class="block text-sm text-gray-900">Cup Printing</span>
+            <span class="block text-[11px] text-gray-400">Status, orders and clients</span>
           </span>
           <span class="app-tick text-brand-blue hidden">&#10003;</span>
         </button>
@@ -274,9 +321,12 @@
       {% if current_user.is_manager %}
       <button id="tabEmployeesBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
       {% endif %}
-      {# Cup printing - the order book for the printing side of the shop. #}
+      {# Cup printing - the order book for the printing side of the shop.
+         Status is the landing tab: what needs doing, at a glance. #}
       {% if current_user.is_manager %}
+      <button id="tabStatusBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Status</button>
       <button id="tabPrintBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button>
+      <button id="tabCupPrintsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Prints</button>
       <button id="tabPrintClientsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Clients</button>
       <button id="tabPricingBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Pricing</button>
       {% endif %}
@@ -648,8 +698,61 @@
     </div>
   </div>
 
-  {# Cup printing. Manager-only, so the markup isn't sent to anyone else. #}
+  {# Status board - the landing tab for Cup Printing: what needs doing,
+     at a glance, grouped by how far along it is rather than by day or
+     by client. Manager-only, so the markup isn't sent to anyone else. #}
   {% if current_user.is_manager %}
+  <div id="statusView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Status</h2>
+        <p id="statusSubtitle" class="text-sm text-gray-500">Every open job, grouped by how far along it is.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="statusSearch" type="search" placeholder="Search a client…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-48" />
+        <button id="statusNewBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New order</button>
+      </div>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Drag a card to another column, or click one open — a line's status pill cycles on click, and a fully-done card moves itself.</p>
+    <div id="statusBoard" class="flex gap-3 overflow-x-auto pb-2"></div>
+  </div>
+
+  {# Cup Prints - a spreadsheet over every order, the way the sheet this
+     app replaced used to read. #}
+  <div id="cupPrintsView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Cup Prints</h2>
+        <p class="text-sm text-gray-500">Every order, one row per cup line, newest first.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="cupPrintsSearch" type="search" placeholder="Search a client…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-48" />
+        <button id="cupPrintsNewBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New order</button>
+      </div>
+    </div>
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div class="bg-brand-blue text-white px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+        <h3 class="font-display font-semibold text-base">Cup Prints</h3>
+        <div class="text-right">
+          <p class="text-[9px] uppercase tracking-wide text-white/60 font-semibold mb-0.5">Order value shown</p>
+          <p id="cupPrintsTotal" class="font-mono text-base font-semibold"></p>
+        </div>
+      </div>
+      <div class="overflow-auto" style="max-height: calc(100vh - 19rem)">
+        <table class="cps-table">
+          <thead>
+            <tr>
+              <th>Date</th><th>Deadline</th><th>Client</th><th>Item</th><th>Lid</th><th>New logo</th>
+              <th class="r">Qty</th><th>Color</th><th>Paid</th><th>Status</th><th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody id="cupPrintsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {# Cup printing. Manager-only, so the markup isn't sent to anyone else. #}
   <div id="printView" style="display:none">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
