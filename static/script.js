@@ -3723,7 +3723,7 @@ function renderStatusBoard() {
       ? list.map(statusCardHTML).join("")
       : `<p class="text-xs text-gray-400 italic border border-dashed border-gray-300 rounded-lg text-center py-4 px-2">Nothing here${q ? ` for "${escapeHtml(statusQuery.trim())}"` : ""}.</p>`;
     return `
-      <div class="kb-col shrink-0" style="width:17rem">
+      <div class="kb-col shrink-0" style="width:22rem">
         <div class="flex items-center gap-2 px-3 pt-3 pb-2">
           <span class="w-2 h-2 rounded-full shrink-0" style="background:${col.dot}"></span>
           <h3 class="text-[14.5px] font-semibold flex-1 min-w-0">${col.label}</h3>
