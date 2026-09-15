@@ -4228,6 +4228,10 @@ async function openPrintClient(clientId) {
 // ---------------------------------------------------------------------------
 
 let poClientActiveIndex = -1;
+// Set right before the form's own opening .focus() call, so that one
+// programmatic focus doesn't pop the dropdown - every focus after it
+// (a click, tabbing back in) still does.
+let poSuppressNextClientFocus = false;
 
 // Ranked by order_count so the clients actually being printed for
 // surface first - on an empty query that's "who orders the most",
@@ -4408,6 +4412,10 @@ async function openPrintOrderForm() {
   const modal = document.getElementById("printOrderModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
+  // focus the field so typing works right away, but the dropdown itself
+  // waits for a deliberate focus (a click, a tab back in) rather than
+  // popping open the moment the form does
+  poSuppressNextClientFocus = true;
   document.getElementById("poClient").focus();
 }
 
@@ -4547,7 +4555,13 @@ if (tabPrintBtn) {
   });
 
   const poClientInput = document.getElementById("poClient");
-  poClientInput.addEventListener("focus", renderPoClientDropdown);
+  poClientInput.addEventListener("focus", () => {
+    if (poSuppressNextClientFocus) {
+      poSuppressNextClientFocus = false;
+      return;
+    }
+    renderPoClientDropdown();
+  });
   poClientInput.addEventListener("input", renderPoClientDropdown);
   poClientInput.addEventListener("blur", () => {
     // a short delay so a mousedown pick (which preventDefaults) still
