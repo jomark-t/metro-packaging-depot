@@ -3627,7 +3627,7 @@ async function postJSON(url, body) {
 // picker - needs to refresh whichever others exist in the DOM. Cheap
 // enough: a handful of small GETs, called only after something changed.
 function refreshAllPrintViews() {
-  loadPrintQueue();
+  if (document.getElementById("tabPrintBtn")) loadPrintQueue(); // archived - see templates/index.html
   if (document.getElementById("statusBoard")) loadStatusBoard();
   if (document.getElementById("cupPrintsBody")) loadCupPrints();
 }
@@ -4474,7 +4474,11 @@ async function savePrintOrder() {
   }
   closePrintOrderForm();
   await loadPrintClients();
-  loadPrintQueue();
+  // Board, Status and Cup Prints all share this one form now (each has
+  // its own "+ New order" button) - refresh every one that exists,
+  // rather than only the Board's own, or the new order won't show up
+  // without switching tabs away and back
+  refreshAllPrintViews();
 }
 
 async function loadPrintClients() {
@@ -5556,7 +5560,11 @@ function wireWeekDragging() {
   });
 }
 
-if (document.getElementById("printWeek")) {
+// tabPrintBtn, not just printWeek: printView's markup is still archived
+// in the page (see templates/index.html), but with the tab gone there is
+// nothing to wire it to and nothing that should be quietly fetching and
+// rendering into it on every load.
+if (document.getElementById("tabPrintBtn") && document.getElementById("printWeek")) {
   document.getElementById("printModeBoard").addEventListener("click", () => setPrintMode("board"));
   document.getElementById("printModeWeek").addEventListener("click", () => setPrintMode("week"));
   document.getElementById("weekPrev").addEventListener("click", () => {

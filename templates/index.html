@@ -340,7 +340,11 @@
          Status is the landing tab: what needs doing, at a glance. #}
       {% if current_user.is_manager %}
       <button id="tabStatusBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Status</button>
-      <button id="tabPrintBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button>
+      {# Archived, not deleted: Status + Cup Prints cover what Print Queue
+         (Board and Week both) used to. The tab is just this one button -
+         remove the comment to bring it back; printView/tabPrintBtn's
+         other guards throughout script.js already no-op without it. #}
+      {# <button id="tabPrintBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button> #}
       <button id="tabCupPrintsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Prints</button>
       <button id="tabPrintClientsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Clients</button>
       <button id="tabPricingBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Pricing</button>
