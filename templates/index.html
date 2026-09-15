@@ -163,7 +163,12 @@
 
   /* Status board: one column per bucket, a compact card per order. */
   .kb-col { background: #e4e7f3; border-radius: 14px; display: flex; flex-direction: column; min-height: 20rem; max-height: calc(100vh - 15rem); }
-  .kb-col-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; }
+  /* scrollbar-gutter keeps every column the same width whether or not
+     it actually needs to scroll - without it, a long column (Done &
+     Paid can run into the hundreds) loses its scrollbar's width from
+     the cards themselves, so they read visibly narrower than a short
+     column's. */
+  .kb-col-body { flex: 1; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: .5rem; }
   .kb-col-body.drag-over { background-color: rgba(28,51,187,.08); }
   .kb-card { cursor: grab; }
   .kb-card:active { cursor: grabbing; }
