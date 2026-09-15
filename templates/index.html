@@ -970,13 +970,19 @@
   {# New order form. #}
   <div id="printOrderModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
     <div class="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5">
-      <h3 class="font-display font-semibold text-lg mb-4">New print order</h3>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-        <label class="text-sm">
+      <h3 class="font-display font-semibold text-lg leading-tight">New print order</h3>
+      <p class="text-xs text-gray-400 mb-5">Client, cups, and anything the sheet used to hold.</p>
+
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Order details</p>
+      <div class="relative mb-3">
+        <label class="text-sm block">
           <span class="text-xs text-gray-500 block mb-1">Client</span>
-          <input id="poClient" list="poClientList" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Type or pick a client" />
-          <datalist id="poClientList"></datalist>
+          <input id="poClient" autocomplete="off" class="w-full border border-gray-300 rounded-lg pl-2 pr-8 py-1.5" placeholder="Type or pick a client" />
         </label>
+        <svg class="absolute right-2 top-[1.95rem] pointer-events-none text-gray-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        <div id="poClientDropdown" class="hidden absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto text-sm"></div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
         <label class="text-sm">
           <span class="text-xs text-gray-500 block mb-1">Order date</span>
           <input id="poDate" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
@@ -987,21 +993,22 @@
         </label>
       </div>
 
-      <div class="flex flex-wrap gap-4 mb-4 text-sm">
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Flags</p>
+      <div class="flex flex-wrap gap-x-4 gap-y-2 mb-5 text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5">
         <label class="flex items-center gap-2"><input id="poRush" type="checkbox" /> Rush</label>
         <label class="flex items-center gap-2"><input id="poFrame" type="checkbox" /> Needs a new frame</label>
         <label class="flex items-center gap-2"><input id="poPaid" type="checkbox" /> Already paid</label>
       </div>
 
       <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Cups</p>
-      <div class="overflow-x-auto mb-2">
+      <div class="overflow-x-auto mb-2 border border-gray-200 rounded-lg">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400">
-              <th class="text-left py-1">Cup</th>
-              <th class="text-left py-1">Lid</th>
-              <th class="text-left py-1 w-32">Ink</th>
-              <th class="text-right py-1 w-24">Qty</th>
+            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50">
+              <th class="text-left py-1.5 px-2">Cup</th>
+              <th class="text-left py-1.5 px-2">Lid</th>
+              <th class="text-left py-1.5 px-2 w-32">Ink</th>
+              <th class="text-right py-1.5 px-2 w-24">Qty</th>
               <th class="w-8"></th>
             </tr>
           </thead>
@@ -1009,14 +1016,14 @@
         </table>
       </div>
       <p class="text-[11px] text-gray-400 mb-3">The lid list only offers what fits the cup you picked. Pricing comes from the price list, so there is nothing to type.</p>
-      <button id="poAddRow" class="text-sm text-brand-blue hover:underline mb-4">+ Add another cup</button>
+      <button id="poAddRow" class="text-sm text-brand-blue hover:underline mb-5">+ Add another cup</button>
 
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Notes</p>
       <label class="text-sm block mb-4">
-        <span class="text-xs text-gray-500 block mb-1">Remarks</span>
         <textarea id="poRemarks" rows="2" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Rush notes, frame notes, anything the sheet used to hold"></textarea>
       </label>
 
-      <div class="flex justify-end gap-2">
+      <div class="flex justify-end gap-2 pt-3 border-t border-gray-100">
         <button id="poCancel" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
         <button id="poSave" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold">Save order</button>
       </div>

@@ -4218,7 +4218,73 @@ async function openPrintClient(clientId) {
 
 // ---------------------------------------------------------------------------
 // New order form
+//
+// The client field used to be a native <input list> datalist - cheap, but
+// browsers only prefix-match it, don't show anything on focus, and give
+// it no visual "this opens a list" cue. This is a small combobox instead:
+// filters by substring, offers "+ New client" when nothing matches (the
+// order endpoint already creates an unknown name on save), arrow keys
+// and Enter work, and clicking out or Escape closes it.
 // ---------------------------------------------------------------------------
+
+let poClientActiveIndex = -1;
+
+function poClientMatches(q) {
+  const query = q.trim().toLowerCase();
+  const list = query ? printClients.filter((c) => c.name.toLowerCase().includes(query)) : printClients;
+  return list.slice(0, 8).map((c) => c.name);
+}
+
+function renderPoClientDropdown() {
+  const input = document.getElementById("poClient");
+  const drop = document.getElementById("poClientDropdown");
+  const trimmed = input.value.trim();
+  const matches = poClientMatches(input.value);
+  const exact = trimmed && matches.some((n) => n.toLowerCase() === trimmed.toLowerCase());
+
+  const options = matches.slice();
+  if (trimmed && !exact) options.push(`__new__:${trimmed}`);
+
+  if (!options.length) {
+    drop.innerHTML = `<p class="px-3 py-2 text-gray-400 italic">Start typing to add a client.</p>`;
+    drop.classList.remove("hidden");
+    return;
+  }
+
+  poClientActiveIndex = -1;
+  drop.innerHTML = options
+    .map((o) => {
+      const isNew = o.startsWith("__new__:");
+      const name = isNew ? o.slice(8) : o;
+      return `<button type="button" class="po-client-opt w-full text-left px-3 py-1.5 hover:bg-gray-50${
+        isNew ? " text-brand-blue border-t border-gray-100" : ""
+      }" data-name="${escapeHtml(name)}">${isNew ? `+ New client &ldquo;${escapeHtml(name)}&rdquo;` : escapeHtml(name)}</button>`;
+    })
+    .join("");
+  drop.classList.remove("hidden");
+
+  drop.querySelectorAll(".po-client-opt").forEach((btn) => {
+    // mousedown, not click: it fires before the input's blur would close
+    // the list out from under it
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pickPoClient(btn.dataset.name);
+    });
+  });
+}
+
+function pickPoClient(name) {
+  document.getElementById("poClient").value = name;
+  document.getElementById("poClientDropdown").classList.add("hidden");
+}
+
+function movePoClientActive(delta) {
+  const opts = [...document.querySelectorAll("#poClientDropdown .po-client-opt")];
+  if (!opts.length) return;
+  poClientActiveIndex = (poClientActiveIndex + delta + opts.length) % opts.length;
+  opts.forEach((o, i) => o.classList.toggle("bg-gray-100", i === poClientActiveIndex));
+  opts[poClientActiveIndex].scrollIntoView({ block: "nearest" });
+}
 
 function poItemRow() {
   const cat = printCatalogue || { cups: [], lids: [], fits: {} };
@@ -4279,7 +4345,9 @@ function poItemRow() {
 
 async function openPrintOrderForm() {
   await loadPrintCatalogue();
+  await loadPrintClients(); // fresh, in case one was added since page load
   document.getElementById("poClient").value = "";
+  document.getElementById("poClientDropdown").classList.add("hidden");
   document.getElementById("poDate").value = new Date().toISOString().slice(0, 10);
   document.getElementById("poDue").value = "";
   document.getElementById("poRemarks").value = "";
@@ -4288,9 +4356,6 @@ async function openPrintOrderForm() {
   const body = document.getElementById("poItems");
   body.innerHTML = "";
   body.appendChild(poItemRow());
-
-  const list = document.getElementById("poClientList");
-  list.innerHTML = printClients.map((c) => `<option value="${escapeHtml(c.name)}"></option>`).join("");
 
   // suggest the inks already on the board rather than making them be typed
   // from memory
@@ -4443,6 +4508,32 @@ if (tabPrintBtn) {
   document.getElementById("poSave").addEventListener("click", savePrintOrder);
   document.getElementById("poAddRow").addEventListener("click", () => {
     document.getElementById("poItems").appendChild(poItemRow());
+  });
+
+  const poClientInput = document.getElementById("poClient");
+  poClientInput.addEventListener("focus", renderPoClientDropdown);
+  poClientInput.addEventListener("input", renderPoClientDropdown);
+  poClientInput.addEventListener("blur", () => {
+    // a short delay so a mousedown pick (which preventDefaults) still
+    // lands before the list disappears out from under it
+    setTimeout(() => document.getElementById("poClientDropdown").classList.add("hidden"), 120);
+  });
+  poClientInput.addEventListener("keydown", (e) => {
+    const drop = document.getElementById("poClientDropdown");
+    if (drop.classList.contains("hidden")) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      movePoClientActive(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      movePoClientActive(-1);
+    } else if (e.key === "Enter" && poClientActiveIndex >= 0) {
+      e.preventDefault();
+      const opts = [...drop.querySelectorAll(".po-client-opt")];
+      pickPoClient(opts[poClientActiveIndex].dataset.name);
+    } else if (e.key === "Escape") {
+      drop.classList.add("hidden");
+    }
   });
 
   document.getElementById("printDrawerClose").addEventListener("click", closePrintDrawer);
