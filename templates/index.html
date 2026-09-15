@@ -207,6 +207,11 @@
   .cps-sel-status.st-done { background-color: #e4f9ee; color: #067a48; }
   .cps-remarks { font-size: 11px; font-style: italic; color: #6b7280; cursor: text; display: block; max-width: 12rem; }
   .cps-remarks.is-empty { color: #b0b5c9; }
+  /* a whole order still sitting at Not Started, flagged on the one cell
+     that spans its lines rather than every row - one continuous edge */
+  .cps-flag-not-started { box-shadow: inset 3px 0 0 0 #fca5a5; }
+  .cps-delete-btn { color: #d1d5db; flex-shrink: 0; padding: .1rem; border-radius: 4px; transition: color .15s; }
+  .cps-delete-btn:hover { color: #dc2626; background: #fef2f2; }
 </style>
 </head>
 <body class="bg-[#F3F4F8] text-black" data-payroll-unlocked="{{ 1 if current_user.payroll_unlocked else 0 }}" data-superuser="{{ 1 if current_user.is_superuser else 0 }}">
@@ -742,8 +747,8 @@
         <table class="cps-table">
           <thead>
             <tr>
-              <th>Date</th><th>Deadline</th><th>Client</th><th>Item</th><th>Lid</th><th>New logo</th>
-              <th class="r">Qty</th><th>Color</th><th>Paid</th><th>Status</th><th>Remarks</th>
+              <th>Date</th><th>Client</th><th>Item</th><th>Lid</th><th>New logo</th>
+              <th class="r">Qty</th><th>Color</th><th>Paid</th><th>Status</th><th>Deadline</th><th>Remarks</th>
             </tr>
           </thead>
           <tbody id="cupPrintsBody"></tbody>

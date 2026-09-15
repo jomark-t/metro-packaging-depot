@@ -3621,6 +3621,17 @@ async function postJSON(url, body) {
   }
 }
 
+// Board, Status and Cup Prints each keep their own copy of the same
+// orders (printOrders vs printAllOrders), so an edit that started in one
+// of them - a delete, a cup/lid/colour change via the Board's own
+// picker - needs to refresh whichever others exist in the DOM. Cheap
+// enough: a handful of small GETs, called only after something changed.
+function refreshAllPrintViews() {
+  loadPrintQueue();
+  if (document.getElementById("statusBoard")) loadStatusBoard();
+  if (document.getElementById("cupPrintsBody")) loadCupPrints();
+}
+
 async function setItemStatus(itemId, status) {
   await postJSON(`/api/print/items/${itemId}`, { status });
 }
@@ -3680,7 +3691,7 @@ function statusCardHTML(o) {
     <article class="kb-card bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" draggable="true" data-order-card="${o.id}">
       <button type="button" class="kb-card-face flex items-center gap-2.5 w-full text-left px-2.5 py-2" data-toggle="${o.id}">
         ${printLogo(o.client_name, false, o.logo_filename)}
-        <span class="flex-1 min-w-0 font-display font-semibold text-[14px] leading-tight truncate">${escapeHtml(o.client_name)}</span>
+        <span class="flex-1 min-w-0 font-semibold text-[14px] leading-tight truncate">${escapeHtml(o.client_name)}</span>
         <svg class="kb-card-chevron shrink-0 text-gray-400" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
       <div class="kb-card-details"><div><div class="px-2.5 pb-2.5 flex flex-col gap-2">
@@ -3885,26 +3896,62 @@ function cupRemarksHTML(o) {
   }</span>`;
 }
 
+// Item, lid, quantity and colour reuse the Board's own click-to-edit
+// cells verbatim (same .print-edit markup and data-* attributes), so the
+// same wireEditCell/beginPrintCellEdit/beginProductPick machinery drives
+// them - no separate editing system to keep in sync with the real one.
+function cupItemCellHTML(i) {
+  return `<td><span class="print-edit font-medium text-gray-900 whitespace-nowrap" tabindex="0" role="button"
+              data-item="${i.id}" data-field="product_id" data-value="${i.product_id || ""}"
+              title="Click to change the cup">${escapeHtml(i.label || "")}</span></td>`;
+}
+function cupLidCellHTML(i) {
+  return `<td><span class="print-edit text-gray-500 whitespace-nowrap" tabindex="0" role="button"
+              data-item="${i.id}" data-field="lid_product_id" data-value="${i.lid_product_id || ""}" data-cup="${i.product_id || ""}"
+              title="Click to change the lid">${escapeHtml(i.lid_label && i.lid_label !== "—" ? i.lid_label : "—")}</span></td>`;
+}
+function cupQtyCellHTML(i) {
+  return `<td class="font-mono text-right whitespace-nowrap"><span class="print-edit" tabindex="0" role="button"
+              data-item="${i.id}" data-field="quantity" title="Click to edit"
+              >${Number(i.quantity).toLocaleString("en-PH")}</span></td>`;
+}
+function cupColorEditCellHTML(i) {
+  const shown = i.cup_color ? cupColorCellHTML(i.cup_color) : `<span class="text-gray-300">— colour</span>`;
+  return `<td class="whitespace-nowrap"><span class="print-edit" tabindex="0" role="button"
+              data-item="${i.id}" data-field="cup_color" data-cup="${i.product_id || ""}" data-value="${escapeHtml(i.cup_color || "")}"
+              title="Click to change the colour">${shown}</span></td>`;
+}
+
+const TRASH_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
 function cupPrintsRowsHTML(list) {
   const out = [];
   list.forEach((o, gi) => {
+    // still every line, not started - the one thing worth flagging
+    // without opening the row
+    const flagged = statusBucket(o) === "not_started";
     o.items.forEach((i, li) => {
       const first = li === 0;
       const cells = [];
-      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-mono text-[11px] text-gray-500 whitespace-nowrap">${printShortDate(o.order_date)}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-mono text-[11px] text-gray-500 whitespace-nowrap${flagged ? " cps-flag-not-started" : ""}">${printShortDate(o.order_date)}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}</td>`);
+      cells.push(cupItemCellHTML(i));
+      cells.push(cupLidCellHTML(i));
+      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
+      cells.push(cupQtyCellHTML(i));
+      cells.push(cupColorEditCellHTML(i));
+      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("paid", o.id, o.is_paid)}</td>`);
+      cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
       if (first) {
         const rush = o.is_rush ? `<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 ml-1.5 align-middle" title="Rush"></span>` : "";
         cells.push(`<td rowspan="${o.items.length}" class="whitespace-nowrap">${o.due_date ? printShortDate(o.due_date) : "—"}${rush}</td>`);
+        cells.push(
+          `<td rowspan="${o.items.length}" style="max-width:14rem">` +
+            `<div class="flex items-start gap-1.5">${cupRemarksHTML(o)}` +
+            `<button type="button" class="cps-delete-btn" data-delete="${o.id}" title="Delete order" aria-label="Delete order">${TRASH_ICON}</button>` +
+            `</div></td>`
+        );
       }
-      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-display font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}</td>`);
-      cells.push(`<td class="font-medium whitespace-nowrap">${escapeHtml(i.label || "")}</td>`);
-      cells.push(`<td class="text-gray-500 whitespace-nowrap">${escapeHtml(i.lid_label && i.lid_label !== "—" ? i.lid_label : "—")}</td>`);
-      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
-      cells.push(`<td class="font-mono text-right whitespace-nowrap">${Number(i.quantity).toLocaleString("en-PH")}</td>`);
-      cells.push(`<td class="whitespace-nowrap">${cupColorCellHTML(i.cup_color)}</td>`);
-      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("paid", o.id, o.is_paid)}</td>`);
-      cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
-      if (first) cells.push(`<td rowspan="${o.items.length}" style="max-width:12rem">${cupRemarksHTML(o)}</td>`);
       out.push(`<tr class="${first && gi > 0 ? "group-start" : ""}">${cells.join("")}</tr>`);
     });
     if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="11"></td></tr>`);
@@ -3931,6 +3978,19 @@ function renderCupPrints() {
 
 function wireCupPrints() {
   const body = document.getElementById("cupPrintsBody");
+
+  // cup, lid, quantity and colour - the Board's own editors, scoped to
+  // this table so they don't get wired a second time when the Board
+  // re-renders while these rows are still on screen
+  body.querySelectorAll(".print-edit").forEach(wireEditCell);
+
+  body.querySelectorAll("[data-delete]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const order = printAllOrders.find((o) => String(o.id) === btn.dataset.delete);
+      if (order) askDeleteOrder(order.id, order);
+    });
+  });
 
   body.querySelectorAll("select.cps-select").forEach((sel) => {
     sel.addEventListener("change", async () => {
@@ -4952,6 +5012,53 @@ async function beginProductPick(cell, field) {
   const current = cell.dataset.value || "";
   const isLid = field === "lid_product_id";
 
+  // Most cups have no fixed colour list - only Double Wall does - so a
+  // picker with nothing but "— colour" in it would be no picker at all.
+  // Free text instead, same as the new-order form falls back to.
+  if (field === "cup_color" && !printCupColours(cell.dataset.cup).length) {
+    const input = document.createElement("input");
+    input.className = "print-cell-input";
+    input.value = current;
+    input.placeholder = "Cup colour";
+    cell.textContent = "";
+    cell.appendChild(input);
+    input.focus();
+    input.select();
+    let settledText = false;
+    const finishText = async (commit) => {
+      if (settledText) return;
+      settledText = true;
+      const value = input.value.trim();
+      if (!commit || value === current) {
+        cell.textContent = shown;
+        return;
+      }
+      const res = await fetch(`/api/print/items/${cell.dataset.item}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cup_color: value || null }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not change that.");
+        cell.textContent = shown;
+        return;
+      }
+      refreshAllPrintViews();
+    };
+    input.addEventListener("blur", () => finishText(true));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finishText(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finishText(false);
+      }
+    });
+    return;
+  }
+
   let options;
   if (field === "cup_color") {
     options = [{ id: "", label: "— colour" }].concat(
@@ -5000,8 +5107,8 @@ async function beginProductPick(cell, field) {
       return;
     }
     // changing the cup can invalidate the lid and always moves the price,
-    // so the board is reloaded rather than patched
-    loadPrintQueue();
+    // so every view of the orders is reloaded rather than patched
+    refreshAllPrintViews();
   };
 
   sel.addEventListener("change", () => finish(true));
@@ -5089,8 +5196,13 @@ document.addEventListener("click", (e) => {
 
 let printDeleteId = null;
 
-function askDeleteOrder(orderId) {
-  const order = printOrders.find((o) => String(o.id) === String(orderId));
+function askDeleteOrder(orderId, orderArg) {
+  // Cup Prints and Status carry orders the Board's own "open" filter
+  // wouldn't have (finished, cancelled) - passing the order straight in
+  // sidesteps that rather than teaching this a second list to search.
+  const order =
+    orderArg || printOrders.find((o) => String(o.id) === String(orderId)) ||
+    printAllOrders.find((o) => String(o.id) === String(orderId));
   if (!order) return;
   printDeleteId = orderId;
 
@@ -5136,7 +5248,7 @@ if (document.getElementById("printDeleteModal")) {
       return;
     }
     closeDeleteModal();
-    loadPrintQueue();
+    refreshAllPrintViews();
   });
 }
 
