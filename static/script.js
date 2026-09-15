@@ -4484,7 +4484,16 @@ async function loadPrintClients() {
 // Wiring
 // ---------------------------------------------------------------------------
 
-if (tabPrintBtn) {
+// printOrderModal, not tabPrintBtn: this block also wires the new-order
+// form itself (poCancel, poSave, poAddRow, the client combobox) and the
+// client drawer, both shared with Status and Cup Prints now - gating the
+// whole thing on the archived Board's tab button meant Cancel, Save,
+// "+ Add another cup" and the client dropdown silently never got wired
+// up at all, board archived or not. The Board-only bits above (view
+// chips, group/sort/cols, field toggles) stay in this same block - their
+// elements are still in the archived markup, so wiring them costs
+// nothing; nothing can click them.
+if (document.getElementById("printOrderModal")) {
   document.querySelectorAll("#printViews .print-view-btn").forEach((b) => {
     b.classList.toggle("active-print-view", b.dataset.view === printState.view);
     b.addEventListener("click", () => {
