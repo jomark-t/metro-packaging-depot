@@ -4229,10 +4229,41 @@ async function openPrintClient(clientId) {
 
 let poClientActiveIndex = -1;
 
+// Ranked by order_count so the clients actually being printed for
+// surface first - on an empty query that's "who orders the most",
+// on a real query it's the tiebreak among whatever matches.
 function poClientMatches(q) {
   const query = q.trim().toLowerCase();
   const list = query ? printClients.filter((c) => c.name.toLowerCase().includes(query)) : printClients;
-  return list.slice(0, 8).map((c) => c.name);
+  return list.slice().sort((a, b) => (b.order_count || 0) - (a.order_count || 0)).slice(0, 8);
+}
+
+// A small stand-in for printLogo() at dropdown-row size - printLogo's
+// own two sizes both run bigger than a list row wants.
+function poClientAvatar(name, logoFile) {
+  if (logoFile) {
+    return `<div class="w-6 h-6 rounded-full overflow-hidden shrink-0 bg-white" style="box-shadow:inset 0 0 0 1px rgba(17,24,39,.12)">
+               <img src="/static/uploads/${escapeHtml(logoFile)}" alt="" class="w-full h-full object-contain" />
+             </div>`;
+  }
+  const h = printClientHue(name || "?");
+  const letter = escapeHtml((name || "?").replace(/[^A-Za-z]/g, "").charAt(0).toUpperCase() || "?");
+  return `<div class="w-6 h-6 rounded-full grid place-items-center font-display font-bold text-[10px] shrink-0"
+               style="background:hsl(${h},62%,93%);color:hsl(${h},55%,32%);box-shadow:inset 0 0 0 1px rgba(17,24,39,.1)">${letter}</div>`;
+}
+
+// Bolds the part of the name that matched, so a long, similar-looking
+// roster ("Beans and Bottles" / "Beans and Bottles (new logo)") is easy
+// to tell apart at a glance while typing.
+function poClientHighlight(name, query) {
+  if (!query) return escapeHtml(name);
+  const idx = name.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return escapeHtml(name);
+  return (
+    escapeHtml(name.slice(0, idx)) +
+    `<b class="text-brand-blue font-semibold">${escapeHtml(name.slice(idx, idx + query.length))}</b>` +
+    escapeHtml(name.slice(idx + query.length))
+  );
 }
 
 function renderPoClientDropdown() {
@@ -4240,27 +4271,32 @@ function renderPoClientDropdown() {
   const drop = document.getElementById("poClientDropdown");
   const trimmed = input.value.trim();
   const matches = poClientMatches(input.value);
-  const exact = trimmed && matches.some((n) => n.toLowerCase() === trimmed.toLowerCase());
+  const exact = trimmed && matches.some((c) => c.name.toLowerCase() === trimmed.toLowerCase());
 
-  const options = matches.slice();
-  if (trimmed && !exact) options.push(`__new__:${trimmed}`);
-
-  if (!options.length) {
-    drop.innerHTML = `<p class="px-3 py-2 text-gray-400 italic">Start typing to add a client.</p>`;
+  if (!matches.length && !trimmed) {
+    drop.innerHTML = `<p class="px-3 py-2 text-gray-400 italic">No clients yet - type a name to add one.</p>`;
     drop.classList.remove("hidden");
     return;
   }
 
+  const rows = matches.map(
+    (c) => `<button type="button" class="po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(c.name)}">
+              ${poClientAvatar(c.name, c.logo_filename)}
+              <span class="flex-1 min-w-0 truncate">${poClientHighlight(c.name, trimmed)}</span>
+              ${c.order_count ? `<span class="text-[10px] font-mono text-gray-400 shrink-0">${c.order_count} order${c.order_count === 1 ? "" : "s"}</span>` : ""}
+            </button>`
+  );
+  if (trimmed && !exact) {
+    rows.push(
+      `<button type="button" class="po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50 text-brand-blue border-t border-gray-100" data-name="${escapeHtml(trimmed)}">
+         <span class="w-6 h-6 rounded-full border border-dashed border-brand-blue/50 grid place-items-center shrink-0 text-xs leading-none">+</span>
+         <span class="flex-1 min-w-0 truncate">New client &ldquo;${escapeHtml(trimmed)}&rdquo;</span>
+       </button>`
+    );
+  }
+
   poClientActiveIndex = -1;
-  drop.innerHTML = options
-    .map((o) => {
-      const isNew = o.startsWith("__new__:");
-      const name = isNew ? o.slice(8) : o;
-      return `<button type="button" class="po-client-opt w-full text-left px-3 py-1.5 hover:bg-gray-50${
-        isNew ? " text-brand-blue border-t border-gray-100" : ""
-      }" data-name="${escapeHtml(name)}">${isNew ? `+ New client &ldquo;${escapeHtml(name)}&rdquo;` : escapeHtml(name)}</button>`;
-    })
-    .join("");
+  drop.innerHTML = rows.join("");
   drop.classList.remove("hidden");
 
   drop.querySelectorAll(".po-client-opt").forEach((btn) => {
