@@ -3850,11 +3850,6 @@ if (document.getElementById("statusNewBtn")) {
 
 let cupPrintsQuery = "";
 
-const CUP_COLOR_HEX = {
-  Black: "#1c1c1c", White: "#9096b3", Orange: "#c2600e", Red: "#c23b3b",
-  "Kraft (Brown)": "#8a5a34", Grey: "#6b7280", Green: "#1f7a45", Blue: "#2d5fd6",
-};
-
 async function loadCupPrints() {
   const body = document.getElementById("cupPrintsBody");
   try {
@@ -3864,13 +3859,6 @@ async function loadCupPrints() {
     return;
   }
   renderCupPrints();
-}
-
-function cupColorCellHTML(name) {
-  if (!name) return `<span class="text-gray-300">—</span>`;
-  const hex = CUP_COLOR_HEX[name] || "#565c7b";
-  return `<span class="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style="background:${hex};box-shadow:inset 0 0 0 1px rgba(0,0,0,.14)"></span>` +
-         `<span class="font-semibold text-[12px] align-middle" style="color:${hex}">${escapeHtml(name)}</span>`;
 }
 
 function cupYesNoSelect(kind, orderId, current) {
@@ -3915,11 +3903,11 @@ function cupQtyCellHTML(i) {
               data-item="${i.id}" data-field="quantity" title="Click to edit"
               >${Number(i.quantity).toLocaleString("en-PH")}</span></td>`;
 }
-function cupColorEditCellHTML(i) {
-  const shown = i.cup_color ? cupColorCellHTML(i.cup_color) : `<span class="text-gray-300">— colour</span>`;
-  return `<td class="whitespace-nowrap"><span class="print-edit" tabindex="0" role="button"
-              data-item="${i.id}" data-field="cup_color" data-cup="${i.product_id || ""}" data-value="${escapeHtml(i.cup_color || "")}"
-              title="Click to change the colour">${shown}</span></td>`;
+// "Color" on the sheet this replaced is the print colour, not the cup's
+// own shell colour (cup_color, which only Double Wall has and is rarely
+// set) - inkChip() is the Board's own chip for exactly that field.
+function cupInkCellHTML(i) {
+  return `<td class="whitespace-nowrap">${inkChip(i)}</td>`;
 }
 
 const TRASH_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
@@ -3939,7 +3927,7 @@ function cupPrintsRowsHTML(list) {
       cells.push(cupLidCellHTML(i));
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
       cells.push(cupQtyCellHTML(i));
-      cells.push(cupColorEditCellHTML(i));
+      cells.push(cupInkCellHTML(i));
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("paid", o.id, o.is_paid)}</td>`);
       cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
       if (first) {
