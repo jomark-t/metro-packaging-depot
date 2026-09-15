@@ -335,8 +335,10 @@
       <button id="tabEmployeesBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
       {% endif %}
       {# Cup printing - the order book for the printing side of the shop.
-         Status is the landing tab: what needs doing, at a glance. #}
-      {% if current_user.is_manager %}
+         Status is the landing tab: what needs doing, at a glance. Open
+         to everyone, not just managers - has_admin_app is true for
+         every logged-in user for exactly this reason. #}
+      {% if current_user.has_admin_app %}
       <button id="tabStatusBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Status</button>
       {# Archived, not deleted: Status + Cup Prints cover what Print Queue
          (Board and Week both) used to. The tab is just this one button -
@@ -717,8 +719,9 @@
 
   {# Status board - the landing tab for Cup Printing: what needs doing,
      at a glance, grouped by how far along it is rather than by day or
-     by client. Manager-only, so the markup isn't sent to anyone else. #}
-  {% if current_user.is_manager %}
+     by client. Everyone gets this app, not just managers - see
+     has_admin_app in app.py's index() route. #}
+  {% if current_user.has_admin_app %}
   <div id="statusView" style="display:none">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>

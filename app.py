@@ -1837,10 +1837,13 @@ def manager_required(view):
 
 def is_outside_viewer():
     """A logged-in account that isn't a staff member and isn't the
-    superuser - a co-owner or similar. Read-only everywhere: they're
-    neither manager nor superuser, so every write route already refuses
-    them. They see the branch at a glance, not the payroll, unless
-    can_view_payroll is switched on for them."""
+    superuser - a co-owner or similar. Read-only almost everywhere: they're
+    neither manager nor superuser, so every payroll/staff write route
+    already refuses them, and they see the branch at a glance, not the
+    payroll, unless can_view_payroll is switched on for them. The one
+    deliberate exception is Cup Printing - every /api/print/* route is
+    login_required, not manager_required, so an outside viewer (like any
+    other logged-in account) can fully use it."""
     return not session.get("is_superuser") and not session.get("staff_name")
 
 
@@ -2050,9 +2053,9 @@ def index():
         "is_manager": is_manager(),
         "is_outside_viewer": is_outside_viewer(),
         "can_view_payroll": can_view_payroll(),
-        # managers get two apps and therefore a switcher; everyone else has
-        # one, and never sees a lock
-        "has_admin_app": is_manager(),
+        # Cup Printing is open to everyone now (drag, edit, delete - not
+        # just viewing), so everyone has two apps and gets the switcher.
+        "has_admin_app": True,
         "payroll_unlocked": payroll_unlocked(),
         # branch-wide figures (per-person day totals) - the people running
         # the place and the owners, not the team
@@ -2961,7 +2964,7 @@ def _print_order_rows(where="", params=()):
 
 
 @app.route("/api/print/orders")
-@manager_required
+@login_required
 def api_print_orders():
     """The queue itself. `view` filters the same way the toolbar chips do.
 
@@ -3017,7 +3020,7 @@ def price_line(cur, product_id, lid_product_id, quantity):
 
 
 @app.route("/api/print/orders", methods=["POST"])
-@manager_required
+@login_required
 def api_print_order_create():
     data = request.get_json(force=True)
     client_name = (data.get("client") or "").strip()
@@ -3091,7 +3094,7 @@ def api_print_order_create():
 
 
 @app.route("/api/print/orders/<int:order_id>", methods=["POST"])
-@manager_required
+@login_required
 def api_print_order_update(order_id):
     """Order-level edits: paid, rush, frame, due date, remarks."""
     data = request.get_json(force=True)
@@ -3135,7 +3138,7 @@ def api_print_order_update(order_id):
 
 
 @app.route("/api/print/items/<int:item_id>", methods=["POST"])
-@manager_required
+@login_required
 def api_print_item_update(item_id):
     """Edit one cup line: what it is, how many, what it costs, where it's up to."""
     data = request.get_json(force=True)
@@ -3269,7 +3272,7 @@ def api_print_item_update(item_id):
 
 
 @app.route("/api/print/orders/<int:order_id>", methods=["DELETE"])
-@manager_required
+@login_required
 def api_print_order_delete(order_id):
     db = get_db()
     cur = db.cursor()
@@ -3339,7 +3342,7 @@ def _lid_fits(lid_name, rule):
 
 
 @app.route("/api/print/catalogue")
-@manager_required
+@login_required
 def api_print_catalogue():
     """Cups, lids, and which lids go on which cup.
 
@@ -3402,7 +3405,7 @@ def api_print_catalogue():
 
 
 @app.route("/api/print/products/<int:product_id>", methods=["POST"])
-@manager_required
+@login_required
 def api_print_product_price_update(product_id):
     """Edit one price on the price list."""
     data = request.get_json(force=True)
@@ -3456,7 +3459,7 @@ def api_print_product_price_update(product_id):
 
 
 @app.route("/api/print/clients")
-@manager_required
+@login_required
 def api_print_clients():
     """Every client. `with_totals` adds the figures the Clients page shows."""
     cur = get_db().cursor()
@@ -3481,7 +3484,7 @@ def api_print_clients():
 
 
 @app.route("/api/print/clients/<int:client_id>")
-@manager_required
+@login_required
 def api_print_client(client_id):
     """One client, with everything the queue drawer shows."""
     cur = get_db().cursor()
@@ -3538,7 +3541,7 @@ def api_print_client(client_id):
 
 
 @app.route("/api/print/clients/<int:client_id>/logo", methods=["POST"])
-@manager_required
+@login_required
 def api_print_client_logo(client_id):
     """A client's logo - the thing we print, so it identifies them faster
     than their name does."""
@@ -3572,7 +3575,7 @@ def api_print_client_logo(client_id):
 
 
 @app.route("/api/print/clients/<int:client_id>/logo", methods=["DELETE"])
-@manager_required
+@login_required
 def api_print_client_logo_delete(client_id):
     db = get_db()
     cur = db.cursor()
@@ -3596,7 +3599,7 @@ PRINT_CLIENT_FIELDS = (
 
 
 @app.route("/api/print/clients/<int:client_id>", methods=["POST"])
-@manager_required
+@login_required
 def api_print_client_update(client_id):
     """Contact details, edited from the drawer in the queue."""
     data = request.get_json(force=True)
