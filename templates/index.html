@@ -185,8 +185,6 @@
   .kb-card-details { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s cubic-bezier(.4,0,.2,1); }
   .kb-card.expanded .kb-card-details { grid-template-rows: 1fr; }
   .kb-card-details > div { overflow: hidden; }
-  .kb-line-pill { border: none; }
-  .kb-line-pill:hover { filter: brightness(.96); }
   .kb-pay-btn { border: 1px solid #e5e7eb; }
   .kb-pay-btn:hover { border-color: #b88c53; color: #8a6636; }
   .kb-pay-btn.is-paid { background: #f6ecdb; border-color: #e4cda3; color: #8a6636; }
@@ -732,7 +730,7 @@
         <button id="statusNewBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New order</button>
       </div>
     </div>
-    <p class="text-xs text-gray-400 mb-3">Drag a card to another column, or click one open — a line's status pill cycles on click, and a fully-done card moves itself.</p>
+    <p class="text-xs text-gray-400 mb-3">Drag a card to another column to move the whole order along, or click one open for the cup lines and quantities. Mark a finished card paid and it moves itself.</p>
     <div id="statusBoard" class="flex gap-3 overflow-x-auto pb-2"></div>
   </div>
 

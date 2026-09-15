@@ -3664,17 +3664,17 @@ async function loadStatusBoard() {
 function statusCardHTML(o) {
   const bucket = statusBucket(o);
   const isOpen = statusExpanded.has(o.id);
+  // Just what's on the press and how many - lid and per-line status are
+  // one more click away in Cup Prints if they're needed; here the card
+  // moves as a whole order, not line by line.
   const linesHTML = o.items
-    .map((i) => {
-      const lid = i.lid_label && i.lid_label !== "—" ? ` <span class="text-gray-400">&middot; ${escapeHtml(i.lid_label)}</span>` : "";
-      return `
+    .map(
+      (i) => `
         <div class="flex items-center gap-2">
-          <span class="flex-1 min-w-0 truncate">${escapeHtml(i.label || "")}${lid}</span>
+          <span class="flex-1 min-w-0 truncate">${escapeHtml(i.label || "")}</span>
           <span class="font-mono text-[11px] text-gray-400 shrink-0">${Number(i.quantity).toLocaleString("en-PH")}</span>
-          <button type="button" class="kb-line-pill print-chip shrink-0 ${PRINT_STATUS_TONE[i.status] || ""}"
-                  data-item="${i.id}" data-status="${i.status}">${escapeHtml(PRINT_STATUS_LABEL[i.status] || i.status)}</button>
-        </div>`;
-    })
+        </div>`
+    )
     .join("");
 
   let payRow = "";
@@ -3784,14 +3784,6 @@ function wireStatusBoard() {
       const card = btn.closest(".kb-card");
       if (card.classList.toggle("expanded")) statusExpanded.add(id);
       else statusExpanded.delete(id);
-    });
-  });
-
-  board.querySelectorAll("[data-item][data-status]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const next = { not_started: "ongoing", ongoing: "done", done: "not_started" }[btn.dataset.status] || "ongoing";
-      withStatusFlip(() => setItemStatus(btn.dataset.item, next));
     });
   });
 
