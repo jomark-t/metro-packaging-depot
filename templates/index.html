@@ -170,7 +170,12 @@
      column's. */
   .kb-col-body { flex: 1; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: .5rem; }
   .kb-col-body.drag-over { background-color: rgba(28,51,187,.08); }
-  .kb-card { cursor: grab; }
+  /* flex-shrink: 0 matters once a column runs long (Done & Paid can hit
+     the hundreds): without it, a flex column whose content far exceeds
+     its max-height can squash every child down to fit instead of
+     overflowing and scrolling - cards render a couple of pixels tall
+     and empty rather than the list actually scrolling. */
+  .kb-card { cursor: grab; flex-shrink: 0; }
   .kb-card:active { cursor: grabbing; }
   .kb-card.dragging { opacity: .35; }
   .kb-card-chevron { transition: transform .2s ease; }
