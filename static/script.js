@@ -136,7 +136,7 @@ function cellDisplayHtml(label, timeRange) {
   }
   return `<span class="inline-flex flex-col items-start gap-0.5 rounded-md px-2.5 py-1.5 text-xs leading-tight ${chipClasses(label)}">
              <span class="font-semibold">${label}</span>
-             <span class="font-mono text-[10px] opacity-70">${timeRange}</span>
+             <span class="text-[10px] opacity-70">${timeRange}</span>
            </span>`;
 }
 
@@ -311,7 +311,7 @@ function renderSummary(staff, counts) {
     card.innerHTML = `
       <p class="font-display font-semibold text-base leading-tight mb-0.5">${s.name}</p>
       <p class="text-[11px] text-gray-500 mb-2.5">${s.role} · ${s.employment}</p>
-      <span class="font-mono text-xl text-brand-blue font-medium">${counts[s.name] ?? 0}</span>
+      <span class="text-xl text-brand-blue font-medium">${counts[s.name] ?? 0}</span>
       <span class="text-[11px] text-gray-500 ml-1">days ${targetLabel}</span>
     `;
     summaryEl.appendChild(card);
@@ -333,7 +333,7 @@ function renderTable(days, staff) {
 
     const dateTd = document.createElement("td");
     dateTd.className = "px-3.5 py-2.5 align-top whitespace-nowrap";
-    dateTd.innerHTML = `<span class="font-mono font-medium text-[15px]">${day.day_num}</span><span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">${day.weekday_short}</span>`;
+    dateTd.innerHTML = `<span class="font-medium text-[15px]">${day.day_num}</span><span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">${day.weekday_short}</span>`;
     tr.appendChild(dateTd);
 
     staff.forEach((s) => {
@@ -462,6 +462,14 @@ const tabMyPayBtn = document.getElementById("tabMyPayBtn");
 const myPayView = document.getElementById("myPayView");
 const tabMyInfoBtn = document.getElementById("tabMyInfoBtn");
 const myInfoView = document.getElementById("myInfoView");
+const tabCollectionsBtn = document.getElementById("tabCollectionsBtn");
+const collectionsView = document.getElementById("collectionsView");
+const tabExpensesBtn = document.getElementById("tabExpensesBtn");
+const expensesView = document.getElementById("expensesView");
+const tabInventoryBtn = document.getElementById("tabInventoryBtn");
+const inventoryView = document.getElementById("inventoryView");
+const tabNotesBtn = document.getElementById("tabNotesBtn");
+const notesView = document.getElementById("notesView");
 const scheduleControls = document.getElementById("scheduleControls");
 const payrollControls = document.getElementById("payrollControls");
 const scheduleView = document.getElementById("scheduleView");
@@ -487,6 +495,10 @@ if (tabPricingBtn) TABS.pricing = { btn: tabPricingBtn, view: pricingView, contr
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
 if (tabMyPayBtn) TABS.mypay = { btn: tabMyPayBtn, view: myPayView, controls: null };
 if (tabMyInfoBtn) TABS.myinfo = { btn: tabMyInfoBtn, view: myInfoView, controls: null };
+if (tabCollectionsBtn) TABS.collections = { btn: tabCollectionsBtn, view: collectionsView, controls: null };
+if (tabExpensesBtn) TABS.expenses = { btn: tabExpensesBtn, view: expensesView, controls: null };
+if (tabInventoryBtn) TABS.inventory = { btn: tabInventoryBtn, view: inventoryView, controls: null };
+if (tabNotesBtn) TABS.notes = { btn: tabNotesBtn, view: notesView, controls: null };
 const loadedOnce = { payroll: false, employees: false, leave: false, activity: false };
 
 function showTab(tab) {
@@ -530,6 +542,18 @@ function showTab(tab) {
   if (tab === "pricing") {
     loadPricing();
   }
+  if (tab === "collections") {
+    loadCollections();
+  }
+  if (tab === "expenses") {
+    loadExpenses();
+  }
+  if (tab === "inventory") {
+    loadInventory();
+  }
+  if (tab === "notes") {
+    loadNotes();
+  }
   if (tab === "mypay") {
     loadMyPay();
   }
@@ -560,6 +584,10 @@ if (tabPricingBtn) tabPricingBtn.addEventListener("click", () => showTab("pricin
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
 if (tabMyPayBtn) tabMyPayBtn.addEventListener("click", () => showTab("mypay"));
 if (tabMyInfoBtn) tabMyInfoBtn.addEventListener("click", () => showTab("myinfo"));
+if (tabCollectionsBtn) tabCollectionsBtn.addEventListener("click", () => showTab("collections"));
+if (tabExpensesBtn) tabExpensesBtn.addEventListener("click", () => showTab("expenses"));
+if (tabInventoryBtn) tabInventoryBtn.addEventListener("click", () => showTab("inventory"));
+if (tabNotesBtn) tabNotesBtn.addEventListener("click", () => showTab("notes"));
 
 // Staff land on the dashboard - "when am I next in" is why they opened the
 // app. Managers land on the schedule, which is what they came to work on.
@@ -691,7 +719,7 @@ function renderAttentionAndSummary(d) {
       <div class="bg-white border border-gray-200 rounded-xl px-4 py-3.5 shadow-sm">
         <p class="font-display font-semibold text-base leading-tight mb-0.5">${escapeHtml(s.name)}</p>
         <p class="text-[11px] text-gray-500 mb-2.5">${escapeHtml(s.role)}</p>
-        <span class="font-mono text-xl font-medium ${over ? "text-amber-600" : "text-brand-blue"}">${count}</span>
+        <span class="text-xl font-medium ${over ? "text-amber-600" : "text-brand-blue"}">${count}</span>
         <span class="text-[11px] text-gray-500 ml-1">days${s.target ? ` / ${s.target} target` : ""}</span>
       </div>`;
     })
@@ -703,7 +731,7 @@ function renderStaffDashboard(s) {
   next.innerHTML = s.next_shift
     ? `<p class="text-[10px] uppercase tracking-wide text-white/60 font-mono mb-1">Your next shift</p>
        <p class="font-display font-semibold text-xl leading-tight">${escapeHtml(s.next_shift.when)} · ${escapeHtml(s.next_shift.label)}</p>
-       <p class="font-mono text-sm text-white/80 mt-0.5">${escapeHtml(s.next_shift.time_range || "")}</p>`
+       <p class="text-sm text-white/80 mt-0.5">${escapeHtml(s.next_shift.time_range || "")}</p>`
     : `<p class="text-[10px] uppercase tracking-wide text-white/60 font-mono mb-1">Your next shift</p>
        <p class="font-display font-semibold text-lg leading-tight">Nothing in the next 7 days</p>`;
 
@@ -716,7 +744,7 @@ function renderStaffDashboard(s) {
     .map(
       (u) => `
       <li class="flex items-center gap-4 py-2">
-        <span class="font-mono text-xs text-gray-400 w-24 shrink-0">${u.weekday_short} ${u.day_num} ${u.month_short}</span>
+        <span class="text-xs text-gray-400 w-24 shrink-0">${u.weekday_short} ${u.day_num} ${u.month_short}</span>
         ${miniChip(u.label, u.time_range)}
       </li>`
     )
@@ -857,7 +885,7 @@ function renderMyDetails(d, pto) {
         .map((iso) => {
           const dt = new Date(`${iso}T00:00:00`);
           return `<li class="px-2 py-1.5 flex justify-between">
-                    <span class="font-mono">${dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
+                    <span>${dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
                     <span class="text-gray-500">${dt.toLocaleDateString(undefined, { weekday: "short" })}</span>
                   </li>`;
         })
@@ -1050,7 +1078,7 @@ async function loadMyPay() {
       ([label, value, isDeduction]) => `
       <li class="flex items-baseline justify-between gap-4 py-1.5">
         <span class="${isDeduction ? "text-gray-500" : "text-black"}">${escapeHtml(label)}</span>
-        <span class="font-mono whitespace-nowrap ${isDeduction ? "text-red-600" : "text-black"}">${escapeHtml(value)}</span>
+        <span class="whitespace-nowrap ${isDeduction ? "text-red-600" : "text-black"}">${escapeHtml(value)}</span>
       </li>`
     )
     .join("");
@@ -1231,22 +1259,22 @@ function auditDetailsHtml(details) {
   const rows = Object.entries(details).map(([key, value]) => {
     if (value && typeof value === "object" && "from" in value && "to" in value) {
       return `<li><span class="text-gray-500">${escapeHtml(key)}</span>
-                <span class="font-mono text-gray-400 line-through">${escapeHtml(formatAuditValue(value.from))}</span>
+                <span class="text-gray-400 line-through">${escapeHtml(formatAuditValue(value.from))}</span>
                 <span class="text-gray-400">→</span>
-                <span class="font-mono text-black">${escapeHtml(formatAuditValue(value.to))}</span></li>`;
+                <span class="text-black">${escapeHtml(formatAuditValue(value.to))}</span></li>`;
     }
     if (value && typeof value === "object") {
       const inner = Object.entries(value)
         .map(([k2, v2]) => {
           if (v2 && typeof v2 === "object" && "from" in v2 && "to" in v2) {
-            return `${escapeHtml(k2)}: <span class="font-mono text-gray-400 line-through">${escapeHtml(formatAuditValue(v2.from))}</span> → <span class="font-mono text-black">${escapeHtml(formatAuditValue(v2.to))}</span>`;
+            return `${escapeHtml(k2)}: <span class="text-gray-400 line-through">${escapeHtml(formatAuditValue(v2.from))}</span> → <span class="text-black">${escapeHtml(formatAuditValue(v2.to))}</span>`;
           }
-          return `${escapeHtml(k2)}: <span class="font-mono">${escapeHtml(formatAuditValue(v2))}</span>`;
+          return `${escapeHtml(k2)}: <span>${escapeHtml(formatAuditValue(v2))}</span>`;
         })
         .join("; ");
       return `<li><span class="text-gray-500">${escapeHtml(key)}</span> — ${inner}</li>`;
     }
-    return `<li><span class="text-gray-500">${escapeHtml(key)}</span> <span class="font-mono text-black">${escapeHtml(formatAuditValue(value))}</span></li>`;
+    return `<li><span class="text-gray-500">${escapeHtml(key)}</span> <span class="text-black">${escapeHtml(formatAuditValue(value))}</span></li>`;
   });
 
   return rows.length ? `<ul class="mt-1.5 space-y-0.5 text-xs">${rows.join("")}</ul>` : "";
@@ -1457,7 +1485,7 @@ function leaveRowHtml(r, canDecide) {
 
   return `
     <tr class="border-t border-gray-100">
-      <td class="px-2 py-2 whitespace-nowrap font-mono text-xs">${dateLabel}</td>
+      <td class="px-2 py-2 whitespace-nowrap text-xs">${dateLabel}</td>
       <td class="px-2 py-2 whitespace-nowrap">${escapeHtml(r.full_name || r.name)}</td>
       <td class="px-2 py-2 whitespace-nowrap text-gray-600">${escapeHtml(r.leave_type)}</td>
       <td class="px-2 py-2 text-gray-500 max-w-[220px]">${escapeHtml(r.reason || "—")}</td>
@@ -1673,7 +1701,7 @@ function renderCupCounts(cupRows) {
     input.dataset.date = row.date;
     input.disabled = !IS_SUPERUSER;
     input.className =
-      "cup-input w-20 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500";
+      "cup-input w-20 text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500";
     td.appendChild(input);
     qtyRow.appendChild(td);
   });
@@ -1796,34 +1824,35 @@ function computeGrandTotals() {
 function renderPayrollFooter() {
   payrollFoot.innerHTML = `
     <tr class="bg-blue-50 font-semibold border-t-2 border-brand-blue">
-      <td class="px-3 py-3" colspan="2">TOTAL</td>
-      <td class="px-3 py-3 font-mono totals-days"></td>
-      <td class="px-3 py-3 font-mono totals-base whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-bonus whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-manual-bonus whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-ot-hours"></td>
-      <td class="px-3 py-3 font-mono totals-ot-pay whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-undertime-hours"></td>
-      <td class="px-3 py-3 font-mono totals-undertime-ded whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-sss whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-pagibig whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-philhealth whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-hmo whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-error-ded whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-cash-advance whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-absence-ded whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono totals-ded whitespace-nowrap"></td>
-      <td class="px-3 py-3 font-mono text-brand-blue totals-net whitespace-nowrap"></td>
+      <td class="px-3 py-3">TOTAL</td>
+      <td class="px-3 py-3 text-brand-blue totals-net whitespace-nowrap"></td>
+      <td class="px-3 py-3"></td>
+      <td class="px-3 py-3 totals-days"></td>
+      <td class="px-3 py-3 totals-base whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-bonus whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-manual-bonus whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-ot-hours"></td>
+      <td class="px-3 py-3 totals-ot-pay whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-undertime-hours"></td>
+      <td class="px-3 py-3 totals-undertime-ded whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-sss whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-pagibig whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-philhealth whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-hmo whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-error-ded whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-cash-advance whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-absence-ded whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-ded whitespace-nowrap"></td>
     </tr>
   `;
 }
 
 function renderPayrollTable(staffList) {
   const headers = [
-    "Name", "Role", "Days", "Base Pay", "Cup Bonus", "Bonus",
+    "Name", "Net Pay", "Role", "Days", "Base Pay", "Cup Bonus", "Bonus",
     `OT Hrs`, `OT Pay (×₱${currentOtRate})`, "Undertime Hrs", "Undertime Ded.",
     "SSS", "Pag-IBIG", "PhilHealth", "HMO", "Printing Errors",
-    "Cash Advance", "Absence Ded.", "Total Ded.", "Net Pay",
+    "Cash Advance", "Absence Ded.", "Total Ded.",
   ];
   payrollHeadRow.innerHTML = headers
     .map((h) => `<th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3 py-2.5 whitespace-nowrap">${h}</th>`)
@@ -1843,23 +1872,31 @@ function renderPayrollTable(staffList) {
     nameTd.innerHTML = `<span class="font-medium">${p.full_name}</span>`;
     tr.appendChild(nameTd);
 
+    // Net Pay lives right after the name - the one figure worth seeing
+    // without scrolling the rest of the table into view - even though it's
+    // computed from everything to its right.
+    const netTd = document.createElement("td");
+    netTd.className = "px-3 py-2.5 align-top font-semibold text-brand-blue net-pay-cell whitespace-nowrap";
+    netTd.textContent = formatMoney(p.net_pay);
+    tr.appendChild(netTd);
+
     const roleTd = document.createElement("td");
     roleTd.className = "px-3 py-2.5 align-top text-gray-500 whitespace-nowrap";
     roleTd.textContent = p.role;
     tr.appendChild(roleTd);
 
     const daysTd = document.createElement("td");
-    daysTd.className = "px-3 py-2.5 align-top font-mono";
+    daysTd.className = "px-3 py-2.5 align-top";
     daysTd.textContent = p.days_worked;
     tr.appendChild(daysTd);
 
     const baseTd = document.createElement("td");
-    baseTd.className = "px-3 py-2.5 align-top font-mono whitespace-nowrap";
+    baseTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
     baseTd.textContent = formatMoney(p.base_pay);
     tr.appendChild(baseTd);
 
     const bonusTd = document.createElement("td");
-    bonusTd.className = "px-3 py-2.5 align-top font-mono whitespace-nowrap";
+    bonusTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
     bonusTd.textContent = p.has_bonus ? formatMoney(p.bonus) : "—";
     tr.appendChild(bonusTd);
 
@@ -1876,7 +1913,7 @@ function renderPayrollTable(staffList) {
       input.step = "0.01";
       input.value = value;
       input.disabled = !IS_SUPERUSER;
-      input.className = `${cls} w-24 text-sm font-mono border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500`;
+      input.className = `${cls} w-24 text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500`;
       input.addEventListener("input", () => {
         computeRowTotals(tr);
         computeGrandTotals();
@@ -1888,7 +1925,7 @@ function renderPayrollTable(staffList) {
     tr.appendChild(inputCell("ot-hours-input", p.ot_hours));
 
     const otPayTd = document.createElement("td");
-    otPayTd.className = "px-3 py-2.5 align-top font-mono ot-pay-cell whitespace-nowrap";
+    otPayTd.className = "px-3 py-2.5 align-top ot-pay-cell whitespace-nowrap";
     otPayTd.textContent = formatMoney(p.ot_pay);
     tr.appendChild(otPayTd);
 
@@ -1898,7 +1935,7 @@ function renderPayrollTable(staffList) {
     tr.appendChild(inputCell("undertime-hours-input", p.undertime_hours));
 
     const undertimeTd = document.createElement("td");
-    undertimeTd.className = "px-3 py-2.5 align-top font-mono undertime-pay-cell whitespace-nowrap";
+    undertimeTd.className = "px-3 py-2.5 align-top undertime-pay-cell whitespace-nowrap";
     undertimeTd.textContent = formatMoney(p.undertime_deduction);
     tr.appendChild(undertimeTd);
 
@@ -1919,19 +1956,14 @@ function renderPayrollTable(staffList) {
     tr.appendChild(advanceTd);
 
     const absenceDedTd = document.createElement("td");
-    absenceDedTd.className = "px-3 py-2.5 align-top font-mono whitespace-nowrap";
+    absenceDedTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
     absenceDedTd.textContent = p.monthly_salary ? formatMoney(p.absence_deduction) : "—";
     tr.appendChild(absenceDedTd);
 
     const totalDedTd = document.createElement("td");
-    totalDedTd.className = "px-3 py-2.5 align-top font-mono total-deductions-cell whitespace-nowrap";
+    totalDedTd.className = "px-3 py-2.5 align-top total-deductions-cell whitespace-nowrap";
     totalDedTd.textContent = formatMoney(p.total_deductions);
     tr.appendChild(totalDedTd);
-
-    const netTd = document.createElement("td");
-    netTd.className = "px-3 py-2.5 align-top font-mono font-semibold text-brand-blue net-pay-cell whitespace-nowrap";
-    netTd.textContent = formatMoney(p.net_pay);
-    tr.appendChild(netTd);
 
     payrollBody.appendChild(tr);
     computeRowTotals(tr); // fills the cash-advance balance hint on first paint
@@ -2081,9 +2113,9 @@ async function loadThirteenthMonth() {
         <tr>
           <td class="px-3 py-2.5 font-medium whitespace-nowrap">${escapeHtml(p.full_name)}</td>
           <td class="px-3 py-2.5 text-gray-500 whitespace-nowrap">${escapeHtml(p.role)}</td>
-          <td class="px-3 py-2.5 font-mono text-gray-500 text-xs whitespace-nowrap">${basis}</td>
-          <td class="px-3 py-2.5 font-mono whitespace-nowrap">${formatMoney(p.basic_earned)}</td>
-          <td class="px-3 py-2.5 font-mono font-semibold text-brand-blue whitespace-nowrap">${formatMoney(p.thirteenth_month)}</td>
+          <td class="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">${basis}</td>
+          <td class="px-3 py-2.5 whitespace-nowrap">${formatMoney(p.basic_earned)}</td>
+          <td class="px-3 py-2.5 font-semibold text-brand-blue whitespace-nowrap">${formatMoney(p.thirteenth_month)}</td>
         </tr>`;
     })
     .join("");
@@ -2091,7 +2123,7 @@ async function loadThirteenthMonth() {
   thirteenthFoot.innerHTML = `
     <tr class="bg-blue-50 font-semibold border-t-2 border-brand-blue">
       <td class="px-3 py-3" colspan="4">TOTAL</td>
-      <td class="px-3 py-3 font-mono text-brand-blue whitespace-nowrap">${formatMoney(total)}</td>
+      <td class="px-3 py-3 text-brand-blue whitespace-nowrap">${formatMoney(total)}</td>
     </tr>`;
 
   const monthNames = data.months_with_data.map((m) => MONTH_NAMES[m - 1]);
@@ -2139,7 +2171,7 @@ function contributionBlockHtml(label, idClass, idValue, amountClass, amountValue
       </label>
       <label class="block mt-1.5">
         <span class="block text-[10px] text-gray-400 uppercase tracking-wide">Standing amount (₱)</span>
-        <input type="number" step="0.01" min="0" class="${amountClass} w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${amountValue ?? 0}" />
+        <input type="number" step="0.01" min="0" class="${amountClass} w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${amountValue ?? 0}" />
       </label>
     </div>
   `;
@@ -2169,13 +2201,13 @@ function employeeCardHtml(s) {
       <label class="block"><span class="text-gray-500">Employment</span>
         <input class="employment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.employment)}" /></label>
       <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
-        <input type="number" step="0.01" min="0" class="daily-rate-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.daily_rate ?? 0}" /></label>
+        <input type="number" step="0.01" min="0" class="daily-rate-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.daily_rate ?? 0}" /></label>
       <label class="block"><span class="text-gray-500">Fixed monthly salary (₱)</span>
-        <input type="number" step="0.01" min="0" class="monthly-salary-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.monthly_salary ?? ""}" placeholder="—" /></label>
+        <input type="number" step="0.01" min="0" class="monthly-salary-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.monthly_salary ?? ""}" placeholder="—" /></label>
       <label class="block"><span class="text-gray-500">Monthly target (days)</span>
-        <input type="number" min="0" class="target-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.target ?? ""}" placeholder="—" /></label>
+        <input type="number" min="0" class="target-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.target ?? ""}" placeholder="—" /></label>
       <label class="block"><span class="text-gray-500">Birthday</span>
-        <input type="date" class="birthday-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${escapeHtml(s.birthday)}" /></label>
+        <input type="date" class="birthday-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.birthday)}" /></label>
       <label class="block"><span class="text-gray-500">Phone</span>
         <input class="phone-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.phone)}" /></label>
       <label class="block col-span-2"><span class="text-gray-500">Email</span>
@@ -2201,7 +2233,7 @@ function employeeCardHtml(s) {
       <label class="block"><span class="text-gray-500">Account name</span>
         <input class="bank-account-name-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.bank_account_name)}" /></label>
       <label class="block"><span class="text-gray-500">Account number</span>
-        <input class="bank-account-number-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${escapeHtml(s.bank_account_number)}" /></label>
+        <input class="bank-account-number-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.bank_account_number)}" /></label>
     </div>
   `;
 
@@ -2210,11 +2242,11 @@ function employeeCardHtml(s) {
     <div class="advance-list-wrap mb-3"></div>
     <div class="grid grid-cols-2 gap-2 text-xs">
       <label class="block"><span class="text-gray-500">Amount (₱)</span>
-        <input type="number" min="0" step="0.01" class="advance-amount-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        <input type="number" min="0" step="0.01" class="advance-amount-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
       <label class="block"><span class="text-gray-500">Date granted</span>
-        <input type="date" class="advance-date-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" /></label>
+        <input type="date" class="advance-date-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
       <label class="block"><span class="text-gray-500">Deduct per cutoff (₱)</span>
-        <input type="number" min="0" step="0.01" class="advance-installment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" placeholder="whole balance" /></label>
+        <input type="number" min="0" step="0.01" class="advance-installment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" placeholder="whole balance" /></label>
       <label class="block"><span class="text-gray-500">Note</span>
         <input class="advance-note-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
     </div>
@@ -2230,7 +2262,7 @@ function employeeCardHtml(s) {
 
   const ptoHtml = `
     <label class="block text-xs mb-3 max-w-[200px]"><span class="text-gray-500">Entitlement (days/yr)</span>
-      <input type="number" min="0" class="pto-entitlement-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm font-mono" value="${s.pto_entitlement ?? ""}" placeholder="—" /></label>
+      <input type="number" min="0" class="pto-entitlement-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.pto_entitlement ?? ""}" placeholder="—" /></label>
     <p class="pto-summary text-sm text-gray-600 mb-2">Loading…</p>
     <div class="pto-table-wrap"></div>
   `;
@@ -2272,6 +2304,27 @@ function employeeCardHtml(s) {
     `;
   }
 
+  // Which optional apps this account can open - superuser only, since a
+  // manager bypasses these toggles entirely (see is_manager in app.py's
+  // index()) and would just be editing a setting that doesn't apply to
+  // them.
+  const accessHtml = !IS_SUPERUSER
+    ? null
+    : s.category === "manager"
+    ? `<p class="text-sm text-gray-500">A manager always has every app - there's nothing to switch off here.</p>`
+    : `
+    <label class="flex items-center gap-2 text-sm mb-2">
+      <input type="checkbox" class="access-cup-printing-input rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${s.can_access_cup_printing_app ? "checked" : ""} />
+      Cup Printing
+    </label>
+    <label class="flex items-center gap-2 text-sm mb-2">
+      <input type="checkbox" class="access-admin-input rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${s.can_access_admin_app ? "checked" : ""} />
+      Admin (Collections, Expenses, Inventory, Notes)
+    </label>
+    <span class="access-save-status text-xs text-gray-500"></span>
+    <p class="text-[11px] text-gray-400 mt-2">Payroll &amp; HRMS always stays available.</p>
+  `;
+
   return `
     <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm" data-name="${escapeHtml(s.name)}">
       <div class="flex items-start gap-4 mb-5">
@@ -2305,6 +2358,7 @@ function employeeCardHtml(s) {
         )}
         ${sectionHtml("Cash Advances", advancesHtml)}
         <div class="lg:col-span-2">${sectionHtml("Login Access", loginHtml)}</div>
+        ${accessHtml ? `<div class="lg:col-span-2">${sectionHtml("App Access", accessHtml)}</div>` : ""}
       </div>
 
       <div class="flex items-center gap-3 mt-5 flex-wrap">
@@ -2344,7 +2398,7 @@ async function loadEmployeePto(name, card, year) {
       const dt = new Date(`${d}T00:00:00`);
       const weekday = dt.toLocaleDateString("en-US", { weekday: "short" });
       const label = dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-      return `<tr class="border-t border-gray-100"><td class="px-2 py-1.5 font-mono">${label}</td><td class="px-2 py-1.5 text-gray-500">${weekday}</td></tr>`;
+      return `<tr class="border-t border-gray-100"><td class="px-2 py-1.5">${label}</td><td class="px-2 py-1.5 text-gray-500">${weekday}</td></tr>`;
     })
     .join("");
   tableWrap.innerHTML = `
@@ -2386,9 +2440,9 @@ async function loadEmployeeAdvances(name, card) {
         ${data.advances
           .map(
             (a) => `<tr class="border-t border-gray-100">
-              <td class="px-2 py-1.5 font-mono">${escapeHtml(a.date_granted)}</td>
-              <td class="px-2 py-1.5 font-mono">${formatMoney(a.amount)}</td>
-              <td class="px-2 py-1.5 font-mono">${a.installment ? formatMoney(a.installment) : "—"}</td>
+              <td class="px-2 py-1.5">${escapeHtml(a.date_granted)}</td>
+              <td class="px-2 py-1.5">${formatMoney(a.amount)}</td>
+              <td class="px-2 py-1.5">${a.installment ? formatMoney(a.installment) : "—"}</td>
               <td class="px-2 py-1.5 text-gray-500">${escapeHtml(a.note || "—")}</td>
               <td class="px-2 py-1.5 text-right">
                 <button type="button" class="delete-advance-btn text-gray-400 hover:text-red-600" data-id="${a.id}" title="Delete this advance">&times;</button>
@@ -2488,6 +2542,18 @@ function renderEmployees() {
     const saveLoginBtn = card.querySelector(".save-login-btn");
     if (saveLoginBtn) {
       saveLoginBtn.addEventListener("click", () => saveStaffLogin(card, name));
+    }
+    const accessCupPrinting = card.querySelector(".access-cup-printing-input");
+    const accessAdmin = card.querySelector(".access-admin-input");
+    if (accessCupPrinting) {
+      accessCupPrinting.addEventListener("change", () =>
+        saveStaffAccess(card, name, "can_access_cup_printing_app", accessCupPrinting.checked)
+      );
+    }
+    if (accessAdmin) {
+      accessAdmin.addEventListener("change", () =>
+        saveStaffAccess(card, name, "can_access_admin_app", accessAdmin.checked)
+      );
     }
     const advanceDate = card.querySelector(".advance-date-input");
     if (advanceDate) {
@@ -2649,6 +2715,31 @@ async function saveStaffLogin(card, name) {
   } catch (err) {
     statusEl.textContent = "Could not save. Please try again.";
     btn.disabled = false;
+  }
+}
+
+async function saveStaffAccess(card, name, field, checked) {
+  const statusEl = card.querySelector(".access-save-status");
+  if (statusEl) statusEl.textContent = "Saving…";
+  try {
+    const res = await fetch(`/api/staff/${encodeURIComponent(name)}/access`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: checked }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (statusEl) statusEl.textContent = data.message || "Could not save.";
+      return;
+    }
+    if (statusEl) {
+      statusEl.textContent = "Saved";
+      setTimeout(() => {
+        if (statusEl.textContent === "Saved") statusEl.textContent = "";
+      }, 1500);
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Could not save. Please try again.";
   }
 }
 
@@ -2926,7 +3017,7 @@ function printCard(o) {
                  data-item="${i.id}" data-status="${i.status}" data-qty="${i.quantity}"
                  title="Change status">${escapeHtml(PRINT_STATUS_LABEL[i.status] || i.status)}</button>` +
         (i.status === "partial" && i.qty_delivered
-          ? `<span class="block text-[10px] text-amber-700 font-mono mt-0.5">${Number(i.qty_delivered).toLocaleString("en-PH")} out</span>`
+          ? `<span class="block text-[10px] text-amber-700 mt-0.5">${Number(i.qty_delivered).toLocaleString("en-PH")} out</span>`
           : "");
 
       return (
@@ -2989,7 +3080,7 @@ function printCard(o) {
         ${f.logo ? printLogo(o.client_name, false, o.logo_filename) : ""}
         <div class="min-w-0 flex-1">
           <button class="print-client-btn font-semibold text-[15px] leading-tight truncate hover:text-brand-blue text-left block max-w-full" data-client="${o.client_id}">${escapeHtml(o.client_name)} &rsaquo;</button>
-          <p class="text-[11px] text-gray-400 font-mono">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
+          <p class="print-card-sub text-[11px] text-gray-400">${printShortDate(o.order_date)} · ${cups.toLocaleString("en-PH")} cups</p>
         </div>
         <div class="flex flex-wrap items-center gap-1 justify-end shrink-0 max-w-[45%]">
           ${chips.join("")}
@@ -3011,7 +3102,7 @@ function printCard(o) {
                        title="${o.is_paid ? "Mark as unpaid" : "Mark as paid"}">${o.is_paid ? "Paid" : "Mark paid"}</button>
                ${
                  f.amount && o.status === "done"
-                   ? `<span class="print-card-total font-mono font-semibold text-sm">${printMoney(o.total)}</span>`
+                   ? `<span class="print-card-total font-semibold text-sm">${printMoney(o.total)}</span>`
                    : ""
                }
              </div>`
@@ -3112,9 +3203,9 @@ function renderPrintBoard() {
             <span class="relative inline-flex items-center gap-2.5 rounded-full border px-4 py-1.5 ${tone}">
               ${dot}
               <h3 class="font-display font-semibold text-[15px] leading-none tracking-tight">${escapeHtml(k)}</h3>
-              <span class="text-[11px] font-mono leading-none opacity-60">${group.length}</span>
+              <span class="text-[11px] leading-none opacity-60">${group.length}</span>
               <span class="w-px h-3 bg-current opacity-20"></span>
-              <span class="group-cups text-[11px] font-mono leading-none opacity-60">${cups.toLocaleString("en-PH")} cups</span>
+              <span class="group-cups text-[11px] leading-none opacity-60">${cups.toLocaleString("en-PH")} cups</span>
             </span>
           </div>
           <div class="print-grid" data-cols="${printState.cols}">${group.map(printCard).join("")}</div>
@@ -3511,7 +3602,7 @@ async function savePrintCell(cell, raw, revert) {
 function repaintPrintTotals(order) {
   const card = document.querySelector(`article[data-order="${order.id}"]`);
   if (card) {
-    const sub = card.querySelector("p.font-mono");
+    const sub = card.querySelector("p.print-card-sub");
     if (sub) sub.textContent = `${printShortDate(order.order_date)} · ${order.quantity.toLocaleString("en-PH")} cups`;
     const total = card.querySelector(".print-card-total");
     if (total) total.textContent = printMoney(order.total);
@@ -3672,7 +3763,7 @@ function statusCardHTML(o) {
       (i) => `
         <div class="flex items-center gap-2">
           <span class="flex-1 min-w-0 truncate">${escapeHtml(i.label || "")}</span>
-          <span class="font-mono text-[11px] text-gray-400 shrink-0">${Number(i.quantity).toLocaleString("en-PH")}</span>
+          <span class="text-[11px] text-gray-400 shrink-0">${Number(i.quantity).toLocaleString("en-PH")}</span>
         </div>`
     )
     .join("");
@@ -3727,9 +3818,9 @@ function renderStatusBoard() {
         <div class="flex items-center gap-2 px-3 pt-3 pb-2">
           <span class="w-2 h-2 rounded-full shrink-0" style="background:${col.dot}"></span>
           <h3 class="text-[14.5px] font-semibold flex-1 min-w-0">${col.label}</h3>
-          <span class="text-[11px] font-mono font-semibold bg-white/70 rounded-full px-2 py-0.5">${list.length}</span>
+          <span class="text-[11px] font-semibold bg-white/70 rounded-full px-2 py-0.5">${list.length}</span>
         </div>
-        <p class="text-[11px] font-mono text-gray-400 px-3 -mt-1 mb-1">${cups ? Number(cups).toLocaleString("en-PH") + " cups" : "—"}</p>
+        <p class="text-[11px] text-gray-400 px-3 -mt-1 mb-1">${cups ? Number(cups).toLocaleString("en-PH") + " cups" : "—"}</p>
         <div class="kb-col-body px-2 pb-2" data-bucket="${col.key}">${body}</div>
       </div>`;
   }).join("");
@@ -3891,7 +3982,7 @@ function cupLidCellHTML(i) {
               title="Click to change the lid">${escapeHtml(i.lid_label && i.lid_label !== "—" ? i.lid_label : "—")}</span></td>`;
 }
 function cupQtyCellHTML(i) {
-  return `<td class="font-mono text-right whitespace-nowrap"><span class="print-edit" tabindex="0" role="button"
+  return `<td class="text-right whitespace-nowrap"><span class="print-edit" tabindex="0" role="button"
               data-item="${i.id}" data-field="quantity" title="Click to edit"
               >${Number(i.quantity).toLocaleString("en-PH")}</span></td>`;
 }
@@ -3902,19 +3993,42 @@ function cupInkCellHTML(i) {
   return `<td class="whitespace-nowrap">${inkChip(i)}</td>`;
 }
 
-const TRASH_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-
 function cupPrintsRowsHTML(list) {
+  // "new" means this is the only order this client has ever placed - counted
+  // against every order, not just the (possibly search-filtered) list being
+  // drawn, so searching for a client doesn't change whether they read as new
+  const orderCountByClient = {};
+  printAllOrders.forEach((o) => {
+    orderCountByClient[o.client_id] = (orderCountByClient[o.client_id] || 0) + 1;
+  });
+
   const out = [];
   list.forEach((o, gi) => {
-    // still every line, not started - the one thing worth flagging
-    // without opening the row
-    const flagged = statusBucket(o) === "not_started";
+    // any line still open - not just not-started - is the one thing worth
+    // flagging without opening the row: an order isn't off the press's
+    // plate just because part of it moved to ongoing
+    const flagged = o.status !== "done" && o.status !== "cancelled";
+    const isNewClient = orderCountByClient[o.client_id] === 1;
+    // one badge covers both - a new client's first order needs a new frame
+    // for the same reason, so two icons would usually just say the same
+    // thing twice
+    const newTitle =
+      o.needs_new_frame && isNewClient
+        ? "New client · needs a new frame"
+        : o.needs_new_frame
+        ? "Needs a new frame"
+        : "New client";
+    const badges = [
+      o.is_rush ? `<span class="text-amber-500" title="Rush order">&#9889;</span>` : "",
+      o.needs_new_frame || isNewClient ? `<span class="text-emerald-500" title="${newTitle}">&#127381;</span>` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     o.items.forEach((i, li) => {
       const first = li === 0;
       const cells = [];
-      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-mono text-[11px] text-gray-500 whitespace-nowrap${flagged ? " cps-flag-not-started" : ""}">${printShortDate(o.order_date)}</td>`);
-      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="text-[11px] text-gray-500 whitespace-nowrap${flagged ? " cps-flag-not-started" : ""}">${printShortDate(o.order_date)}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}${badges ? ` ${badges}` : ""}</td>`);
       cells.push(cupItemCellHTML(i));
       cells.push(cupLidCellHTML(i));
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
@@ -3923,12 +4037,11 @@ function cupPrintsRowsHTML(list) {
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("paid", o.id, o.is_paid)}</td>`);
       cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
       if (first) {
-        const rush = o.is_rush ? `<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 ml-1.5 align-middle" title="Rush"></span>` : "";
-        cells.push(`<td rowspan="${o.items.length}" class="whitespace-nowrap">${o.due_date ? printShortDate(o.due_date) : "—"}${rush}</td>`);
+        cells.push(`<td rowspan="${o.items.length}" class="whitespace-nowrap">${o.due_date ? printShortDate(o.due_date) : "—"}</td>`);
         cells.push(
           `<td rowspan="${o.items.length}" style="max-width:14rem">` +
             `<div class="flex items-start gap-1.5">${cupRemarksHTML(o)}` +
-            `<button type="button" class="cps-delete-btn" data-delete="${o.id}" title="Delete order" aria-label="Delete order">${TRASH_ICON}</button>` +
+            `<button type="button" class="cps-menu-btn" data-order="${o.id}" title="Order actions" aria-label="Order actions">&#8943;</button>` +
             `</div></td>`
         );
       }
@@ -3953,6 +4066,9 @@ function renderCupPrints() {
   const total = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + i.quantity * Number(i.unit_price || 0), 0), 0);
   document.getElementById("cupPrintsTotal").textContent = printMoney(total);
 
+  const cups = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + Number(i.quantity || 0), 0), 0);
+  document.getElementById("cupPrintsCups").textContent = cups.toLocaleString("en-PH");
+
   wireCupPrints();
 }
 
@@ -3964,11 +4080,10 @@ function wireCupPrints() {
   // re-renders while these rows are still on screen
   body.querySelectorAll(".print-edit").forEach(wireEditCell);
 
-  body.querySelectorAll("[data-delete]").forEach((btn) => {
+  body.querySelectorAll(".cps-menu-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const order = printAllOrders.find((o) => String(o.id) === btn.dataset.delete);
-      if (order) askDeleteOrder(order.id, order);
+      openCupPrintsMenu(btn);
     });
   });
 
@@ -4073,7 +4188,7 @@ async function openPrintClient(clientId) {
           (d) =>
             `<tr class="border-b border-gray-100 last:border-0">
                <td class="py-1">${escapeHtml([d.family, d.size].filter(Boolean).join(" "))}</td>
-               <td class="py-1 text-right font-mono">${printMoney(d.price)}</td>
+               <td class="py-1 text-right">${printMoney(d.price)}</td>
              </tr>`
         )
         .join("")}</table>`
@@ -4084,9 +4199,9 @@ async function openPrintClient(clientId) {
         .map(
           (h) =>
             `<tr class="border-b border-gray-100 last:border-0">
-               <td class="py-1 text-xs font-mono text-gray-400 whitespace-nowrap">${printShortDate(h.order_date)}</td>
-               <td class="py-1 text-right font-mono">${Number(h.cups).toLocaleString("en-PH")}</td>
-               <td class="py-1 text-right font-mono ${h.is_paid ? "text-gray-500" : "text-red-600"}">${printMoney(h.total)}</td>
+               <td class="py-1 text-xs text-gray-400 whitespace-nowrap">${printShortDate(h.order_date)}</td>
+               <td class="py-1 text-right">${Number(h.cups).toLocaleString("en-PH")}</td>
+               <td class="py-1 text-right ${h.is_paid ? "text-gray-500" : "text-red-600"}">${printMoney(h.total)}</td>
              </tr>`
         )
         .join("")}</table>`
@@ -4279,7 +4394,7 @@ function renderPoClientDropdown() {
     (c) => `<button type="button" class="po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(c.name)}">
               ${poClientAvatar(c.name, c.logo_filename)}
               <span class="flex-1 min-w-0 truncate">${poClientHighlight(c.name, trimmed)}</span>
-              ${c.order_count ? `<span class="text-[10px] font-mono text-gray-400 shrink-0">${c.order_count} order${c.order_count === 1 ? "" : "s"}</span>` : ""}
+              ${c.order_count ? `<span class="text-[10px] text-gray-400 shrink-0">${c.order_count} order${c.order_count === 1 ? "" : "s"}</span>` : ""}
             </button>`
   );
   if (trimmed && !exact) {
@@ -4605,6 +4720,919 @@ if (document.getElementById("printOrderModal")) {
 
 
 // ---------------------------------------------------------------------------
+// Admin app - Collections, Expenses, Inventory, Notes. Back-office
+// record-keeping that isn't payroll and isn't a print job. Guarded on
+// collectionsView existing at all: unlike Cup Printing (whose shared modals
+// - printOrderModal, printDrawer - are always rendered regardless of
+// has_cup_printing_app), every element this section touches lives inside
+// the has_office_app-gated markup, so none of it can assume it's there.
+if (document.getElementById("collectionsView")) {
+
+// Collections - a real Purchase Order ledger per client, entered by hand
+// (this replaces one Google Sheet per client). Deliberately independent of
+// print_orders/print_order_items: a PO is what was actually invoiced, which
+// is not the same number as the internal job-tracking totals Cup Printing
+// keeps. Only clients with at least one PO show up here.
+let collectionsClients = [];
+let collectionsPOs = [];
+let collectionsQuery = "";
+let collectionsViewMode = "flat"; // "flat" (one row per PO, default) or "grouped" (one row per client)
+let collectionsFilterMode = "all"; // "all" | "outstanding" | "paid"
+
+async function loadCollections() {
+  const body = document.getElementById("collectionsBody");
+  try {
+    const [clientsRes, posRes] = await Promise.all([
+      fetch("/api/office/purchase-orders/clients"),
+      fetch("/api/office/purchase-orders"),
+    ]);
+    if (!clientsRes.ok || !posRes.ok) throw new Error("Could not load collections.");
+    collectionsClients = (await clientsRes.json()).clients;
+    collectionsPOs = (await posRes.json()).pos;
+  } catch (err) {
+    body.innerHTML = `<tr><td class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message)}</td></tr>`;
+    return;
+  }
+  renderCollections();
+}
+
+function collectionsPassesFilter(balance) {
+  if (collectionsFilterMode === "outstanding") return balance > 0;
+  if (collectionsFilterMode === "paid") return balance <= 0;
+  return true;
+}
+
+function renderCollectionsHead() {
+  const headRow = document.getElementById("collectionsHeadRow");
+  headRow.innerHTML =
+    collectionsViewMode === "grouped"
+      ? `<th class="text-left px-3 py-2">Client</th>
+         <th class="text-right px-3 py-2">PO Count</th>
+         <th class="text-right px-3 py-2">Invoiced</th>
+         <th class="text-right px-3 py-2">Collected</th>
+         <th class="text-right px-3 py-2">Balance</th>`
+      : `<th class="text-left px-3 py-2">Date</th>
+         <th class="text-left px-3 py-2">Client</th>
+         <th class="text-right px-3 py-2">Amount</th>
+         <th class="text-right px-3 py-2">Collected</th>
+         <th class="text-right px-3 py-2">Balance</th>
+         <th class="text-left px-3 py-2">Paid Date</th>
+         <th class="text-left px-3 py-2">Remarks</th>
+         <th class="px-3 py-2"></th>`;
+}
+
+// Whether the drawer currently on screen belongs to this client - so an
+// action taken from the flat list (which doesn't open the drawer) still
+// refreshes it if it happens to already be open, without ever *opening*
+// it as a side effect of adding a payment or deleting a PO.
+function collectionsDrawerOpenFor(clientId) {
+  const scrim = document.getElementById("collectionsScrim");
+  return !scrim.classList.contains("hidden") && String(collectionsCurrentClientId) === String(clientId);
+}
+
+function renderCollections() {
+  renderCollectionsHead();
+  const body = document.getElementById("collectionsBody");
+  const q = collectionsQuery.trim().toLowerCase();
+  const colspan = collectionsViewMode === "grouped" ? 5 : 8;
+
+  const outstanding = collectionsClients.filter((c) => c.balance > 0);
+  const totalBalance = outstanding.reduce((n, c) => n + c.balance, 0);
+  document.getElementById("collectionsSubtitle").textContent = outstanding.length
+    ? `${printMoney(totalBalance)} outstanding across ${outstanding.length} client${outstanding.length === 1 ? "" : "s"}`
+    : "Nothing outstanding.";
+
+  if (collectionsViewMode === "grouped") {
+    const rows = collectionsClients.filter(
+      (c) => (!q || c.name.toLowerCase().includes(q)) && collectionsPassesFilter(c.balance)
+    );
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="${colspan}" class="text-sm text-gray-400 py-6 text-center">${
+        collectionsClients.length ? "Nothing matches that search or filter." : "No purchase orders yet - add one with “+ New PO”."
+      }</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map(
+        (c) => `
+      <tr class="hover:bg-gray-50 cursor-pointer" data-client="${c.id}">
+        <td class="px-3 py-2 font-medium text-gray-900">${escapeHtml(c.name)}</td>
+        <td class="px-3 py-2 text-right text-gray-500">${c.po_count}</td>
+        <td class="px-3 py-2 text-right">${printMoney(c.invoiced)}</td>
+        <td class="px-3 py-2 text-right">${printMoney(c.collected)}</td>
+        <td class="px-3 py-2 text-right ${c.balance > 0 ? "text-red-600 font-semibold" : "text-gray-400"}">${printMoney(c.balance)}</td>
+      </tr>`
+      )
+      .join("");
+  } else {
+    const rows = collectionsPOs.filter(
+      (po) => (!q || po.client_name.toLowerCase().includes(q)) && collectionsPassesFilter(po.balance)
+    );
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="${colspan}" class="text-sm text-gray-400 py-6 text-center">${
+        collectionsPOs.length ? "Nothing matches that search or filter." : "No purchase orders yet - add one with “+ New PO”."
+      }</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows
+      .map(
+        (po) => `
+      <tr class="hover:bg-gray-50">
+        <td class="px-3 py-2 text-gray-500 whitespace-nowrap cursor-pointer hover:underline" data-open="${po.client_id}">${printShortDate(po.po_date)}</td>
+        <td class="px-3 py-2 font-medium text-gray-900 cursor-pointer hover:underline" data-open="${po.client_id}">${escapeHtml(po.client_name)}</td>
+        <td class="px-3 py-2 text-right">${printMoney(po.amount)}</td>
+        <td class="px-3 py-2 text-right">${printMoney(po.collected)}</td>
+        <td class="px-3 py-2 text-right ${po.balance > 0 ? "text-red-600 font-semibold" : "text-gray-400"}">${printMoney(po.balance)}</td>
+        <td class="px-3 py-2 text-gray-500 whitespace-nowrap">${po.last_paid_date ? printShortDate(po.last_paid_date) : "—"}</td>
+        <td class="px-3 py-2 text-gray-500">${escapeHtml(po.remarks || "—")}</td>
+        <td class="px-3 py-2 text-right whitespace-nowrap">
+          ${po.balance > 0 ? `<button type="button" class="po-list-payment text-xs text-brand-blue hover:underline" data-po="${po.id}" data-client="${po.client_id}">+ Payment</button>` : ""}
+          <button type="button" class="po-list-delete text-gray-300 hover:text-red-600 ml-2" data-po="${po.id}" data-client="${po.client_id}" title="Delete PO" aria-label="Delete PO">&#10005;</button>
+        </td>
+      </tr>`
+      )
+      .join("");
+  }
+
+  body.querySelectorAll("tr[data-client]").forEach((row) => {
+    row.addEventListener("click", () => openCollectionsClient(row.dataset.client));
+  });
+  body.querySelectorAll("[data-open]").forEach((el) => {
+    el.addEventListener("click", () => openCollectionsClient(el.dataset.open));
+  });
+  body.querySelectorAll(".po-list-payment").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPoPaymentModal(btn.dataset.po, btn.dataset.client);
+    });
+  });
+  body.querySelectorAll(".po-list-delete").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("Delete this purchase order? Any payments logged against it go with it.")) return;
+      const res = await fetch(`/api/office/purchase-orders/${btn.dataset.po}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not delete that PO.");
+        return;
+      }
+      if (collectionsDrawerOpenFor(btn.dataset.client)) await openCollectionsClient(btn.dataset.client);
+      loadCollections();
+    });
+  });
+}
+
+function setCollectionsView(mode) {
+  collectionsViewMode = mode;
+  const grouped = document.getElementById("collectionsViewGrouped");
+  const flat = document.getElementById("collectionsViewFlat");
+  grouped.classList.toggle("bg-brand-blue", mode === "grouped");
+  grouped.classList.toggle("text-white", mode === "grouped");
+  grouped.classList.toggle("bg-white", mode !== "grouped");
+  grouped.classList.toggle("text-gray-600", mode !== "grouped");
+  flat.classList.toggle("bg-brand-blue", mode === "flat");
+  flat.classList.toggle("text-white", mode === "flat");
+  flat.classList.toggle("bg-white", mode !== "flat");
+  flat.classList.toggle("text-gray-600", mode !== "flat");
+  renderCollections();
+}
+
+document.getElementById("collectionsViewGrouped").addEventListener("click", () => setCollectionsView("grouped"));
+document.getElementById("collectionsViewFlat").addEventListener("click", () => setCollectionsView("flat"));
+document.getElementById("collectionsFilter").addEventListener("change", (e) => {
+  collectionsFilterMode = e.target.value;
+  renderCollections();
+});
+document.getElementById("collectionsSearch").addEventListener("input", (e) => {
+  collectionsQuery = e.target.value;
+  renderCollections();
+});
+
+let collectionsCurrentClientId = null;
+
+async function openCollectionsClient(clientId) {
+  const scrim = document.getElementById("collectionsScrim");
+  const drawer = document.getElementById("collectionsDrawer");
+  const bodyEl = document.getElementById("collectionsDrawerBody");
+  bodyEl.innerHTML = `<p class="text-sm text-gray-400 text-center py-8">Loading…</p>`;
+  scrim.classList.remove("hidden");
+  drawer.classList.remove("translate-x-full");
+  collectionsCurrentClientId = clientId;
+
+  const res = await fetch(`/api/office/purchase-orders/clients/${clientId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    bodyEl.innerHTML = `<p class="text-sm text-red-600 text-center py-8">${escapeHtml(err.message || "Could not load this client.")}</p>`;
+    return;
+  }
+  const data = await res.json();
+
+  document.getElementById("collectionsDrawerName").textContent = data.client.name;
+  document.getElementById("collectionsDrawerSub").textContent =
+    `${printMoney(data.totals.invoiced)} invoiced · ${printMoney(data.totals.collected)} collected`;
+
+  renderCollectionsDrawerBody(data);
+}
+
+function poStatusHTML(po) {
+  if (po.balance <= 0) return `<span class="text-green-700 font-medium">Paid</span>`;
+  if (po.collected > 0) return `<span class="text-amber-600">${printMoney(po.collected)} of ${printMoney(po.amount)}</span>`;
+  return `<span class="text-red-600">Not paid</span>`;
+}
+
+function renderCollectionsDrawerBody(data) {
+  const bodyEl = document.getElementById("collectionsDrawerBody");
+  const balanceClass = data.totals.balance > 0 ? "text-red-600" : "text-gray-900";
+
+  const poRows = data.pos.length
+    ? data.pos
+        .map(
+          (po) => `
+      <tr data-po="${po.id}">
+        <td class="py-1.5 pr-2 text-gray-500 whitespace-nowrap">${printShortDate(po.po_date)}</td>
+        <td class="py-1.5 pr-2 text-right">${printMoney(po.amount)}</td>
+        <td class="py-1.5 pr-2 text-right whitespace-nowrap">${poStatusHTML(po)}</td>
+        <td class="py-1.5 pr-2 text-gray-500">${escapeHtml(po.remarks || "—")}</td>
+        <td class="py-1.5 text-right whitespace-nowrap">
+          ${po.balance > 0 ? `<button type="button" class="po-add-payment text-xs text-brand-blue hover:underline" data-po="${po.id}">+ payment</button>` : ""}
+          <button type="button" class="po-delete text-gray-300 hover:text-red-600 ml-2" data-po="${po.id}" aria-label="Delete PO">&#10005;</button>
+        </td>
+      </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="5" class="py-3 text-gray-400 text-center">No purchase orders yet.</td></tr>`;
+
+  bodyEl.innerHTML = `
+    <div class="grid grid-cols-3 gap-2 text-center">
+      <div class="border border-gray-200 rounded-lg py-2">
+        <p class="text-[10px] uppercase tracking-wide text-gray-400">Invoiced</p>
+        <p class="font-semibold">${printMoney(data.totals.invoiced)}</p>
+      </div>
+      <div class="border border-gray-200 rounded-lg py-2">
+        <p class="text-[10px] uppercase tracking-wide text-gray-400">Collected</p>
+        <p class="font-semibold">${printMoney(data.totals.collected)}</p>
+      </div>
+      <div class="border border-gray-200 rounded-lg py-2">
+        <p class="text-[10px] uppercase tracking-wide text-gray-400">Balance</p>
+        <p class="font-semibold ${balanceClass}">${printMoney(data.totals.balance)}</p>
+      </div>
+    </div>
+
+    <div>
+      <h4 class="text-xs uppercase tracking-wide text-gray-400 font-mono mb-2">Add a PO</h4>
+      <form id="drawerPoForm" class="flex flex-wrap gap-2 items-start">
+        <input name="po_date" type="date" value="${new Date().toISOString().slice(0, 10)}" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-36" />
+        <input name="amount" type="number" step="0.01" min="0.01" placeholder="Amount" required class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-28" />
+        <input name="remarks" type="text" placeholder="Remarks (optional)" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm flex-1 min-w-[8rem]" />
+        <button type="submit" class="bg-brand-green text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:opacity-90 transition">Add</button>
+      </form>
+      <p id="drawerPoError" class="text-xs text-red-600 mt-1 hidden"></p>
+    </div>
+
+    <div>
+      <h4 class="text-xs uppercase tracking-wide text-gray-400 font-mono mb-2">Purchase orders</h4>
+      <table class="w-full text-sm"><tbody>${poRows}</tbody></table>
+    </div>
+  `;
+
+  document.getElementById("drawerPoForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errorEl = document.getElementById("drawerPoError");
+    errorEl.classList.add("hidden");
+    const fd = new FormData(e.target);
+    try {
+      await postJSON("/api/office/purchase-orders", {
+        client_id: data.client.id,
+        po_date: fd.get("po_date"),
+        amount: fd.get("amount"),
+        remarks: fd.get("remarks"),
+      });
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    await openCollectionsClient(data.client.id);
+    loadCollections();
+  });
+
+  bodyEl.querySelectorAll(".po-add-payment").forEach((btn) => {
+    btn.addEventListener("click", () => openPoPaymentModal(btn.dataset.po, data.client.id));
+  });
+  bodyEl.querySelectorAll(".po-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this purchase order? Any payments logged against it go with it.")) return;
+      const res = await fetch(`/api/office/purchase-orders/${btn.dataset.po}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not delete that PO.");
+        return;
+      }
+      await openCollectionsClient(data.client.id);
+      loadCollections();
+    });
+  });
+}
+
+let poPaymentTarget = null; // { poId, clientId } for whichever "+ Payment" was clicked
+
+function openPoPaymentModal(poId, clientId) {
+  poPaymentTarget = { poId, clientId };
+  document.getElementById("poPaymentAmount").value = "";
+  document.getElementById("poPaymentDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("poPaymentNote").value = "";
+  document.getElementById("poPaymentError").classList.add("hidden");
+  const modal = document.getElementById("poPaymentModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("poPaymentAmount").focus();
+}
+
+function closePoPaymentModal() {
+  const modal = document.getElementById("poPaymentModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+  poPaymentTarget = null;
+}
+
+async function savePoPayment() {
+  if (!poPaymentTarget) return;
+  const errorEl = document.getElementById("poPaymentError");
+  errorEl.classList.add("hidden");
+  const { poId, clientId } = poPaymentTarget;
+  try {
+    await postJSON(`/api/office/purchase-orders/${poId}/payments`, {
+      amount: document.getElementById("poPaymentAmount").value,
+      paid_date: document.getElementById("poPaymentDate").value,
+      note: document.getElementById("poPaymentNote").value,
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  closePoPaymentModal();
+  if (collectionsDrawerOpenFor(clientId)) await openCollectionsClient(clientId);
+  loadCollections();
+}
+
+document.getElementById("poPaymentCancel").addEventListener("click", closePoPaymentModal);
+document.getElementById("poPaymentSave").addEventListener("click", savePoPayment);
+
+function closeCollectionsDrawer() {
+  document.getElementById("collectionsScrim").classList.add("hidden");
+  document.getElementById("collectionsDrawer").classList.add("translate-x-full");
+}
+
+document.getElementById("collectionsDrawerClose").addEventListener("click", closeCollectionsDrawer);
+document.getElementById("collectionsScrim").addEventListener("click", closeCollectionsDrawer);
+
+// "+ New PO" - the same client picker as the New Order form (poClientMatches
+// / poClientAvatar / poClientHighlight, all keyed off the shared printClients
+// array), minus the "create a new client" row: a PO can only be raised
+// against a client who already exists.
+let newPoClientActiveIndex = -1;
+
+function renderNewPoClientDropdown() {
+  const input = document.getElementById("newPoClient");
+  const drop = document.getElementById("newPoClientDropdown");
+  const trimmed = input.value.trim();
+  const matches = poClientMatches(input.value);
+
+  if (!matches.length) {
+    drop.innerHTML = `<p class="px-3 py-2 text-gray-400 italic">No matching client.</p>`;
+    drop.classList.remove("hidden");
+    return;
+  }
+
+  newPoClientActiveIndex = -1;
+  drop.innerHTML = matches
+    .map(
+      (c) => `<button type="button" class="new-po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(c.name)}">
+              ${poClientAvatar(c.name, c.logo_filename)}
+              <span class="flex-1 min-w-0 truncate">${poClientHighlight(c.name, trimmed)}</span>
+            </button>`
+    )
+    .join("");
+  drop.classList.remove("hidden");
+
+  drop.querySelectorAll(".new-po-client-opt").forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      input.value = btn.dataset.name;
+      drop.classList.add("hidden");
+    });
+  });
+}
+
+function moveNewPoClientActive(delta) {
+  const opts = [...document.querySelectorAll("#newPoClientDropdown .new-po-client-opt")];
+  if (!opts.length) return;
+  newPoClientActiveIndex = (newPoClientActiveIndex + delta + opts.length) % opts.length;
+  opts.forEach((o, i) => o.classList.toggle("bg-gray-100", i === newPoClientActiveIndex));
+  opts[newPoClientActiveIndex].scrollIntoView({ block: "nearest" });
+}
+
+async function openNewPoModal() {
+  await loadPrintClients();
+  document.getElementById("newPoClient").value = "";
+  document.getElementById("newPoDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("newPoAmount").value = "";
+  document.getElementById("newPoRemarks").value = "";
+  document.getElementById("newPoError").classList.add("hidden");
+  document.getElementById("newPoClientDropdown").classList.add("hidden");
+  const modal = document.getElementById("newPoModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("newPoClient").focus();
+}
+
+function closeNewPoModal() {
+  const modal = document.getElementById("newPoModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function saveNewPo() {
+  const errorEl = document.getElementById("newPoError");
+  errorEl.classList.add("hidden");
+  const name = document.getElementById("newPoClient").value.trim();
+  const client = printClients.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (!client) {
+    errorEl.textContent = "Pick a client from the list.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    await postJSON("/api/office/purchase-orders", {
+      client_id: client.id,
+      po_date: document.getElementById("newPoDate").value,
+      amount: document.getElementById("newPoAmount").value,
+      remarks: document.getElementById("newPoRemarks").value,
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  closeNewPoModal();
+  loadCollections();
+  if (String(collectionsCurrentClientId) === String(client.id)) openCollectionsClient(client.id);
+}
+
+document.getElementById("newPoBtn").addEventListener("click", openNewPoModal);
+document.getElementById("newPoCancel").addEventListener("click", closeNewPoModal);
+document.getElementById("newPoSave").addEventListener("click", saveNewPo);
+
+const newPoClientInput = document.getElementById("newPoClient");
+newPoClientInput.addEventListener("focus", renderNewPoClientDropdown);
+newPoClientInput.addEventListener("input", renderNewPoClientDropdown);
+newPoClientInput.addEventListener("blur", () => {
+  setTimeout(() => document.getElementById("newPoClientDropdown").classList.add("hidden"), 120);
+});
+newPoClientInput.addEventListener("keydown", (e) => {
+  const drop = document.getElementById("newPoClientDropdown");
+  if (drop.classList.contains("hidden")) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    moveNewPoClientActive(1);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    moveNewPoClientActive(-1);
+  } else if (e.key === "Enter" && newPoClientActiveIndex >= 0) {
+    e.preventDefault();
+    const opts = [...drop.querySelectorAll(".new-po-client-opt")];
+    newPoClientInput.value = opts[newPoClientActiveIndex].dataset.name;
+    drop.classList.add("hidden");
+  } else if (e.key === "Escape") {
+    drop.classList.add("hidden");
+  }
+});
+
+// A generic click-to-edit cell shared by Expenses and Inventory: text until
+// clicked, then an input in the same spot - the same interaction as
+// print-edit, but posting to /api/office/... and keyed by data-record
+// (which table) rather than an item/order id.
+function wireOfficeEditCell(cell) {
+  cell.addEventListener("click", () => beginOfficeCellEdit(cell));
+  cell.addEventListener("keydown", (e) => {
+    if (e.target !== cell) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      beginOfficeCellEdit(cell);
+    }
+  });
+}
+
+function beginOfficeCellEdit(cell) {
+  if (cell.querySelector("input")) return;
+  const type = cell.dataset.type || "text";
+  const shown = cell.textContent;
+  const original = shown.trim() === "—" ? "" : shown.trim();
+
+  const input = document.createElement("input");
+  input.className = "print-cell-input" + (type === "number" ? " text-right" : "");
+  input.type = type === "number" ? "number" : type === "date" ? "date" : "text";
+  if (type === "number") input.step = "0.01";
+  input.value = original;
+
+  cell.textContent = "";
+  cell.appendChild(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const revert = () => {
+    cell.textContent = shown;
+  };
+  const finish = async (commit) => {
+    if (settled) return;
+    settled = true;
+    const value = input.value;
+    if (!commit || String(value).trim() === String(original).trim()) {
+      revert();
+      return;
+    }
+    await saveOfficeCell(cell, value);
+  };
+
+  input.addEventListener("change", () => finish(true));
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+}
+
+async function saveOfficeCell(cell, raw) {
+  const record = cell.dataset.record;
+  const id = cell.dataset.id;
+  const field = cell.dataset.field;
+  const type = cell.dataset.type || "text";
+  const url = record === "expense" ? `/api/office/expenses/${id}` : `/api/office/inventory/${id}`;
+
+  let value = raw;
+  if (type === "number") {
+    value = raw.trim() === "" ? null : Number(raw);
+    if (value !== null && !Number.isFinite(value)) {
+      alert("Enter a number.");
+      return;
+    }
+  } else {
+    value = String(raw).trim();
+  }
+
+  try {
+    await postJSON(url, { [field]: value });
+  } catch (err) {
+    alert(err.message);
+  }
+  // simplest correct redraw: the full list, not just this cell - these
+  // tables are small, and a partial patch risks drifting from what the
+  // server actually stored (e.g. an empty string normalised to null), and
+  // also undoes an invalid edit by simply showing what's still saved
+  if (record === "expense") loadExpenses();
+  else loadInventory();
+}
+
+// Expenses - money going out. A flat list, inline-edited, newest first.
+let officeExpenses = [];
+
+async function loadExpenses() {
+  const body = document.getElementById("expensesBody");
+  const res = await fetch("/api/office/expenses");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load expenses.")}</td></tr>`;
+    return;
+  }
+  const data = await res.json();
+  officeExpenses = data.expenses;
+  renderExpenses();
+}
+
+function renderExpenses() {
+  const body = document.getElementById("expensesBody");
+  const total = officeExpenses.reduce((n, e) => n + e.amount, 0);
+  document.getElementById("expensesSubtitle").textContent = officeExpenses.length
+    ? `${printMoney(total)} across ${officeExpenses.length} expense${officeExpenses.length === 1 ? "" : "s"}`
+    : "Money going out.";
+
+  if (!officeExpenses.length) {
+    body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-400 py-6 text-center">No expenses logged yet.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = officeExpenses.map(expenseRowHTML).join("");
+  body.querySelectorAll(".office-edit").forEach(wireOfficeEditCell);
+  body.querySelectorAll(".office-delete-expense").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this expense?")) return;
+      const res = await fetch(`/api/office/expenses/${btn.dataset.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not delete that expense.");
+        return;
+      }
+      loadExpenses();
+    });
+  });
+}
+
+function officeEditSpan(record, id, field, value, type, extraClass) {
+  const display = value === null || value === undefined || value === "" ? "—" : value;
+  return `<span class="print-edit office-edit${extraClass ? " " + extraClass : ""}" data-record="${record}" data-id="${id}" data-field="${field}"${type ? ` data-type="${type}"` : ""} tabindex="0" role="button">${escapeHtml(String(display))}</span>`;
+}
+
+function expenseRowHTML(e) {
+  return `
+    <tr data-id="${e.id}">
+      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "expense_date", e.expense_date, "date")}</td>
+      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "category", e.category)}</td>
+      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "description", e.description)}</td>
+      <td class="px-3 py-2 text-right">${officeEditSpan("expense", e.id, "amount", e.amount.toFixed(2), "number")}</td>
+      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "paid_by", e.paid_by)}</td>
+      <td class="px-3 py-2 text-gray-500">${officeEditSpan("expense", e.id, "note", e.note)}</td>
+      <td class="px-3 py-2 text-right"><button type="button" class="office-delete-expense text-gray-300 hover:text-red-600" data-id="${e.id}" aria-label="Delete">&#10005;</button></td>
+    </tr>`;
+}
+
+document.getElementById("expenseAddBtn").addEventListener("click", async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    await postJSON("/api/office/expenses", { expense_date: today, description: "New expense", amount: 1 });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  loadExpenses();
+});
+
+// Inventory - stock on hand. Quantity is adjusted rather than freely
+// retyped, so a change stays traceable in office_inventory_adjustments.
+let officeInventory = [];
+
+async function loadInventory() {
+  const body = document.getElementById("inventoryBody");
+  const res = await fetch("/api/office/inventory");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    body.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load inventory.")}</td></tr>`;
+    return;
+  }
+  const data = await res.json();
+  officeInventory = data.items;
+  renderInventory();
+}
+
+function renderInventory() {
+  const body = document.getElementById("inventoryBody");
+  if (!officeInventory.length) {
+    body.innerHTML = `<tr><td colspan="6" class="text-sm text-gray-400 py-6 text-center">Nothing on the list yet.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = officeInventory.map(inventoryRowHTML).join("");
+  body.querySelectorAll(".office-edit").forEach(wireOfficeEditCell);
+  body.querySelectorAll(".inventory-adjust").forEach((btn) => {
+    btn.addEventListener("click", () => adjustInventoryPrompt(btn.dataset.id));
+  });
+  body.querySelectorAll(".office-delete-inventory").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this item?")) return;
+      const res = await fetch(`/api/office/inventory/${btn.dataset.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not delete that item.");
+        return;
+      }
+      loadInventory();
+    });
+  });
+}
+
+function inventoryRowHTML(i) {
+  const low = i.low_stock_at !== null && i.quantity <= i.low_stock_at;
+  return `
+    <tr data-id="${i.id}">
+      <td class="px-3 py-2 font-medium text-gray-900">${officeEditSpan("inventory", i.id, "name", i.name)}</td>
+      <td class="px-3 py-2">${officeEditSpan("inventory", i.id, "unit", i.unit)}</td>
+      <td class="px-3 py-2 text-right ${low ? "text-red-600 font-semibold" : ""}">
+        ${i.quantity.toLocaleString("en-PH")}
+        <button type="button" class="inventory-adjust ml-2 text-xs text-brand-blue hover:underline" data-id="${i.id}">adjust</button>
+      </td>
+      <td class="px-3 py-2 text-right">${officeEditSpan("inventory", i.id, "low_stock_at", i.low_stock_at, "number")}</td>
+      <td class="px-3 py-2 text-gray-500">${officeEditSpan("inventory", i.id, "note", i.note)}</td>
+      <td class="px-3 py-2 text-right"><button type="button" class="office-delete-inventory text-gray-300 hover:text-red-600" data-id="${i.id}" aria-label="Delete">&#10005;</button></td>
+    </tr>`;
+}
+
+async function adjustInventoryPrompt(itemId) {
+  const item = officeInventory.find((i) => String(i.id) === String(itemId));
+  const raw = prompt(`Adjust ${item ? item.name : "this item"} by how much? (negative to subtract)`, "");
+  if (raw === null) return;
+  const delta = Number(raw);
+  if (!Number.isFinite(delta) || delta === 0) {
+    alert("Enter a non-zero number.");
+    return;
+  }
+  const reason = prompt("Reason (optional):", "") || "";
+  try {
+    await postJSON(`/api/office/inventory/${itemId}/adjust`, { delta, reason });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  loadInventory();
+}
+
+document.getElementById("inventoryAddBtn").addEventListener("click", async () => {
+  const name = prompt("Item name:");
+  if (!name || !name.trim()) return;
+  try {
+    await postJSON("/api/office/inventory", { name: name.trim() });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  loadInventory();
+});
+
+// Notes - miscellaneous admin records, optionally with one attachment.
+let officeNotes = [];
+const notesExpanded = new Set();
+
+async function loadNotes() {
+  const list = document.getElementById("notesList");
+  const res = await fetch("/api/office/notes");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    list.innerHTML = `<p class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load notes.")}</p>`;
+    return;
+  }
+  const data = await res.json();
+  officeNotes = data.notes;
+  renderNotes();
+}
+
+function renderNotes() {
+  const list = document.getElementById("notesList");
+  if (!officeNotes.length) {
+    list.innerHTML = `<p class="text-sm text-gray-400 py-6 text-center">No notes yet.</p>`;
+    return;
+  }
+  list.innerHTML = officeNotes.map(noteCardHTML).join("");
+
+  list.querySelectorAll("[data-note-toggle]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.noteToggle;
+      notesExpanded.has(id) ? notesExpanded.delete(id) : notesExpanded.add(id);
+      renderNotes();
+    });
+  });
+  list.querySelectorAll("[data-note-save]").forEach((btn) => {
+    btn.addEventListener("click", () => saveNote(btn.dataset.noteSave));
+  });
+  list.querySelectorAll("[data-note-delete]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this note?")) return;
+      const res = await fetch(`/api/office/notes/${btn.dataset.noteDelete}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not delete that note.");
+        return;
+      }
+      loadNotes();
+    });
+  });
+  list.querySelectorAll("[data-note-attach]").forEach((input) => {
+    input.addEventListener("change", () => uploadNoteAttachment(input.dataset.noteAttach, input));
+  });
+  list.querySelectorAll("[data-note-remove-attach]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const res = await fetch(`/api/office/notes/${btn.dataset.noteRemoveAttach}/attachment`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not remove that attachment.");
+        return;
+      }
+      loadNotes();
+    });
+  });
+}
+
+function noteCardHTML(n) {
+  const isOpen = notesExpanded.has(String(n.id));
+  const updated = n.updated_at
+    ? new Date(n.updated_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : "";
+
+  if (!isOpen) {
+    return `
+      <div class="border border-gray-200 rounded-xl bg-white shadow-sm px-4 py-3 cursor-pointer hover:border-gray-300" data-note-toggle="${n.id}">
+        <div class="flex items-center justify-between gap-3">
+          <h3 class="font-semibold text-sm truncate">${escapeHtml(n.title)}</h3>
+          <span class="text-[11px] text-gray-400 shrink-0">${updated}</span>
+        </div>
+        ${n.body ? `<p class="text-sm text-gray-500 mt-1 truncate">${escapeHtml(n.body)}</p>` : ""}
+      </div>`;
+  }
+
+  const attachment = n.attachment_filename
+    ? `<p class="text-xs mt-1">
+         <a href="/static/uploads/${encodeURIComponent(n.attachment_filename)}" target="_blank" class="text-brand-blue hover:underline">${escapeHtml(n.attachment_filename)}</a>
+         <button type="button" data-note-remove-attach="${n.id}" class="text-gray-400 hover:text-red-600 ml-2">remove</button>
+       </p>`
+    : `<label class="text-xs text-brand-blue hover:underline cursor-pointer mt-1 inline-block">
+         Attach a file
+         <input type="file" class="hidden" data-note-attach="${n.id}" />
+       </label>`;
+
+  return `
+    <div class="border border-gray-200 rounded-xl bg-white shadow-sm px-4 py-3">
+      <div class="flex items-center justify-between gap-3 mb-2 cursor-pointer" data-note-toggle="${n.id}">
+        <h3 class="font-semibold text-sm">${escapeHtml(n.title)}</h3>
+        <span class="text-[11px] text-gray-400">${updated}</span>
+      </div>
+      <input type="text" value="${escapeHtml(n.title)}" data-note-field="title" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-semibold mb-2" />
+      <textarea data-note-field="body" rows="4" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm mb-2">${escapeHtml(n.body || "")}</textarea>
+      ${attachment}
+      <div class="flex justify-between items-center mt-3">
+        <button type="button" data-note-delete="${n.id}" class="text-xs text-red-600 hover:underline">Delete</button>
+        <button type="button" data-note-save="${n.id}" class="bg-brand-green text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:opacity-90 transition">Save</button>
+      </div>
+    </div>`;
+}
+
+async function saveNote(noteId) {
+  const card = document.querySelector(`[data-note-save="${noteId}"]`).closest(".border");
+  const title = card.querySelector('[data-note-field="title"]').value.trim();
+  const body = card.querySelector('[data-note-field="body"]').value;
+  if (!title) {
+    alert("Enter a title.");
+    return;
+  }
+  try {
+    await postJSON(`/api/office/notes/${noteId}`, { title, body });
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  loadNotes();
+}
+
+async function uploadNoteAttachment(noteId, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`/api/office/notes/${noteId}/attachment`, { method: "POST", body: fd });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.message || "Could not upload that file.");
+    return;
+  }
+  loadNotes();
+}
+
+document.getElementById("noteAddBtn").addEventListener("click", async () => {
+  const title = prompt("Note title:");
+  if (!title || !title.trim()) return;
+  let id;
+  try {
+    const res = await fetch("/api/office/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim() }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Could not add that note.");
+    id = (await res.json()).id;
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  notesExpanded.add(String(id));
+  loadNotes();
+});
+
+// showTab() (defined far above, outside this guard) calls these by bare
+// name whenever its own tab buttons exist - which only happens together
+// with this block having run, so the call is always reachable when made.
+// But `async function` declarations, unlike plain ones, don't get
+// Annex B's leak-to-the-enclosing-scope treatment in a block, so without
+// this they'd stay trapped in here and throw "not defined" from outside.
+window.loadCollections = loadCollections;
+window.loadExpenses = loadExpenses;
+window.loadInventory = loadInventory;
+window.loadNotes = loadNotes;
+
+} // end has_office_app guard
+// ---------------------------------------------------------------------------
 // App switching (Payroll & HRMS <-> Admin)
 //
 // One navbar, two apps. The tabs carry data-app, so switching is a matter
@@ -4621,9 +5649,9 @@ const appMenu = document.getElementById("appMenu");
 const appLabel = document.getElementById("appLabel");
 const payrollLockModal = document.getElementById("payrollLockModal");
 
-const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing" };
+const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", office: "Admin" };
 // where each app opens: the first thing you want to see in it
-const APP_HOME = { payroll: "dashboard", admin: "status" };
+const APP_HOME = { payroll: "dashboard", admin: "status", office: "collections" };
 
 let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't
@@ -4773,6 +5801,12 @@ if (appSwitchBtn) {
     // storage blocked - fall back to payroll
   }
   if (remembered === "payroll" && !payrollUnlocked) remembered = "admin";
+  // access can have been revoked since that value was saved (an app choice
+  // no longer offered in the menu) - fall back rather than landing on tabs
+  // that were hidden for exactly that reason
+  if (remembered !== "payroll" && !document.querySelector(`#appMenu .app-choice[data-app="${remembered}"]`)) {
+    remembered = "payroll";
+  }
   applyApp(remembered);
 }
 
@@ -4852,9 +5886,9 @@ function renderPrintClients() {
         <td class="px-3 py-2 ${c.instagram ? "" : "text-gray-300"}">${escapeHtml(c.instagram || "—")}</td>
         <td class="px-3 py-2 ${c.facebook ? "" : "text-gray-300"}">${escapeHtml(c.facebook || "—")}</td>
         <td class="px-3 py-2 ${c.phone ? "" : "text-gray-300"}">${escapeHtml(c.phone || "—")}</td>
-        <td class="px-3 py-2 text-right font-mono">${c.order_count}</td>
-        <td class="px-3 py-2 text-right font-mono">${Number(c.cups || 0).toLocaleString("en-PH")}</td>
-        <td class="px-3 py-2 text-right font-mono ${Number(c.owed) > 0 ? "text-red-600" : "text-gray-300"}">${
+        <td class="px-3 py-2 text-right">${c.order_count}</td>
+        <td class="px-3 py-2 text-right">${Number(c.cups || 0).toLocaleString("en-PH")}</td>
+        <td class="px-3 py-2 text-right ${Number(c.owed) > 0 ? "text-red-600" : "text-gray-300"}">${
           Number(c.owed) > 0 ? printMoney(c.owed) : "—"
         }</td>
       </tr>`
@@ -4906,7 +5940,7 @@ function familyBlock(family, items, columns) {
         .map(([key]) => {
           const missing = p[key] == null;
           return `<td class="px-3 py-1.5 text-right">
-            <span class="print-edit price-cell font-mono ${missing ? "text-gray-300" : ""}"
+            <span class="print-edit price-cell ${missing ? "text-gray-300" : ""}"
                   tabindex="0" role="button" data-product="${p.id}" data-field="${key}"
                   title="Click to edit">${missing ? "—" : Number(p[key]).toFixed(2)}</span>
           </td>`;
@@ -4915,7 +5949,7 @@ function familyBlock(family, items, columns) {
       return `<tr class="hover:bg-gray-50">
         <td class="px-3 py-1.5 font-medium whitespace-nowrap">${escapeHtml(p.size || p.family)}</td>
         ${cells}
-        <td class="px-3 py-1.5 text-right font-mono text-xs ${used.cups ? "text-gray-500" : "text-gray-300"}">${
+        <td class="px-3 py-1.5 text-right text-xs ${used.cups ? "text-gray-500" : "text-gray-300"}">${
           used.cups ? used.cups.toLocaleString("en-PH") : "—"
         }</td>
       </tr>`;
@@ -4928,8 +5962,8 @@ function familyBlock(family, items, columns) {
     <section class="border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
       <div class="flex items-baseline gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50">
         <h4 class="font-semibold text-sm">${escapeHtml(family)}</h4>
-        <span class="text-[11px] font-mono text-gray-400">${items.length} size${items.length === 1 ? "" : "s"}</span>
-        <span class="ml-auto text-[11px] font-mono text-gray-400">${
+        <span class="text-[11px] text-gray-400">${items.length} size${items.length === 1 ? "" : "s"}</span>
+        <span class="ml-auto text-[11px] text-gray-400">${
           familyCups ? familyCups.toLocaleString("en-PH") + " printed" : "not used yet"
         }</span>
       </div>
@@ -5028,7 +6062,7 @@ function renderQuote() {
         <div class="flex items-center gap-2">
           <input class="q-qty w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="50" value="${r.qty}" />
           <span class="text-xs text-gray-400">cups</span>
-          <span class="q-line ml-auto text-sm font-mono"></span>
+          <span class="q-line ml-auto text-sm"></span>
         </div>
       </div>`;
     })
@@ -5322,6 +6356,31 @@ function openCardMenu(btn) {
   printCardMenu = menu;
 }
 
+// Cup Prints' own version of the same menu - no day-scheduling here, just
+// the one destructive action, kept behind a click rather than a bare trash
+// icon sitting on the row.
+function openCupPrintsMenu(btn) {
+  closeCardMenu();
+  const orderId = btn.dataset.order;
+
+  const menu = document.createElement("div");
+  menu.className = "fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-40 text-sm";
+  menu.innerHTML = `<button type="button" class="cm-delete w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-50">Delete order…</button>`;
+  document.body.appendChild(menu);
+
+  const r = btn.getBoundingClientRect();
+  const top = r.bottom + 60 > window.innerHeight ? r.top - menu.offsetHeight - 4 : r.bottom + 4;
+  menu.style.top = `${Math.max(8, top)}px`;
+  menu.style.left = `${Math.min(r.left - 120, window.innerWidth - menu.offsetWidth - 8)}px`;
+
+  menu.querySelector(".cm-delete").addEventListener("click", () => {
+    closeCardMenu();
+    const order = printAllOrders.find((o) => String(o.id) === orderId);
+    if (order) askDeleteOrder(order.id, order);
+  });
+  printCardMenu = menu;
+}
+
 document.addEventListener("click", (e) => {
   if (printCardMenu && !printCardMenu.contains(e.target) && !e.target.closest(".print-card-menu")) {
     closeCardMenu();
@@ -5486,7 +6545,7 @@ function renderPrintWeek() {
   side.innerHTML =
     `<div class="flex items-baseline gap-2 px-1 pb-1 border-b border-gray-100">
        <h4 class="text-sm font-semibold">Not scheduled</h4>
-       <span class="text-[11px] font-mono text-gray-400">${unscheduled.length}</span>
+       <span class="text-[11px] text-gray-400">${unscheduled.length}</span>
      </div>` +
     (unscheduled.length
       ? unscheduled.map(weekChip).join("")
@@ -5505,10 +6564,10 @@ function renderPrintWeek() {
         }" data-day="${iso}">
           <div class="flex items-baseline justify-between gap-1 px-0.5">
             <span class="text-xs font-semibold ${isSunday ? "text-gray-400" : ""}">${d.toLocaleDateString(undefined, { weekday: "short" })}</span>
-            <span class="text-[11px] font-mono ${isToday ? "text-brand-blue" : "text-gray-400"}">${d.getDate()}</span>
+            <span class="text-[11px] ${isToday ? "text-brand-blue" : "text-gray-400"}">${d.getDate()}</span>
           </div>
           ${list.map(weekChip).join("")}
-          <span class="mt-auto text-[10px] font-mono ${cups ? "text-gray-500" : "text-gray-300"} px-0.5">${
+          <span class="mt-auto text-[10px] ${cups ? "text-gray-500" : "text-gray-300"} px-0.5">${
             cups ? cups.toLocaleString("en-PH") + " cups" : "—"
           }</span>
         </div>`;
@@ -5582,3 +6641,4 @@ if (document.getElementById("tabPrintBtn") && document.getElementById("printWeek
   });
   setPrintMode(printState.mode);
 }
+

@@ -233,6 +233,12 @@ def init_db():
     # schedules and 13th month all reference these rows
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE")
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ")
+    # per-person app access, superuser-editable only (Employees tab). A
+    # manager bypasses these entirely - they're for reining in what a
+    # regular staff account can open, not for restricting managers.
+    cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_access_payroll_app BOOLEAN NOT NULL DEFAULT TRUE")
+    cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_access_cup_printing_app BOOLEAN NOT NULL DEFAULT TRUE")
+    cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_access_admin_app BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute(
         """CREATE TABLE IF NOT EXISTS schedule (
             id SERIAL PRIMARY KEY,
@@ -555,6 +561,114 @@ def init_db():
 
     cur.execute("CREATE INDEX IF NOT EXISTS print_order_items_order_idx ON print_order_items(order_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS print_orders_date_idx ON print_orders(order_date DESC)")
+
+    # ------------------------------------------------------------------
+    # Admin app - back-office record-keeping that isn't payroll and isn't
+    # a print job.
+    # ------------------------------------------------------------------
+    # print_payments was Collections' first design: money logged against a
+    # print order's own job-tracking total. Superseded by purchase_orders/
+    # purchase_order_payments below (a PO is what was actually invoiced,
+    # which isn't the same figure) - kept here, unused, rather than dropped,
+    # since this database is never touched destructively.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_payments (
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id),
+            order_id INTEGER REFERENCES print_orders(id),
+            amount NUMERIC(12,2) NOT NULL,
+            paid_on DATE NOT NULL,
+            method TEXT,
+            reference TEXT,
+            collected_by TEXT,
+            note TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS print_payments_client_idx ON print_payments(client_id)")
+
+    # Collections proper: a hand-entered PO ledger, one row per PO, replacing
+    # what used to be one Google Sheet per client. A PO can receive more
+    # than one payment (a partial payment now, the rest later), so the
+    # amount actually collected and the balance are always derived from
+    # purchase_order_payments rather than stored on the PO itself.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS purchase_orders (
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id),
+            po_date DATE NOT NULL,
+            amount NUMERIC(12,2) NOT NULL,
+            remarks TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS purchase_orders_client_idx ON purchase_orders(client_id)")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS purchase_order_payments (
+            id SERIAL PRIMARY KEY,
+            purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+            paid_date DATE NOT NULL,
+            amount NUMERIC(12,2) NOT NULL,
+            note TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS purchase_order_payments_po_idx "
+        "ON purchase_order_payments(purchase_order_id)"
+    )
+
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS office_expenses (
+            id SERIAL PRIMARY KEY,
+            expense_date DATE NOT NULL,
+            category TEXT,
+            description TEXT,
+            amount NUMERIC(12,2) NOT NULL,
+            paid_by TEXT,
+            note TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS office_inventory_items (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            unit TEXT,
+            quantity NUMERIC(12,2) NOT NULL DEFAULT 0,
+            low_stock_at NUMERIC(12,2),
+            note TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    # append-only trail so a quantity change is traceable, same spirit as
+    # cash_advances/audit_log elsewhere in this app
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS office_inventory_adjustments (
+            id SERIAL PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES office_inventory_items(id) ON DELETE CASCADE,
+            delta NUMERIC(12,2) NOT NULL,
+            reason TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS office_notes (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            body TEXT,
+            attachment_filename TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
 
     for s in STAFF:
         cur.execute("SELECT id FROM staff WHERE name=%s", (s["name"],))
@@ -1407,7 +1521,7 @@ def compute_payroll(db, start, end, pay_date):
     cur.execute(
         """SELECT id, name, full_name, role, category, daily_rate, monthly_salary,
                   default_sss, default_pagibig, default_philhealth, default_hmo
-           FROM staff"""
+           FROM staff WHERE active"""
     )
     staff_rows = [dict(r) for r in cur.fetchall()]
 
@@ -1421,6 +1535,11 @@ def compute_payroll(db, start, end, pay_date):
     dates_worked = {s["id"]: set() for s in staff_rows}
     cup_shifts = {s["id"]: [] for s in staff_rows}  # (date, label) for Printer/Checker days
     for r in schedule_rows:
+        # a schedule row can still exist for someone archived mid-cutoff -
+        # staff_rows (and the dicts built from it, just above) are active
+        # employees only, so such a row has nothing to add to
+        if r["staff_id"] not in days_worked:
+            continue
         days_worked[r["staff_id"]] += SHIFT_DAY_FRACTION.get(r["shift_label"], 1.0)
         dates_worked[r["staff_id"]].add(date.fromisoformat(r["date"]))
         if r["shift_label"] in CUP_BONUS_RATE:
@@ -2047,20 +2166,49 @@ def favicon():
 @app.route("/")
 @login_required
 def index():
+    manager = is_manager()
+    outside_viewer = is_outside_viewer()
+    staff_name = session.get("staff_name")
+
+    # Per-app access for a plain staff account, set from the Employees tab
+    # (superuser only). A manager or the superuser bypasses this entirely -
+    # it's for reining in what a regular staff account can open, not the
+    # people running the place, so it's never even queried for them.
+    access = {"can_access_cup_printing_app": True, "can_access_admin_app": False}
+    if staff_name and not manager:
+        cur = get_db().cursor()
+        cur.execute(
+            "SELECT can_access_cup_printing_app, can_access_admin_app FROM staff WHERE name=%s",
+            (staff_name,),
+        )
+        row = cur.fetchone()
+        if row:
+            access = dict(row)
+
+    # Cup Printing is open to everyone by default (drag, edit, delete - not
+    # just viewing); an outside viewer keeps that same blanket access it's
+    # always had. Admin (Collections/Expenses/Inventory/Notes) touches real
+    # money, so unlike Cup Printing it defaults to off for everyone but a
+    # manager, and is granted per-person rather than blanket.
+    has_cup_printing_app = True if (manager or outside_viewer) else access["can_access_cup_printing_app"]
+    has_office_app = True if manager else access["can_access_admin_app"]
+
     current_user = {
         "display_name": session.get("display_name"),
         "is_superuser": session.get("is_superuser"),
-        "is_manager": is_manager(),
-        "is_outside_viewer": is_outside_viewer(),
+        "is_manager": manager,
+        "is_outside_viewer": outside_viewer,
         "can_view_payroll": can_view_payroll(),
-        # Cup Printing is open to everyone now (drag, edit, delete - not
-        # just viewing), so everyone has two apps and gets the switcher.
-        "has_admin_app": True,
+        "has_cup_printing_app": has_cup_printing_app,
+        "has_office_app": has_office_app,
+        # whether the app-switcher shows at all - no point offering it for
+        # a single available app
+        "has_app_switcher": has_cup_printing_app or has_office_app,
         "payroll_unlocked": payroll_unlocked(),
         # branch-wide figures (per-person day totals) - the people running
         # the place and the owners, not the team
-        "sees_branch": is_manager() or is_outside_viewer(),
-        "staff_name": session.get("staff_name"),
+        "sees_branch": manager or outside_viewer,
+        "staff_name": staff_name,
     }
     return render_template(
         "index.html", staff=roster(), business_name=BUSINESS_NAME, current_user=current_user
@@ -2092,6 +2240,7 @@ def api_staff_list():
                   sss_id, pagibig_id, philhealth_id, hmo_id,
                   bank_name, bank_account_name, bank_account_number,
                   staff.active, staff.archived_at,
+                  staff.can_access_cup_printing_app, staff.can_access_admin_app,
                   COALESCE(app_users.login_enabled, FALSE) AS login_enabled,
                   (app_users.pin_hash IS NOT NULL) AS has_pin
            FROM staff
@@ -2289,6 +2438,43 @@ def api_staff_update(name):
         if changed:
             record_audit(cur, "Updated employee", name, changed)
         db.commit()
+    return jsonify({"status": "ok"})
+
+
+STAFF_ACCESS_FIELDS = ("can_access_cup_printing_app", "can_access_admin_app")
+
+
+@app.route("/api/staff/<name>/access", methods=["POST"])
+@superuser_required
+def api_staff_access_update(name):
+    """Which of the optional apps (Cup Printing, Admin) this staff account
+    can open. Superuser-only, unlike the rest of the employee card: a
+    manager bypasses these toggles entirely (see index()), so letting a
+    manager edit them would just be editing a setting that doesn't apply
+    to anyone who could reach the control."""
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "Unknown staff member"}), 400
+    staff_id = row["id"]
+
+    updates = {f: bool(data[f]) for f in STAFF_ACCESS_FIELDS if f in data}
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    columns = ", ".join(updates)
+    cur.execute(f"SELECT {columns} FROM staff WHERE id=%s", (staff_id,))
+    before = dict(cur.fetchone())
+    changed = {f: {"from": before[f], "to": v} for f, v in updates.items() if before[f] != v}
+
+    set_clause = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE staff SET {set_clause} WHERE id=%s", (*updates.values(), staff_id))
+    if changed:
+        record_audit(cur, "Updated app access", name, changed)
+    db.commit()
     return jsonify({"status": "ok"})
 
 
@@ -3640,6 +3826,690 @@ def api_print_client_update(client_id):
         cur.execute(f"UPDATE print_clients SET {sets} WHERE id=%s", (*updates.values(), client_id))
         record_audit(cur, "Updated print client", row["name"], changed)
         db.commit()
+    return jsonify({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Admin app - Collections, Expenses, Inventory, Notes. Back-office
+# record-keeping that isn't payroll and isn't a print job. Open to
+# everyone, like Cup Printing: @login_required only, no PIN lock. Routes
+# live under /api/office/... rather than /api/admin/... because that
+# prefix already belongs to superuser user-management and inherits the
+# payroll PIN lock via PAYROLL_LOCKED_PREFIXES.
+# ---------------------------------------------------------------------------
+
+def _po_row(cur, po_id):
+    cur.execute(
+        """SELECT po.id, po.client_id, po.po_date, po.amount, po.remarks,
+                  COALESCE(pay.collected, 0) AS collected, pay.last_paid_date
+           FROM purchase_orders po
+           LEFT JOIN (
+               SELECT purchase_order_id, SUM(amount) AS collected, MAX(paid_date) AS last_paid_date
+               FROM purchase_order_payments GROUP BY purchase_order_id
+           ) pay ON pay.purchase_order_id = po.id
+           WHERE po.id=%s""",
+        (po_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    po = dict(row)
+    po["po_date"] = po["po_date"].isoformat() if po["po_date"] else None
+    po["last_paid_date"] = po["last_paid_date"].isoformat() if po["last_paid_date"] else None
+    po["amount"] = float(po["amount"] or 0)
+    po["collected"] = float(po["collected"] or 0)
+    po["balance"] = round(po["amount"] - po["collected"], 2)
+    return po
+
+
+@app.route("/api/office/purchase-orders/clients")
+@login_required
+def api_purchase_order_clients():
+    """Every client with at least one PO, and where their balance stands.
+    Deliberately independent of print_orders/print_order_items - a PO is
+    what was actually invoiced, entered by hand, not the internal
+    job-tracking total Cup Printing keeps for the press."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT c.id, c.name, c.logo_filename,
+                  COUNT(po.id) AS po_count,
+                  COALESCE(SUM(po.amount), 0) AS invoiced,
+                  COALESCE(SUM(pay.collected), 0) AS collected
+           FROM print_clients c
+           JOIN purchase_orders po ON po.client_id = c.id
+           LEFT JOIN (
+               SELECT purchase_order_id, SUM(amount) AS collected
+               FROM purchase_order_payments GROUP BY purchase_order_id
+           ) pay ON pay.purchase_order_id = po.id
+           GROUP BY c.id
+           ORDER BY c.name"""
+    )
+    clients = []
+    for r in cur.fetchall():
+        row = dict(r)
+        row["invoiced"] = float(row["invoiced"] or 0)
+        row["collected"] = float(row["collected"] or 0)
+        row["balance"] = round(row["invoiced"] - row["collected"], 2)
+        clients.append(row)
+    return jsonify({"clients": clients})
+
+
+@app.route("/api/office/purchase-orders")
+@login_required
+def api_purchase_orders_list():
+    """Every PO, flat, newest first - the "All POs" view (as opposed to
+    grouped by client), so a date can be scanned without opening a
+    client's drawer."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT po.id, po.client_id, c.name AS client_name, po.po_date, po.amount, po.remarks,
+                  COALESCE(pay.collected, 0) AS collected, pay.last_paid_date
+           FROM purchase_orders po
+           JOIN print_clients c ON c.id = po.client_id
+           LEFT JOIN (
+               SELECT purchase_order_id, SUM(amount) AS collected, MAX(paid_date) AS last_paid_date
+               FROM purchase_order_payments GROUP BY purchase_order_id
+           ) pay ON pay.purchase_order_id = po.id
+           ORDER BY po.po_date DESC, po.id DESC"""
+    )
+    pos = []
+    for r in cur.fetchall():
+        po = dict(r)
+        po["po_date"] = po["po_date"].isoformat() if po["po_date"] else None
+        po["last_paid_date"] = po["last_paid_date"].isoformat() if po["last_paid_date"] else None
+        po["amount"] = float(po["amount"] or 0)
+        po["collected"] = float(po["collected"] or 0)
+        po["balance"] = round(po["amount"] - po["collected"], 2)
+        pos.append(po)
+    return jsonify({"pos": pos})
+
+
+@app.route("/api/office/purchase-orders/clients/<int:client_id>")
+@login_required
+def api_purchase_order_client(client_id):
+    """One client's PO ledger, for the Collections drawer."""
+    cur = get_db().cursor()
+    cur.execute("SELECT id, name, logo_filename FROM print_clients WHERE id=%s", (client_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+    client = dict(row)
+
+    cur.execute("SELECT id FROM purchase_orders WHERE client_id=%s ORDER BY po_date DESC, id DESC", (client_id,))
+    pos = [_po_row(cur, r["id"]) for r in cur.fetchall()]
+
+    invoiced = round(sum(po["amount"] for po in pos), 2)
+    collected = round(sum(po["collected"] for po in pos), 2)
+    return jsonify({
+        "client": client,
+        "pos": pos,
+        "totals": {
+            "invoiced": invoiced, "collected": collected,
+            "balance": round(invoiced - collected, 2),
+        },
+    })
+
+
+@app.route("/api/office/purchase-orders", methods=["POST"])
+@login_required
+def api_purchase_order_create():
+    data = request.get_json(force=True)
+    client_id = data.get("client_id")
+    if not client_id:
+        return jsonify({"status": "error", "message": "Pick a client"}), 400
+    try:
+        amount = float(data.get("amount"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Enter an amount"}), 400
+    if amount <= 0:
+        return jsonify({"status": "error", "message": "Amount must be more than zero"}), 400
+
+    po_date = (data.get("po_date") or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(po_date)
+    except ValueError:
+        return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM print_clients WHERE id=%s", (client_id,))
+    client = cur.fetchone()
+    if client is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+
+    cur.execute(
+        """INSERT INTO purchase_orders (client_id, po_date, amount, remarks, created_by)
+           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+        (client_id, po_date, amount, (data.get("remarks") or "").strip() or None,
+         session.get("display_name") or "Unknown"),
+    )
+    po_id = cur.fetchone()["id"]
+    record_audit(cur, "Added a purchase order", client["name"], {"amount": amount, "po_date": po_date})
+    db.commit()
+    return jsonify({"status": "ok", "id": po_id})
+
+
+PURCHASE_ORDER_FIELDS = ("po_date", "amount", "remarks")
+
+
+@app.route("/api/office/purchase-orders/<int:po_id>", methods=["POST"])
+@login_required
+def api_purchase_order_update(po_id):
+    data = request.get_json(force=True)
+    updates = {}
+    for field in PURCHASE_ORDER_FIELDS:
+        if field in data:
+            updates[field] = data[field]
+    if "amount" in updates:
+        try:
+            updates["amount"] = float(updates["amount"])
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Enter an amount"}), 400
+        if updates["amount"] <= 0:
+            return jsonify({"status": "error", "message": "Amount must be more than zero"}), 400
+    if "po_date" in updates:
+        try:
+            date.fromisoformat(updates["po_date"])
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+    if "remarks" in updates:
+        updates["remarks"] = (updates["remarks"] or "").strip() or None
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM purchase_orders WHERE id=%s", (po_id,))
+    if cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "No such purchase order"}), 404
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE purchase_orders SET {sets} WHERE id=%s", (*updates.values(), po_id))
+    record_audit(cur, "Updated a purchase order", str(po_id), updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/office/purchase-orders/<int:po_id>", methods=["DELETE"])
+@login_required
+def api_purchase_order_delete(po_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT po.amount, c.name AS client_name
+           FROM purchase_orders po JOIN print_clients c ON c.id = po.client_id
+           WHERE po.id=%s""",
+        (po_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such purchase order"}), 404
+    cur.execute("DELETE FROM purchase_orders WHERE id=%s", (po_id,))  # cascades its payments
+    record_audit(cur, "Deleted a purchase order", row["client_name"], {"amount": float(row["amount"])})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/office/purchase-orders/<int:po_id>/payments", methods=["POST"])
+@login_required
+def api_purchase_order_payment_create(po_id):
+    data = request.get_json(force=True)
+    try:
+        amount = float(data.get("amount"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Enter an amount"}), 400
+    if amount <= 0:
+        return jsonify({"status": "error", "message": "Amount must be more than zero"}), 400
+
+    paid_date = (data.get("paid_date") or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(paid_date)
+    except ValueError:
+        return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT po.id, c.name AS client_name FROM purchase_orders po
+           JOIN print_clients c ON c.id = po.client_id WHERE po.id=%s""",
+        (po_id,),
+    )
+    po = cur.fetchone()
+    if po is None:
+        return jsonify({"status": "error", "message": "No such purchase order"}), 404
+
+    cur.execute(
+        """INSERT INTO purchase_order_payments (purchase_order_id, paid_date, amount, note, created_by)
+           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+        (po_id, paid_date, amount, (data.get("note") or "").strip() or None,
+         session.get("display_name") or "Unknown"),
+    )
+    payment_id = cur.fetchone()["id"]
+    record_audit(cur, "Logged a PO payment", po["client_name"], {"amount": amount, "paid_date": paid_date})
+    db.commit()
+    return jsonify({"status": "ok", "id": payment_id})
+
+
+@app.route("/api/office/purchase-order-payments/<int:payment_id>", methods=["DELETE"])
+@login_required
+def api_purchase_order_payment_delete(payment_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT p.amount, p.paid_date, c.name AS client_name
+           FROM purchase_order_payments p
+           JOIN purchase_orders po ON po.id = p.purchase_order_id
+           JOIN print_clients c ON c.id = po.client_id
+           WHERE p.id=%s""",
+        (payment_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such payment"}), 404
+    cur.execute("DELETE FROM purchase_order_payments WHERE id=%s", (payment_id,))
+    record_audit(cur, "Removed a PO payment", row["client_name"],
+                 {"amount": float(row["amount"]), "paid_date": row["paid_date"].isoformat()})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+OFFICE_EXPENSE_FIELDS = ("expense_date", "category", "description", "amount", "paid_by", "note")
+
+
+@app.route("/api/office/expenses")
+@login_required
+def api_office_expenses():
+    month = request.args.get("month")  # YYYY-MM
+    cur = get_db().cursor()
+    if month:
+        cur.execute(
+            """SELECT * FROM office_expenses WHERE to_char(expense_date, 'YYYY-MM')=%s
+               ORDER BY expense_date DESC, id DESC""",
+            (month,),
+        )
+    else:
+        cur.execute("SELECT * FROM office_expenses ORDER BY expense_date DESC, id DESC")
+    expenses = []
+    for r in cur.fetchall():
+        e = dict(r)
+        e["expense_date"] = e["expense_date"].isoformat() if e["expense_date"] else None
+        e["amount"] = float(e["amount"] or 0)
+        e["created_at"] = e["created_at"].isoformat() if e["created_at"] else None
+        expenses.append(e)
+    return jsonify({"expenses": expenses})
+
+
+@app.route("/api/office/expenses", methods=["POST"])
+@login_required
+def api_office_expense_create():
+    data = request.get_json(force=True)
+    try:
+        amount = float(data.get("amount"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Enter an amount"}), 400
+    if amount <= 0:
+        return jsonify({"status": "error", "message": "Amount must be more than zero"}), 400
+    expense_date = (data.get("expense_date") or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(expense_date)
+    except ValueError:
+        return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """INSERT INTO office_expenses
+             (expense_date, category, description, amount, paid_by, note, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (
+            expense_date,
+            (data.get("category") or "").strip() or None,
+            (data.get("description") or "").strip() or None,
+            amount,
+            (data.get("paid_by") or "").strip() or None,
+            (data.get("note") or "").strip() or None,
+            session.get("display_name") or "Unknown",
+        ),
+    )
+    expense_id = cur.fetchone()["id"]
+    record_audit(cur, "Added an expense", data.get("description") or expense_date, {"amount": amount})
+    db.commit()
+    return jsonify({"status": "ok", "id": expense_id})
+
+
+@app.route("/api/office/expenses/<int:expense_id>", methods=["POST"])
+@login_required
+def api_office_expense_update(expense_id):
+    data = request.get_json(force=True)
+    updates = {}
+    for field in OFFICE_EXPENSE_FIELDS:
+        if field in data:
+            updates[field] = data[field]
+    if "amount" in updates:
+        try:
+            updates["amount"] = float(updates["amount"])
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Enter an amount"}), 400
+        if updates["amount"] <= 0:
+            return jsonify({"status": "error", "message": "Amount must be more than zero"}), 400
+    if "expense_date" in updates:
+        try:
+            date.fromisoformat(updates["expense_date"])
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+    for field in ("category", "description", "paid_by", "note"):
+        if field in updates:
+            updates[field] = (updates[field] or "").strip() or None
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM office_expenses WHERE id=%s", (expense_id,))
+    if cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "No such expense"}), 404
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE office_expenses SET {sets} WHERE id=%s", (*updates.values(), expense_id))
+    record_audit(cur, "Updated an expense", str(expense_id), updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/office/expenses/<int:expense_id>", methods=["DELETE"])
+@login_required
+def api_office_expense_delete(expense_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT description FROM office_expenses WHERE id=%s", (expense_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such expense"}), 404
+    cur.execute("DELETE FROM office_expenses WHERE id=%s", (expense_id,))
+    record_audit(cur, "Deleted an expense", row["description"] or str(expense_id))
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+OFFICE_INVENTORY_FIELDS = ("name", "unit", "low_stock_at", "note")
+
+
+@app.route("/api/office/inventory")
+@login_required
+def api_office_inventory():
+    cur = get_db().cursor()
+    cur.execute("SELECT * FROM office_inventory_items ORDER BY name")
+    items = []
+    for r in cur.fetchall():
+        i = dict(r)
+        i["quantity"] = float(i["quantity"] or 0)
+        i["low_stock_at"] = float(i["low_stock_at"]) if i["low_stock_at"] is not None else None
+        i["updated_at"] = i["updated_at"].isoformat() if i["updated_at"] else None
+        items.append(i)
+    return jsonify({"items": items})
+
+
+@app.route("/api/office/inventory", methods=["POST"])
+@login_required
+def api_office_inventory_create():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"status": "error", "message": "Enter an item name"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM office_inventory_items WHERE LOWER(name)=LOWER(%s)", (name,))
+    if cur.fetchone():
+        return jsonify({"status": "error", "message": f"{name} is already on the list"}), 400
+
+    try:
+        quantity = float(data.get("quantity") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Enter a starting quantity"}), 400
+    try:
+        low_stock_at = float(data["low_stock_at"]) if data.get("low_stock_at") not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Enter a valid low-stock threshold"}), 400
+
+    cur.execute(
+        """INSERT INTO office_inventory_items (name, unit, quantity, low_stock_at, note)
+           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+        (name, (data.get("unit") or "").strip() or None, quantity, low_stock_at,
+         (data.get("note") or "").strip() or None),
+    )
+    item_id = cur.fetchone()["id"]
+    record_audit(cur, "Added an inventory item", name, {"quantity": quantity})
+    db.commit()
+    return jsonify({"status": "ok", "id": item_id})
+
+
+@app.route("/api/office/inventory/<int:item_id>", methods=["POST"])
+@login_required
+def api_office_inventory_update(item_id):
+    data = request.get_json(force=True)
+    updates = {}
+    for field in OFFICE_INVENTORY_FIELDS:
+        if field in data:
+            updates[field] = data[field]
+    if "name" in updates:
+        updates["name"] = (updates["name"] or "").strip()
+        if not updates["name"]:
+            return jsonify({"status": "error", "message": "Enter an item name"}), 400
+    for f in ("unit", "note"):
+        if f in updates:
+            updates[f] = (updates[f] or "").strip() or None
+    if "low_stock_at" in updates:
+        try:
+            updates["low_stock_at"] = (
+                float(updates["low_stock_at"]) if updates["low_stock_at"] not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Enter a valid low-stock threshold"}), 400
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM office_inventory_items WHERE id=%s", (item_id,))
+    if cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "No such item"}), 404
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(
+        f"UPDATE office_inventory_items SET {sets}, updated_at=NOW() WHERE id=%s",
+        (*updates.values(), item_id),
+    )
+    record_audit(cur, "Updated an inventory item", updates.get("name", str(item_id)), updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/office/inventory/<int:item_id>/adjust", methods=["POST"])
+@login_required
+def api_office_inventory_adjust(item_id):
+    data = request.get_json(force=True)
+    try:
+        delta = float(data.get("delta"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Enter an amount to adjust by"}), 400
+    if delta == 0:
+        return jsonify({"status": "error", "message": "That adjustment is zero"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name, quantity FROM office_inventory_items WHERE id=%s", (item_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such item"}), 404
+    new_quantity = float(row["quantity"] or 0) + delta
+    if new_quantity < 0:
+        return jsonify({"status": "error", "message": "That would take the count below zero"}), 400
+
+    cur.execute(
+        "UPDATE office_inventory_items SET quantity=%s, updated_at=NOW() WHERE id=%s",
+        (new_quantity, item_id),
+    )
+    cur.execute(
+        """INSERT INTO office_inventory_adjustments (item_id, delta, reason, created_by)
+           VALUES (%s,%s,%s,%s)""",
+        (item_id, delta, (data.get("reason") or "").strip() or None, session.get("display_name") or "Unknown"),
+    )
+    record_audit(cur, "Adjusted inventory", row["name"], {"delta": delta, "new_quantity": new_quantity})
+    db.commit()
+    return jsonify({"status": "ok", "quantity": new_quantity})
+
+
+@app.route("/api/office/inventory/<int:item_id>", methods=["DELETE"])
+@login_required
+def api_office_inventory_delete(item_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM office_inventory_items WHERE id=%s", (item_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such item"}), 404
+    cur.execute("DELETE FROM office_inventory_items WHERE id=%s", (item_id,))
+    record_audit(cur, "Deleted an inventory item", row["name"])
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+ALLOWED_NOTE_ATTACHMENT_EXTENSIONS = ALLOWED_PHOTO_EXTENSIONS | {"pdf", "doc", "docx", "xls", "xlsx", "txt"}
+
+
+@app.route("/api/office/notes")
+@login_required
+def api_office_notes():
+    cur = get_db().cursor()
+    cur.execute("SELECT * FROM office_notes ORDER BY updated_at DESC")
+    notes = []
+    for r in cur.fetchall():
+        n = dict(r)
+        n["created_at"] = n["created_at"].isoformat() if n["created_at"] else None
+        n["updated_at"] = n["updated_at"].isoformat() if n["updated_at"] else None
+        notes.append(n)
+    return jsonify({"notes": notes})
+
+
+@app.route("/api/office/notes", methods=["POST"])
+@login_required
+def api_office_note_create():
+    data = request.get_json(force=True)
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"status": "error", "message": "Enter a title"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """INSERT INTO office_notes (title, body, created_by)
+           VALUES (%s,%s,%s) RETURNING id""",
+        (title, (data.get("body") or "").strip() or None, session.get("display_name") or "Unknown"),
+    )
+    note_id = cur.fetchone()["id"]
+    record_audit(cur, "Added a note", title)
+    db.commit()
+    return jsonify({"status": "ok", "id": note_id})
+
+
+@app.route("/api/office/notes/<int:note_id>", methods=["POST"])
+@login_required
+def api_office_note_update(note_id):
+    data = request.get_json(force=True)
+    updates = {}
+    if "title" in data:
+        title = (data["title"] or "").strip()
+        if not title:
+            return jsonify({"status": "error", "message": "Enter a title"}), 400
+        updates["title"] = title
+    if "body" in data:
+        updates["body"] = (data["body"] or "").strip() or None
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM office_notes WHERE id=%s", (note_id,))
+    if cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "No such note"}), 404
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(
+        f"UPDATE office_notes SET {sets}, updated_at=NOW() WHERE id=%s",
+        (*updates.values(), note_id),
+    )
+    record_audit(cur, "Updated a note", updates.get("title", str(note_id)))
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/office/notes/<int:note_id>", methods=["DELETE"])
+@login_required
+def api_office_note_delete(note_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT title, attachment_filename FROM office_notes WHERE id=%s", (note_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such note"}), 404
+    if row["attachment_filename"]:
+        path = os.path.join(UPLOAD_DIR, row["attachment_filename"])
+        if os.path.exists(path):
+            os.remove(path)
+    cur.execute("DELETE FROM office_notes WHERE id=%s", (note_id,))
+    record_audit(cur, "Deleted a note", row["title"])
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/office/notes/<int:note_id>/attachment", methods=["POST"])
+@login_required
+def api_office_note_attachment(note_id):
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"status": "error", "message": "No file uploaded"}), 400
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_NOTE_ATTACHMENT_EXTENSIONS:
+        return jsonify({"status": "error", "message": "That file type isn't allowed"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT title, attachment_filename FROM office_notes WHERE id=%s", (note_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such note"}), 404
+
+    filename = f"note-{note_id}.{ext}"
+    if row["attachment_filename"] and row["attachment_filename"] != filename:
+        old = os.path.join(UPLOAD_DIR, row["attachment_filename"])
+        if os.path.exists(old):
+            os.remove(old)
+    file.save(os.path.join(UPLOAD_DIR, filename))
+    cur.execute(
+        "UPDATE office_notes SET attachment_filename=%s, updated_at=NOW() WHERE id=%s",
+        (filename, note_id),
+    )
+    record_audit(cur, "Attached a file", row["title"], {"file": filename})
+    db.commit()
+    return jsonify({"status": "ok", "attachment_filename": filename})
+
+
+@app.route("/api/office/notes/<int:note_id>/attachment", methods=["DELETE"])
+@login_required
+def api_office_note_attachment_delete(note_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT title, attachment_filename FROM office_notes WHERE id=%s", (note_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such note"}), 404
+    if row["attachment_filename"]:
+        path = os.path.join(UPLOAD_DIR, row["attachment_filename"])
+        if os.path.exists(path):
+            os.remove(path)
+    cur.execute(
+        "UPDATE office_notes SET attachment_filename=NULL, updated_at=NOW() WHERE id=%s",
+        (note_id,),
+    )
+    record_audit(cur, "Removed an attachment", row["title"])
+    db.commit()
     return jsonify({"status": "ok"})
 
 
