@@ -3744,6 +3744,7 @@ async function applyStatusBucket(order, bucketKey) {
 async function loadStatusBoard() {
   const board = document.getElementById("statusBoard");
   try {
+    await loadPrintCatalogue();
     await fetchAllPrintOrders();
   } catch (err) {
     board.innerHTML = `<p class="text-sm text-gray-500 py-10 text-center">${escapeHtml(err.message)}</p>`;
@@ -3936,6 +3937,7 @@ let cupPrintsQuery = "";
 async function loadCupPrints() {
   const body = document.getElementById("cupPrintsBody");
   try {
+    await loadPrintCatalogue();
     await fetchAllPrintOrders();
   } catch (err) {
     body.innerHTML = `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
@@ -3972,9 +3974,18 @@ function cupRemarksHTML(o) {
 // same wireEditCell/beginPrintCellEdit/beginProductPick machinery drives
 // them - no separate editing system to keep in sync with the real one.
 function cupItemCellHTML(i) {
+  // Most cups have no fixed colour list - only Double Wall does - so the
+  // extra picker only shows up where it means something, same rule the
+  // Board's own line rendering uses.
+  const colourHTML = printCupColours(i.product_id).length
+    ? `<span class="print-cup-sep">·</span><span class="print-edit print-cup-colour" tabindex="0" role="button"
+             data-item="${i.id}" data-field="cup_color" data-cup="${i.product_id || ""}"
+             data-value="${escapeHtml(i.cup_color || "")}"
+             title="Colour of the cup itself">${escapeHtml(i.cup_color || "— colour")}</span>`
+    : "";
   return `<td><span class="print-edit font-medium text-gray-900 whitespace-nowrap" tabindex="0" role="button"
               data-item="${i.id}" data-field="product_id" data-value="${i.product_id || ""}"
-              title="Click to change the cup">${escapeHtml(i.label || "")}</span></td>`;
+              title="Click to change the cup">${escapeHtml(i.label || "")}</span>${colourHTML}</td>`;
 }
 function cupLidCellHTML(i) {
   return `<td><span class="print-edit text-gray-500 whitespace-nowrap" tabindex="0" role="button"
