@@ -918,25 +918,70 @@
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
         <h2 class="font-display font-semibold text-xl leading-tight">Clients</h2>
-        <p id="printClientsSubtitle" class="text-sm text-gray-500">Everyone we print for.</p>
+        <p id="printClientsSubtitle" class="text-sm text-gray-500">Everyone we do business with.</p>
       </div>
-      <input id="printClientSearch" type="search" placeholder="Search clients…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+      <div class="flex items-center gap-2">
+        <input id="printClientSearch" type="search" placeholder="Search clients…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+        <button id="addClientBtn" type="button" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ Add client</button>
+      </div>
     </div>
     <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
       <table class="w-full text-sm">
         <thead>
           <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
             <th class="text-left px-3 py-2">Client</th>
+            <th class="text-left px-3 py-2">Contact</th>
             <th class="text-left px-3 py-2">Instagram</th>
             <th class="text-left px-3 py-2">Facebook</th>
             <th class="text-left px-3 py-2">Phone</th>
             <th class="text-right px-3 py-2">Orders</th>
-            <th class="text-right px-3 py-2">Cups</th>
             <th class="text-right px-3 py-2">Owed</th>
           </tr>
         </thead>
         <tbody id="printClientsBody" class="divide-y divide-gray-100"></tbody>
       </table>
+    </div>
+  </div>
+
+  {# Standalone client creation - not every client buys cups, so they can't
+     all be created implicitly through a print order the way Cup Printing's
+     roster used to require. Collections' "+ New PO" picker needs this. #}
+  <div id="addClientModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-3">Add a client</h3>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Name</span>
+        <input id="addClientName" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="What we call them" />
+      </label>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Trade name <span class="text-gray-400">(optional)</span></span>
+          <input id="addClientTradeName" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">TIN <span class="text-gray-400">(optional)</span></span>
+          <input id="addClientTaxId" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Contact <span class="text-gray-400">(optional)</span></span>
+          <input id="addClientContact" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Phone <span class="text-gray-400">(optional)</span></span>
+          <input id="addClientPhone" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Email <span class="text-gray-400">(optional)</span></span>
+        <input id="addClientEmail" type="email" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+      </label>
+      <p id="addClientError" class="text-xs text-red-600 mb-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-3">
+        <button id="addClientCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="addClientSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+      </div>
     </div>
   </div>
 

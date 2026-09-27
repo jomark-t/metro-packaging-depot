@@ -429,6 +429,16 @@ def init_db():
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
+    # contact_person is superseded by these two but stays in place,
+    # untouched - no migration copies it forward (never backfill on this
+    # database); every read instead falls back to it with COALESCE until
+    # someone actually edits the new fields.
+    cur.execute("ALTER TABLE print_clients ADD COLUMN IF NOT EXISTS primary_contact TEXT")
+    cur.execute("ALTER TABLE print_clients ADD COLUMN IF NOT EXISTS secondary_contact TEXT")
+    # for sales invoices - a client's registered trade name and TIN differ
+    # from the name we know them by day to day
+    cur.execute("ALTER TABLE print_clients ADD COLUMN IF NOT EXISTS trade_name TEXT")
+    cur.execute("ALTER TABLE print_clients ADD COLUMN IF NOT EXISTS tax_id TEXT")
 
     # cups and lids as priced things. `kind` splits the two so a lid can be
     # picked for a line without appearing as something to print on.
@@ -476,6 +486,19 @@ def init_db():
             price NUMERIC(10,2) NOT NULL,
             note TEXT,
             UNIQUE(client_id, product_id)
+        )"""
+    )
+
+    # a freeform per-client discount table, typed in by staff rather than
+    # looked up against print_products - not every client buys cups, so
+    # "item" can't be bound to the cup catalog the way print_client_prices is
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS print_client_discounts (
+            id SERIAL PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id) ON DELETE CASCADE,
+            item TEXT NOT NULL,
+            discount TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
 
@@ -3079,28 +3102,17 @@ def _rollup_status(items):
     return "not_started"
 
 
-def _print_order_rows(where="", params=()):
-    """Orders with their line items attached, in queue order.
+def _attach_items_and_totals(orders):
+    """Given order dicts (each with an 'id'), fetch their line items and
+    fill in quantity/delivered/total/status. Shared by every place that
+    lists print orders, so a paginated caller isn't stuck duplicating
+    this to get the same shape.
 
-    One query per table rather than a join returning a row per cup: the
-    item lists are small, and this keeps the order fields from being
+    One query for the items rather than a join returning a row per cup:
+    the item lists are small, and this keeps the order fields from being
     repeated once per line."""
-    cur = get_db().cursor()
-    cur.execute(
-        f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
-                   o.is_rush, o.needs_new_frame,
-                   o.is_paid, o.remarks, o.created_by,
-                   c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
-                   c.logo_filename, c.is_discounted
-            FROM print_orders o
-            JOIN print_clients c ON c.id = o.client_id
-            {where}
-            ORDER BY o.order_date ASC, o.id ASC""",
-        params,
-    )
-    orders = [dict(r) for r in cur.fetchall()]
     if not orders:
-        return []
+        return orders
 
     by_id = {}
     for o in orders:
@@ -3110,6 +3122,7 @@ def _print_order_rows(where="", params=()):
         o["scheduled_date"] = o["scheduled_date"].isoformat() if o["scheduled_date"] else None
         by_id[o["id"]] = o
 
+    cur = get_db().cursor()
     cur.execute(
         """SELECT i.id, i.order_id, i.product_id, i.lid_product_id,
                   i.item_text, i.lid_text, i.ink_color, i.cup_color,
@@ -3144,7 +3157,33 @@ def _print_order_rows(where="", params=()):
         )
         o["total"] = round(sum(i["amount"] for i in o["items"]), 2)
         o["status"] = _rollup_status(o["items"])
+    return orders
 
+
+def _print_order_rows(where="", params=()):
+    """Orders with their line items attached, in queue order (status rank,
+    then date) - what the Board and Status board want. Cup Prints' own
+    history is paginated separately (api_print_orders_history) since it
+    wants newest-first over unbounded history rather than this queue
+    order over the open set."""
+    cur = get_db().cursor()
+    cur.execute(
+        f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
+                   o.is_rush, o.needs_new_frame,
+                   o.is_paid, o.remarks, o.created_by,
+                   c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
+                   c.logo_filename, c.is_discounted
+            FROM print_orders o
+            JOIN print_clients c ON c.id = o.client_id
+            {where}
+            ORDER BY o.order_date ASC, o.id ASC""",
+        params,
+    )
+    orders = [dict(r) for r in cur.fetchall()]
+    if not orders:
+        return []
+
+    _attach_items_and_totals(orders)
     orders.sort(key=lambda o: (PRINT_STATUS_RANK.get(o["status"], 9), o["order_date"] or ""))
     return orders
 
@@ -3174,6 +3213,60 @@ def api_print_orders():
         "orders": [o for o in every if keep(o)],
         "counts": {name: sum(1 for o in every if t(o)) for name, t in tests.items()},
     })
+
+
+@app.route("/api/print/orders/history")
+@login_required
+def api_print_orders_history():
+    """Cup Prints' own paginated view over every order ever, newest first -
+    deliberately separate from _print_order_rows()/api_print_orders above,
+    which fetch the whole open-or-all set every time for the Board and
+    Status board (fine there; those are naturally bounded by what's still
+    open). This one is built to stay fast as the order history grows
+    without bound.
+
+    Cursor is the last-loaded order's id rather than an offset, so paging
+    in stays correct even if an order is added or deleted in between."""
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    except ValueError:
+        limit = 50
+    before_id = request.args.get("before_id")
+    q = (request.args.get("q") or "").strip()
+
+    where_parts = []
+    params = []
+    if q:
+        where_parts.append("c.name ILIKE %s")
+        params.append(f"%{q}%")
+    if before_id:
+        where_parts.append(
+            "(o.order_date, o.id) < (SELECT order_date, id FROM print_orders WHERE id=%s)"
+        )
+        params.append(before_id)
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    cur = get_db().cursor()
+    cur.execute(
+        f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
+                   o.is_rush, o.needs_new_frame,
+                   o.is_paid, o.remarks, o.created_by,
+                   c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
+                   c.logo_filename, c.is_discounted,
+                   (SELECT COUNT(*) FROM print_orders o2 WHERE o2.client_id = o.client_id)
+                     AS client_order_count
+            FROM print_orders o
+            JOIN print_clients c ON c.id = o.client_id
+            {where_sql}
+            ORDER BY o.order_date DESC, o.id DESC
+            LIMIT %s""",
+        (*params, limit + 1),
+    )
+    orders = [dict(r) for r in cur.fetchall()]
+    has_more = len(orders) > limit
+    orders = orders[:limit]
+    _attach_items_and_totals(orders)
+    return jsonify({"orders": orders, "has_more": has_more})
 
 
 def price_line(cur, product_id, lid_product_id, quantity):
@@ -3669,6 +3762,60 @@ def api_print_clients():
     return jsonify({"clients": clients})
 
 
+@app.route("/api/print/clients/page")
+@login_required
+def api_print_clients_page():
+    """The Clients tab's own paginated, searchable view - separate from
+    api_print_clients above, which the New Order form's client combobox
+    and Collections' "+ New PO" picker need the *whole* list from to
+    search-as-you-type against. This one is built to stay fast as the
+    client list grows without bound.
+
+    Cursor is the last-loaded client's name (the list is already ordered
+    by name) rather than an offset, so paging in stays correct even if a
+    client is added or renamed in between."""
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    except ValueError:
+        limit = 50
+    after_name = request.args.get("after_name") or ""
+    q = (request.args.get("q") or "").strip()
+
+    where_parts = []
+    params = []
+    if q:
+        where_parts.append("c.name ILIKE %s")
+        params.append(f"%{q}%")
+    if after_name:
+        where_parts.append("c.name > %s")
+        params.append(after_name)
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    cur = get_db().cursor()
+    cur.execute(
+        f"""SELECT c.id, c.name, c.instagram, c.facebook, c.phone, c.email,
+                  COALESCE(c.primary_contact, c.contact_person) AS primary_contact,
+                  c.is_discounted, c.logo_filename,
+                  COUNT(DISTINCT o.id) AS order_count,
+                  COALESCE(SUM(i.quantity), 0) AS cups,
+                  COALESCE(SUM(CASE WHEN o.is_paid THEN 0
+                                    ELSE i.quantity * i.unit_price END), 0) AS owed
+           FROM print_clients c
+           LEFT JOIN print_orders o ON o.client_id = c.id
+           LEFT JOIN print_order_items i ON i.order_id = o.id
+           {where_sql}
+           GROUP BY c.id ORDER BY c.name
+           LIMIT %s""",
+        (*params, limit + 1),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    for row in rows:
+        row["owed"] = float(row["owed"] or 0)
+    return jsonify({"clients": rows, "has_more": has_more})
+
+
 @app.route("/api/print/clients/<int:client_id>")
 @login_required
 def api_print_client(client_id):
@@ -3680,6 +3827,10 @@ def api_print_client(client_id):
         return jsonify({"status": "error", "message": "No such client"}), 404
     client = dict(row)
     client["created_at"] = client["created_at"].isoformat() if client.get("created_at") else None
+    # contact_person predates primary_contact/secondary_contact and is
+    # never backfilled - fall back to it here so an old client's contact
+    # name keeps showing until someone actually edits the new field.
+    client["primary_contact"] = client.get("primary_contact") or client.get("contact_person")
 
     cur.execute(
         """SELECT o.id, o.order_date, o.is_paid,
@@ -3723,7 +3874,13 @@ def api_print_client(client_id):
         d["price"] = float(d["price"] or 0)
         deals.append(d)
 
-    return jsonify({"client": client, "totals": totals, "history": history, "deals": deals})
+    cur.execute(
+        "SELECT id, item, discount FROM print_client_discounts WHERE client_id=%s ORDER BY id",
+        (client_id,),
+    )
+    discounts = [dict(r) for r in cur.fetchall()]
+
+    return jsonify({"client": client, "totals": totals, "history": history, "deals": deals, "discounts": discounts})
 
 
 @app.route("/api/print/clients/<int:client_id>/logo", methods=["POST"])
@@ -3780,7 +3937,8 @@ def api_print_client_logo_delete(client_id):
 
 
 PRINT_CLIENT_FIELDS = (
-    "name", "contact_person", "phone", "email", "instagram", "facebook", "notes", "status",
+    "name", "primary_contact", "secondary_contact", "phone", "email", "instagram", "facebook",
+    "trade_name", "tax_id", "notes", "status",
 )
 
 
@@ -3826,6 +3984,117 @@ def api_print_client_update(client_id):
         cur.execute(f"UPDATE print_clients SET {sets} WHERE id=%s", (*updates.values(), client_id))
         record_audit(cur, "Updated print client", row["name"], changed)
         db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/print/clients", methods=["POST"])
+@login_required
+def api_print_client_create():
+    """A client on its own, with no order attached - for clients who don't
+    buy cups (Collections' "+ New PO" needs a client to already exist, and
+    an order is the only other thing that used to create one)."""
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"status": "error", "message": "A client needs a name."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM print_clients WHERE LOWER(name)=LOWER(%s)", (name,))
+    if cur.fetchone():
+        return jsonify({"status": "error", "message": f"There is already a client called {name}."}), 400
+
+    fields = {"name": name}
+    for field in PRINT_CLIENT_FIELDS:
+        if field != "name" and field in data:
+            fields[field] = (data[field] or "").strip() or None
+
+    columns = ", ".join(fields)
+    placeholders = ", ".join(["%s"] * len(fields))
+    cur.execute(
+        f"INSERT INTO print_clients ({columns}) VALUES ({placeholders}) RETURNING id",
+        tuple(fields.values()),
+    )
+    client_id = cur.fetchone()["id"]
+    record_audit(cur, "Added print client", name, fields)
+    db.commit()
+    return jsonify({"status": "ok", "id": client_id})
+
+
+@app.route("/api/print/clients/<int:client_id>/discounts", methods=["POST"])
+@login_required
+def api_print_client_discount_create(client_id):
+    """One row of the client's freeform discount table - item and discount
+    are both typed in by staff, not looked up against a product catalog."""
+    data = request.get_json(force=True)
+    item = (data.get("item") or "").strip()
+    discount = (data.get("discount") or "").strip()
+    if not item or not discount:
+        return jsonify({"status": "error", "message": "Both an item and a discount are needed."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM print_clients WHERE id=%s", (client_id,))
+    client_row = cur.fetchone()
+    if client_row is None:
+        return jsonify({"status": "error", "message": "No such client"}), 404
+
+    cur.execute(
+        "INSERT INTO print_client_discounts (client_id, item, discount) VALUES (%s,%s,%s) RETURNING id",
+        (client_id, item, discount),
+    )
+    discount_id = cur.fetchone()["id"]
+    record_audit(cur, "Added client discount", client_row["name"], {"item": item, "discount": discount})
+    db.commit()
+    return jsonify({"status": "ok", "id": discount_id})
+
+
+@app.route("/api/print/clients/<int:client_id>/discounts/<int:discount_id>", methods=["POST"])
+@login_required
+def api_print_client_discount_update(client_id, discount_id):
+    data = request.get_json(force=True)
+    item = (data.get("item") or "").strip()
+    discount = (data.get("discount") or "").strip()
+    if not item or not discount:
+        return jsonify({"status": "error", "message": "Both an item and a discount are needed."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT c.name FROM print_client_discounts d JOIN print_clients c ON c.id = d.client_id "
+        "WHERE d.id=%s AND d.client_id=%s",
+        (discount_id, client_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such discount"}), 404
+
+    cur.execute(
+        "UPDATE print_client_discounts SET item=%s, discount=%s WHERE id=%s",
+        (item, discount, discount_id),
+    )
+    record_audit(cur, "Updated client discount", row["name"], {"item": item, "discount": discount})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/print/clients/<int:client_id>/discounts/<int:discount_id>", methods=["DELETE"])
+@login_required
+def api_print_client_discount_delete(client_id, discount_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT c.name, d.item FROM print_client_discounts d JOIN print_clients c ON c.id = d.client_id "
+        "WHERE d.id=%s AND d.client_id=%s",
+        (discount_id, client_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such discount"}), 404
+
+    cur.execute("DELETE FROM print_client_discounts WHERE id=%s", (discount_id,))
+    record_audit(cur, "Removed client discount", row["name"], {"item": row["item"]})
+    db.commit()
     return jsonify({"status": "ok"})
 
 

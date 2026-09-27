@@ -3932,18 +3932,83 @@ if (document.getElementById("statusNewBtn")) {
 // (date, deadline, client, new logo, paid, remarks) spanning its rows.
 // ---------------------------------------------------------------------------
 
+const CUP_PRINTS_PAGE_SIZE = 50;
 let cupPrintsQuery = "";
+let cupPrintsOrders = [];
+let cupPrintsHasMore = true;
+let cupPrintsLoading = false;
+let cupPrintsSearchTimer = null;
 
 async function loadCupPrints() {
   const body = document.getElementById("cupPrintsBody");
   try {
     await loadPrintCatalogue();
-    await fetchAllPrintOrders();
   } catch (err) {
     body.innerHTML = `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
+  await loadMoreCupPrints({ reset: true });
+}
+
+// Paginated, newest-first, over every order ever - not just the open set.
+// A reset load (a fresh visit, or a new search term) replaces cupPrintsOrders;
+// otherwise this appends the next batch after the last loaded order.
+async function loadMoreCupPrints({ reset = false, limit } = {}) {
+  if (cupPrintsLoading) return;
+  if (!reset && !cupPrintsHasMore) return;
+  cupPrintsLoading = true;
+
+  const params = new URLSearchParams();
+  params.set("limit", String(limit || CUP_PRINTS_PAGE_SIZE));
+  if (cupPrintsQuery.trim()) params.set("q", cupPrintsQuery.trim());
+  if (!reset && cupPrintsOrders.length) {
+    params.set("before_id", cupPrintsOrders[cupPrintsOrders.length - 1].id);
+  }
+
+  try {
+    const res = await fetch(`/api/print/orders/history?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Could not load Cup Prints.");
+    }
+    const data = await res.json();
+    cupPrintsOrders = reset ? data.orders : cupPrintsOrders.concat(data.orders);
+    cupPrintsHasMore = data.has_more;
+  } catch (err) {
+    cupPrintsLoading = false;
+    if (reset) {
+      document.getElementById("cupPrintsBody").innerHTML =
+        `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
+    }
+    return;
+  }
+  cupPrintsLoading = false;
   renderCupPrints();
+}
+
+// After an inline edit, re-fetch from the top rather than just the one
+// changed order - but keep however many rows were already loaded, so the
+// edit doesn't collapse an already-scrolled list back to a single page.
+async function reloadCupPrintsSamePage() {
+  const keep = Math.max(cupPrintsOrders.length, CUP_PRINTS_PAGE_SIZE);
+  await loadMoreCupPrints({ reset: true, limit: keep });
+}
+
+// A plain scroll listener rather than an IntersectionObserver: the
+// scrolling element (.overflow-auto, fixed max-height) is static markup -
+// only cupPrintsBody's innerHTML changes on re-render - so this only
+// needs binding once, ever.
+let cupPrintsScrollBound = false;
+function ensureCupPrintsScrollListener() {
+  if (cupPrintsScrollBound) return;
+  const container = document.getElementById("cupPrintsBody")?.closest(".overflow-auto");
+  if (!container) return;
+  cupPrintsScrollBound = true;
+  container.addEventListener("scroll", () => {
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 300) {
+      loadMoreCupPrints();
+    }
+  });
 }
 
 function cupYesNoSelect(kind, orderId, current) {
@@ -4005,21 +4070,16 @@ function cupInkCellHTML(i) {
 }
 
 function cupPrintsRowsHTML(list) {
-  // "new" means this is the only order this client has ever placed - counted
-  // against every order, not just the (possibly search-filtered) list being
-  // drawn, so searching for a client doesn't change whether they read as new
-  const orderCountByClient = {};
-  printAllOrders.forEach((o) => {
-    orderCountByClient[o.client_id] = (orderCountByClient[o.client_id] || 0) + 1;
-  });
-
   const out = [];
   list.forEach((o, gi) => {
     // any line still open - not just not-started - is the one thing worth
     // flagging without opening the row: an order isn't off the press's
     // plate just because part of it moved to ongoing
     const flagged = o.status !== "done" && o.status !== "cancelled";
-    const isNewClient = orderCountByClient[o.client_id] === 1;
+    // "new" means this is the only order this client has ever placed -
+    // client_order_count comes from the server against the client's full
+    // history, not just whatever page of Cup Prints happens to be loaded
+    const isNewClient = o.client_order_count === 1;
     // one badge covers both - a new client's first order needs a new frame
     // for the same reason, so two icons would usually just say the same
     // thing twice
@@ -4064,13 +4124,13 @@ function cupPrintsRowsHTML(list) {
 }
 
 function renderCupPrints() {
-  const q = cupPrintsQuery.trim().toLowerCase();
-  const visible = printAllOrders
-    .filter((o) => !q || o.client_name.toLowerCase().includes(q))
-    .slice()
-    .sort((a, b) => (a.order_date < b.order_date ? 1 : a.order_date > b.order_date ? -1 : 0)); // newest first
+  // already sorted newest-first and search-filtered server-side - no
+  // client-side filter/sort needed against a page that might not hold
+  // every matching order anyway
+  const visible = cupPrintsOrders;
 
-  document.getElementById("cupPrintsBody").innerHTML = visible.length
+  const body = document.getElementById("cupPrintsBody");
+  body.innerHTML = visible.length
     ? cupPrintsRowsHTML(visible)
     : `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
 
@@ -4080,6 +4140,7 @@ function renderCupPrints() {
   const cups = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + Number(i.quantity || 0), 0), 0);
   document.getElementById("cupPrintsCups").textContent = cups.toLocaleString("en-PH");
 
+  ensureCupPrintsScrollListener();
   wireCupPrints();
 }
 
@@ -4106,17 +4167,16 @@ function wireCupPrints() {
         if (kind === "logo") await postJSON(`/api/print/orders/${orderId}`, { needs_new_frame: sel.value === "Yes" });
         else if (kind === "paid") await postJSON(`/api/print/orders/${orderId}`, { is_paid: sel.value === "Yes" });
         else if (kind === "status") await setItemStatus(sel.dataset.item, sel.value);
-        await fetchAllPrintOrders();
+        await reloadCupPrintsSamePage();
       } catch (err) {
         alert(err.message || "Could not update that order.");
       }
-      renderCupPrints();
     });
   });
 
   body.querySelectorAll("[data-remarks]").forEach((span) => {
     function edit() {
-      const order = printAllOrders.find((o) => String(o.id) === span.dataset.remarks);
+      const order = cupPrintsOrders.find((o) => String(o.id) === span.dataset.remarks);
       const input = document.createElement("input");
       input.className = "print-cell-input w-full text-[11px]";
       input.value = (order && order.remarks) || "";
@@ -4131,7 +4191,8 @@ function wireCupPrints() {
         if (val !== ((order && order.remarks) || "")) {
           try {
             await postJSON(`/api/print/orders/${order.id}`, { remarks: val });
-            await fetchAllPrintOrders();
+            await reloadCupPrintsSamePage();
+            return;
           } catch (err) {
             alert(err.message || "Could not save that note.");
           }
@@ -4152,7 +4213,10 @@ function wireCupPrints() {
 if (document.getElementById("cupPrintsSearch")) {
   document.getElementById("cupPrintsSearch").addEventListener("input", (e) => {
     cupPrintsQuery = e.target.value;
-    renderCupPrints();
+    // debounced and server-side now: a paginated view can't just filter
+    // in memory, since the matching order might not be loaded yet
+    clearTimeout(cupPrintsSearchTimer);
+    cupPrintsSearchTimer = setTimeout(() => loadMoreCupPrints({ reset: true }), 250);
   });
 }
 if (document.getElementById("cupPrintsNewBtn")) {
@@ -4221,6 +4285,18 @@ async function openPrintClient(clientId) {
   const sectionHead = (title) =>
     `<div class="flex items-center gap-2"><span class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">${title}</span><span class="flex-1 h-px bg-gray-100"></span></div>`;
 
+  const discountRow = (d) => `
+    <div class="flex items-center gap-2 py-1.5 border-b border-dashed border-gray-100 text-sm">
+      <input class="print-discount-field flex-1 min-w-0 border border-transparent hover:border-gray-200 focus:border-brand-blue rounded px-1 py-0.5 text-sm"
+             data-discount="${d.id}" data-field="item" value="${escapeHtml(d.item)}" placeholder="Item" />
+      <input class="print-discount-field flex-1 min-w-0 border border-transparent hover:border-gray-200 focus:border-brand-blue rounded px-1 py-0.5 text-sm text-right"
+             data-discount="${d.id}" data-field="discount" value="${escapeHtml(d.discount)}" placeholder="Discount" />
+      <button type="button" class="print-discount-remove text-gray-400 hover:text-red-600 shrink-0" data-discount="${d.id}" aria-label="Remove">&#10005;</button>
+    </div>`;
+  const discounts = data.discounts.length
+    ? data.discounts.map(discountRow).join("")
+    : `<p class="text-xs text-gray-400 italic">No special discounts yet.</p>`;
+
   document.getElementById("printDrawerBody").innerHTML = `
     <div class="grid grid-cols-3 gap-2">
       <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
@@ -4264,13 +4340,32 @@ async function openPrintClient(clientId) {
       <div>
         ${contactRow("Instagram", "instagram", c.instagram)}
         ${contactRow("Facebook", "facebook", c.facebook)}
-        ${contactRow("Contact", "contact_person", c.contact_person)}
+        ${contactRow("Primary Contact", "primary_contact", c.primary_contact)}
+        ${contactRow("Secondary Contact", "secondary_contact", c.secondary_contact)}
         ${contactRow("Phone", "phone", c.phone)}
         ${contactRow("Email", "email", c.email)}
       </div>
       <p class="text-[11px] text-gray-400">Type to edit — saves when you click away.</p>
     </section>
+    <section class="flex flex-col gap-2">
+      ${sectionHead("Business details")}
+      <div>
+        ${contactRow("Trade Name", "trade_name", c.trade_name)}
+        ${contactRow("TIN", "tax_id", c.tax_id)}
+      </div>
+      <p class="text-[11px] text-gray-400">For sales invoices.</p>
+    </section>
     <section class="flex flex-col gap-2">${sectionHead("Agreed prices")}${deals}</section>
+    <section class="flex flex-col gap-2">
+      ${sectionHead("Special discounts")}
+      <div id="clientDiscountsBody">${discounts}</div>
+      <div class="flex items-center gap-2">
+        <input id="newDiscountItem" type="text" placeholder="Item" class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
+        <input id="newDiscountValue" type="text" placeholder="Discount" class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
+        <button id="addDiscountBtn" type="button" class="text-xs border border-gray-300 rounded-md px-2 py-1 hover:border-gray-400 shrink-0" data-client="${c.id}">+ Add</button>
+      </div>
+      <p class="text-[11px] text-gray-400">For items outside the cup catalogue — typed in by hand, e.g. a bulk rate or a promo.</p>
+    </section>
     <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>`;
 
   const nameCell = document.querySelector('[data-client-field="name"]');
@@ -4329,6 +4424,63 @@ async function openPrintClient(clientId) {
       }
     });
   });
+
+  // discount rows save on blur, same as contact fields - both cells of the
+  // row are sent together since the endpoint replaces the whole row
+  drawerBody.querySelectorAll(".print-discount-field").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const row = input.closest("div");
+      const item = row.querySelector('[data-field="item"]').value.trim();
+      const discount = row.querySelector('[data-field="discount"]').value.trim();
+      if (!item || !discount) {
+        alert("Both an item and a discount are needed.");
+        await openPrintClient(c.id);
+        return;
+      }
+      const res = await fetch(`/api/print/clients/${c.id}/discounts/${input.dataset.discount}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item, discount }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not save that.");
+      }
+    });
+  });
+  drawerBody.querySelectorAll(".print-discount-remove").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this discount?")) return;
+      const res = await fetch(`/api/print/clients/${c.id}/discounts/${btn.dataset.discount}`, { method: "DELETE" });
+      if (!res.ok) {
+        alert("Could not remove that discount.");
+        return;
+      }
+      await openPrintClient(c.id);
+    });
+  });
+  const addDiscountBtn = drawerBody.querySelector("#addDiscountBtn");
+  if (addDiscountBtn) {
+    addDiscountBtn.addEventListener("click", async () => {
+      const item = document.getElementById("newDiscountItem").value.trim();
+      const discount = document.getElementById("newDiscountValue").value.trim();
+      if (!item || !discount) {
+        alert("Both an item and a discount are needed.");
+        return;
+      }
+      const res = await fetch(`/api/print/clients/${c.id}/discounts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item, discount }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not add that discount.");
+        return;
+      }
+      await openPrintClient(c.id);
+    });
+  }
 
   document.getElementById("printScrim").classList.remove("hidden");
   document.getElementById("printDrawer").classList.add("print-drawer-open");
@@ -5100,8 +5252,8 @@ document.getElementById("collectionsScrim").addEventListener("click", closeColle
 
 // "+ New PO" - the same client picker as the New Order form (poClientMatches
 // / poClientAvatar / poClientHighlight, all keyed off the shared printClients
-// array), minus the "create a new client" row: a PO can only be raised
-// against a client who already exists.
+// array), including its "+ New client" row: typing a name nothing matches
+// offers to create that client on save, same as a cup print order does.
 let newPoClientActiveIndex = -1;
 
 function renderNewPoClientDropdown() {
@@ -5109,22 +5261,31 @@ function renderNewPoClientDropdown() {
   const drop = document.getElementById("newPoClientDropdown");
   const trimmed = input.value.trim();
   const matches = poClientMatches(input.value);
+  const exact = trimmed && matches.some((c) => c.name.toLowerCase() === trimmed.toLowerCase());
 
-  if (!matches.length) {
-    drop.innerHTML = `<p class="px-3 py-2 text-gray-400 italic">No matching client.</p>`;
+  if (!matches.length && !trimmed) {
+    drop.innerHTML = `<p class="px-3 py-2 text-gray-400 italic">No clients yet - type a name to add one.</p>`;
     drop.classList.remove("hidden");
     return;
   }
 
-  newPoClientActiveIndex = -1;
-  drop.innerHTML = matches
-    .map(
-      (c) => `<button type="button" class="new-po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(c.name)}">
+  const rows = matches.map(
+    (c) => `<button type="button" class="new-po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(c.name)}">
               ${poClientAvatar(c.name, c.logo_filename)}
               <span class="flex-1 min-w-0 truncate">${poClientHighlight(c.name, trimmed)}</span>
             </button>`
-    )
-    .join("");
+  );
+  if (trimmed && !exact) {
+    rows.push(
+      `<button type="button" class="new-po-client-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50 text-brand-blue border-t border-gray-100" data-name="${escapeHtml(trimmed)}">
+         <span class="w-6 h-6 rounded-full border border-dashed border-brand-blue/50 grid place-items-center shrink-0 text-xs leading-none">+</span>
+         <span class="flex-1 min-w-0 truncate">New client &ldquo;${escapeHtml(trimmed)}&rdquo;</span>
+       </button>`
+    );
+  }
+
+  newPoClientActiveIndex = -1;
+  drop.innerHTML = rows.join("");
   drop.classList.remove("hidden");
 
   drop.querySelectorAll(".new-po-client-opt").forEach((btn) => {
@@ -5168,13 +5329,25 @@ async function saveNewPo() {
   const errorEl = document.getElementById("newPoError");
   errorEl.classList.add("hidden");
   const name = document.getElementById("newPoClient").value.trim();
-  const client = printClients.find((c) => c.name.toLowerCase() === name.toLowerCase());
-  if (!client) {
-    errorEl.textContent = "Pick a client from the list.";
+  if (!name) {
+    errorEl.textContent = "Type a client's name.";
     errorEl.classList.remove("hidden");
     return;
   }
+  let client = printClients.find((c) => c.name.toLowerCase() === name.toLowerCase());
   try {
+    if (!client) {
+      // an unknown name creates the client, same as a cup print order does
+      const res = await fetch("/api/print/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Could not add that client.");
+      client = { id: data.id, name, order_count: 0 };
+      printClients.push(client);
+    }
     await postJSON("/api/office/purchase-orders", {
       client_id: client.id,
       po_date: document.getElementById("newPoDate").value,
@@ -5857,34 +6030,84 @@ function priceFor(cup, lid, qty) {
 // Clients page
 // ---------------------------------------------------------------------------
 
+const PRINT_CLIENTS_PAGE_SIZE = 50;
 let printClientRows = [];
+let printClientsHasMore = true;
+let printClientsLoading = false;
+let printClientsSearchTimer = null;
 
 async function loadPrintClientsPage() {
+  await loadMorePrintClients({ reset: true });
+}
+
+// Paginated and searched server-side, same shape as Cup Prints' history -
+// the client list only grows, so this stays fast rather than fetching
+// every client (with a full order/cups/owed aggregation each) every time.
+async function loadMorePrintClients({ reset = false } = {}) {
+  if (printClientsLoading) return;
+  if (!reset && !printClientsHasMore) return;
+  printClientsLoading = true;
+
+  const q = (document.getElementById("printClientSearch").value || "").trim();
+  const params = new URLSearchParams();
+  params.set("limit", String(PRINT_CLIENTS_PAGE_SIZE));
+  if (q) params.set("q", q);
+  if (!reset && printClientRows.length) {
+    params.set("after_name", printClientRows[printClientRows.length - 1].name);
+  }
+
   const body = document.getElementById("printClientsBody");
-  const res = await fetch("/api/print/clients?with_totals=1");
-  if (!res.ok) {
-    body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">Could not load the clients.</td></tr>`;
+  try {
+    const res = await fetch(`/api/print/clients/page?${params.toString()}`);
+    if (!res.ok) throw new Error("Could not load the clients.");
+    const data = await res.json();
+    printClientRows = reset ? data.clients : printClientRows.concat(data.clients);
+    printClientsHasMore = data.has_more;
+  } catch (err) {
+    printClientsLoading = false;
+    if (reset) {
+      body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">${escapeHtml(err.message)}</td></tr>`;
+    }
     return;
   }
-  const data = await res.json();
-  printClientRows = data.clients;
+  printClientsLoading = false;
   renderPrintClients();
 }
 
+// The Clients table isn't in its own scroll box - the whole page scrolls -
+// so this is a window listener rather than a container one, bound once.
+// Guarded on the tab's own view actually being on screen (offsetParent is
+// null while its ancestor is display:none), since a window scroll fires
+// no matter which tab you're looking at.
+let printClientsScrollBound = false;
+function ensurePrintClientsScrollListener() {
+  if (printClientsScrollBound) return;
+  printClientsScrollBound = true;
+  window.addEventListener("scroll", () => {
+    const view = document.getElementById("printClientsView");
+    if (!view || view.offsetParent === null) return;
+    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 300) {
+      loadMorePrintClients();
+    }
+  });
+}
+
 function renderPrintClients() {
-  const q = (document.getElementById("printClientSearch").value || "").trim().toLowerCase();
-  const rows = printClientRows.filter((c) => !q || c.name.toLowerCase().includes(q));
+  const rows = printClientRows;
+  // owed here is only across what's loaded so far - like Cup Prints'
+  // header figures, it says "shown", not "every client we've ever had"
   const owed = rows.reduce((n, c) => n + Number(c.owed || 0), 0);
 
-  document.getElementById("printClientsSubtitle").textContent =
-    `${rows.length} client${rows.length === 1 ? "" : "s"} · ${printMoney(owed)} outstanding`;
+  document.getElementById("printClientsSubtitle").textContent = rows.length
+    ? `${rows.length}${printClientsHasMore ? "+" : ""} client${rows.length === 1 ? "" : "s"} · ${printMoney(owed)} outstanding`
+    : "";
 
   const body = document.getElementById("printClientsBody");
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-400 italic">Nobody matches that.</td></tr>`;
     return;
   }
-  body.innerHTML = rows
+  const rowsHTML = rows
     .map(
       (c) => `
       <tr class="hover:bg-gray-50">
@@ -5894,22 +6117,81 @@ function renderPrintClients() {
             <button class="print-client-btn font-medium hover:text-brand-blue text-left" data-client="${c.id}">${escapeHtml(c.name)} &rsaquo;</button>
           </span>
         </td>
+        <td class="px-3 py-2 ${c.primary_contact ? "" : "text-gray-300"}">${escapeHtml(c.primary_contact || "—")}</td>
         <td class="px-3 py-2 ${c.instagram ? "" : "text-gray-300"}">${escapeHtml(c.instagram || "—")}</td>
         <td class="px-3 py-2 ${c.facebook ? "" : "text-gray-300"}">${escapeHtml(c.facebook || "—")}</td>
         <td class="px-3 py-2 ${c.phone ? "" : "text-gray-300"}">${escapeHtml(c.phone || "—")}</td>
         <td class="px-3 py-2 text-right">${c.order_count}</td>
-        <td class="px-3 py-2 text-right">${Number(c.cups || 0).toLocaleString("en-PH")}</td>
         <td class="px-3 py-2 text-right ${Number(c.owed) > 0 ? "text-red-600" : "text-gray-300"}">${
           Number(c.owed) > 0 ? printMoney(c.owed) : "—"
         }</td>
       </tr>`
     )
     .join("");
+  body.innerHTML = rowsHTML;
 
   body.querySelectorAll(".print-client-btn").forEach((b) => {
     b.addEventListener("click", () => openPrintClient(b.dataset.client));
   });
+
+  ensurePrintClientsScrollListener();
 }
+
+// A client on its own, no order attached - needed because not every client
+// buys cups, so the "type an unknown name and it gets created" trick on the
+// New Order form (and Collections' "+ New PO", which can't do that trick at
+// all) doesn't reach clients who only ever appear in Collections.
+function openAddClientModal() {
+  document.getElementById("addClientName").value = "";
+  document.getElementById("addClientTradeName").value = "";
+  document.getElementById("addClientTaxId").value = "";
+  document.getElementById("addClientContact").value = "";
+  document.getElementById("addClientPhone").value = "";
+  document.getElementById("addClientEmail").value = "";
+  document.getElementById("addClientError").classList.add("hidden");
+  const modal = document.getElementById("addClientModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("addClientName").focus();
+}
+
+function closeAddClientModal() {
+  const modal = document.getElementById("addClientModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function saveAddClient() {
+  const errorEl = document.getElementById("addClientError");
+  errorEl.classList.add("hidden");
+  const name = document.getElementById("addClientName").value.trim();
+  if (!name) {
+    errorEl.textContent = "A client needs a name.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    await postJSON("/api/print/clients", {
+      name,
+      trade_name: document.getElementById("addClientTradeName").value,
+      tax_id: document.getElementById("addClientTaxId").value,
+      primary_contact: document.getElementById("addClientContact").value,
+      phone: document.getElementById("addClientPhone").value,
+      email: document.getElementById("addClientEmail").value,
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  closeAddClientModal();
+  loadPrintClientsPage();
+  loadPrintClients();
+}
+
+document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
+document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);
+document.getElementById("addClientSave").addEventListener("click", saveAddClient);
 
 // ---------------------------------------------------------------------------
 // Cup pricing page
@@ -6143,7 +6425,10 @@ function quoteText() {
 // ---------------------------------------------------------------------------
 
 if (tabPrintClientsBtn) {
-  document.getElementById("printClientSearch").addEventListener("input", renderPrintClients);
+  document.getElementById("printClientSearch").addEventListener("input", () => {
+    clearTimeout(printClientsSearchTimer);
+    printClientsSearchTimer = setTimeout(() => loadMorePrintClients({ reset: true }), 250);
+  });
 }
 if (tabPricingBtn) {
   document.getElementById("pricingSearch").addEventListener("input", () => {
@@ -6386,7 +6671,7 @@ function openCupPrintsMenu(btn) {
 
   menu.querySelector(".cm-delete").addEventListener("click", () => {
     closeCardMenu();
-    const order = printAllOrders.find((o) => String(o.id) === orderId);
+    const order = cupPrintsOrders.find((o) => String(o.id) === orderId);
     if (order) askDeleteOrder(order.id, order);
   });
   printCardMenu = menu;
