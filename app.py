@@ -656,6 +656,82 @@ def init_db():
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
+    # what was bought - the expense's headline; description became optional
+    cur.execute("ALTER TABLE office_expenses ADD COLUMN IF NOT EXISTS item TEXT")
+
+    # Operations app (owners only) - daily sales, monthly operating costs,
+    # supplier purchase orders. Money is NUMERIC; every table is additive.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS ops_sales_days (
+            id SERIAL PRIMARY KEY,
+            sale_date DATE NOT NULL UNIQUE,
+            sales NUMERIC(12,2) NOT NULL DEFAULT 0,
+            gross_profit NUMERIC(12,2) NOT NULL DEFAULT 0,
+            cash NUMERIC(12,2) NOT NULL DEFAULT 0,
+            gcash NUMERIC(12,2) NOT NULL DEFAULT 0,
+            bank NUMERIC(12,2) NOT NULL DEFAULT 0,
+            po NUMERIC(12,2) NOT NULL DEFAULT 0,
+            collected_date DATE,
+            note TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS ops_monthly_opex (
+            id SERIAL PRIMARY KEY,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+            rent NUMERIC(12,2),
+            salary NUMERIC(12,2),
+            electric NUMERIC(12,2),
+            water NUMERIC(12,2),
+            internet NUMERIC(12,2),
+            rent_tax_bookkeeper NUMERIC(12,2),
+            govt_contribution NUMERIC(12,2),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (year, month)
+        )"""
+    )
+    cur.execute("ALTER TABLE ops_monthly_opex ADD COLUMN IF NOT EXISTS misc NUMERIC(12,2)")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS ops_electric_readings (
+            id SERIAL PRIMARY KEY,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+            meter_before NUMERIC(12,2),
+            meter_after NUMERIC(12,2),
+            rate NUMERIC(12,2),
+            UNIQUE (year, month)
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS ops_suppliers (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            location TEXT,
+            product TEXT
+        )"""
+    )
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ops_suppliers_name_idx ON ops_suppliers (LOWER(name))")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS ops_purchase_orders (
+            id SERIAL PRIMARY KEY,
+            txn_no TEXT NOT NULL UNIQUE,
+            order_date DATE NOT NULL,
+            supplier_id INTEGER NOT NULL REFERENCES ops_suppliers(id),
+            amount NUMERIC(12,2) NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS ops_po_payments (
+            id SERIAL PRIMARY KEY,
+            po_id INTEGER NOT NULL REFERENCES ops_purchase_orders(id) ON DELETE CASCADE,
+            pay_date DATE NOT NULL,
+            amount NUMERIC(12,2) NOT NULL
+        )"""
+    )
 
     cur.execute(
         """CREATE TABLE IF NOT EXISTS office_inventory_items (
@@ -2024,6 +2100,23 @@ def superuser_required(view):
     return wrapped
 
 
+def is_owner():
+    """The superuser and co-owners (outside viewers) - the only people who
+    see the Operations app. Managers are deliberately not included."""
+    return bool(session.get("is_superuser")) or is_outside_viewer()
+
+
+def owner_required(view):
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not is_owner():
+            return jsonify({"status": "error", "message": "Not allowed"}), 403
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
     if "user_id" in session:
@@ -2215,6 +2308,7 @@ def index():
     # manager, and is granted per-person rather than blanket.
     has_cup_printing_app = True if (manager or outside_viewer) else access["can_access_cup_printing_app"]
     has_office_app = True if manager else access["can_access_admin_app"]
+    has_ops_app = is_owner()
 
     current_user = {
         "display_name": session.get("display_name"),
@@ -2224,9 +2318,10 @@ def index():
         "can_view_payroll": can_view_payroll(),
         "has_cup_printing_app": has_cup_printing_app,
         "has_office_app": has_office_app,
+        "has_ops_app": has_ops_app,
         # whether the app-switcher shows at all - no point offering it for
         # a single available app
-        "has_app_switcher": has_cup_printing_app or has_office_app,
+        "has_app_switcher": has_cup_printing_app or has_office_app or has_ops_app,
         "payroll_unlocked": payroll_unlocked(),
         # branch-wide figures (per-person day totals) - the people running
         # the place and the owners, not the team
@@ -4381,7 +4476,8 @@ def api_purchase_order_payment_delete(payment_id):
     return jsonify({"status": "ok"})
 
 
-OFFICE_EXPENSE_FIELDS = ("expense_date", "category", "description", "amount", "paid_by", "note")
+OFFICE_EXPENSE_REQUIRED = {"item": "Item", "category": "Category", "paid_by": "Paid by"}
+OFFICE_EXPENSE_FIELDS = ("expense_date", "item", "category", "description", "amount", "paid_by", "note")
 
 
 @app.route("/api/office/expenses")
@@ -4422,15 +4518,19 @@ def api_office_expense_create():
         date.fromisoformat(expense_date)
     except ValueError:
         return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+    for field, label in OFFICE_EXPENSE_REQUIRED.items():
+        if not (data.get(field) or "").strip():
+            return jsonify({"status": "error", "message": f"{label} is required."}), 400
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
         """INSERT INTO office_expenses
-             (expense_date, category, description, amount, paid_by, note, created_by)
-           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+             (expense_date, item, category, description, amount, paid_by, note, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (
             expense_date,
+            data["item"].strip(),
             (data.get("category") or "").strip() or None,
             (data.get("description") or "").strip() or None,
             amount,
@@ -4440,7 +4540,7 @@ def api_office_expense_create():
         ),
     )
     expense_id = cur.fetchone()["id"]
-    record_audit(cur, "Added an expense", data.get("description") or expense_date, {"amount": amount})
+    record_audit(cur, "Added an expense", data["item"].strip(), {"amount": amount})
     db.commit()
     return jsonify({"status": "ok", "id": expense_id})
 
@@ -4465,9 +4565,12 @@ def api_office_expense_update(expense_id):
             date.fromisoformat(updates["expense_date"])
         except (TypeError, ValueError):
             return jsonify({"status": "error", "message": "That date is not a real date."}), 400
-    for field in ("category", "description", "paid_by", "note"):
+    for field in ("item", "category", "description", "paid_by", "note"):
         if field in updates:
             updates[field] = (updates[field] or "").strip() or None
+    for field, label in OFFICE_EXPENSE_REQUIRED.items():
+        if field in updates and not updates[field]:
+            return jsonify({"status": "error", "message": f"{label} is required."}), 400
     if not updates:
         return jsonify({"status": "ok"})
 
@@ -4484,16 +4587,16 @@ def api_office_expense_update(expense_id):
 
 
 @app.route("/api/office/expenses/<int:expense_id>", methods=["DELETE"])
-@login_required
+@superuser_required
 def api_office_expense_delete(expense_id):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT description FROM office_expenses WHERE id=%s", (expense_id,))
+    cur.execute("SELECT item, description FROM office_expenses WHERE id=%s", (expense_id,))
     row = cur.fetchone()
     if row is None:
         return jsonify({"status": "error", "message": "No such expense"}), 404
     cur.execute("DELETE FROM office_expenses WHERE id=%s", (expense_id,))
-    record_audit(cur, "Deleted an expense", row["description"] or str(expense_id))
+    record_audit(cur, "Deleted an expense", row["item"] or row["description"] or str(expense_id))
     db.commit()
     return jsonify({"status": "ok"})
 
@@ -4514,6 +4617,21 @@ def api_office_inventory():
         i["updated_at"] = i["updated_at"].isoformat() if i["updated_at"] else None
         items.append(i)
     return jsonify({"items": items})
+
+
+@app.route("/api/office/discounts")
+@login_required
+def api_office_discounts():
+    """Every client's special prices in one list - the same rows the client
+    drawer edits (print_client_discounts), just not scoped to one client."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT d.id, d.client_id, c.name AS client_name, d.item, d.discount
+           FROM print_client_discounts d
+           JOIN print_clients c ON c.id = d.client_id
+           ORDER BY LOWER(c.name), d.id"""
+    )
+    return jsonify({"discounts": [dict(r) for r in cur.fetchall()]})
 
 
 @app.route("/api/office/inventory", methods=["POST"])
@@ -4780,6 +4898,792 @@ def api_office_note_attachment_delete(note_id):
     record_audit(cur, "Removed an attachment", row["title"])
     db.commit()
     return jsonify({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Operations app - the owners' books: daily sales, monthly operating costs,
+# supplier purchase orders and the roll-up reports built from them. Visible
+# to the superuser and co-owners only (is_owner); co-owners can read but
+# never write, so every GET is owner_required and every write is
+# superuser_required. Routes live under /api/ops/.
+# ---------------------------------------------------------------------------
+
+OPS_SALES_NUMBERS = ("sales", "gross_profit", "cash", "gcash", "bank", "po")
+OPS_OPEX_FIELDS = (
+    "rent", "salary", "electric", "water", "internet", "rent_tax_bookkeeper", "govt_contribution", "misc",
+)
+OPS_METER_FIELDS = ("meter_before", "meter_after", "rate")
+_OPS_OPEX_TOTAL_SQL = " + ".join(f"COALESCE({f}, 0)" for f in OPS_OPEX_FIELDS)
+
+
+def _ops_num(value, label, blank_ok=False):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if blank_ok:
+            return None
+        raise ValueError(f"{label} needs a number.")
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} needs a number.")
+
+
+def _ops_date(value, label, blank_ok=False):
+    value = (value or "").strip() if isinstance(value, str) or value is None else str(value)
+    if not value:
+        if blank_ok:
+            return None
+        raise ValueError(f"{label} needs a date.")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{label} is not a real date.")
+    return value
+
+
+def _ops_error(exc, status=400):
+    return jsonify({"status": "error", "message": str(exc)}), status
+
+
+def _ops_year_arg(default_years):
+    """?year= if it is a sane integer, else the latest year with data."""
+    try:
+        return int(request.args.get("year"))
+    except (TypeError, ValueError):
+        return default_years[0] if default_years else date.today().year
+
+
+def _ops_money_row(row, keys):
+    out = dict(row)
+    for k in keys:
+        if k in out and out[k] is not None:
+            out[k] = float(out[k])
+    return out
+
+
+@app.route("/api/ops/sales")
+@owner_required
+def api_ops_sales():
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT DISTINCT y FROM (
+               SELECT EXTRACT(YEAR FROM sale_date)::int AS y FROM ops_sales_days
+               UNION SELECT year AS y FROM ops_monthly_opex) t
+           ORDER BY y DESC"""
+    )
+    years = [r["y"] for r in cur.fetchall()]
+    year = _ops_year_arg(years)
+    if year not in years:
+        years = sorted(set(years + [year]), reverse=True)
+
+    cur.execute(
+        """SELECT id, sale_date, sales, gross_profit, cash, gcash, bank, po, collected_date, note
+           FROM ops_sales_days WHERE EXTRACT(YEAR FROM sale_date) = %s
+           ORDER BY sale_date""",
+        (year,),
+    )
+    days = []
+    for r in cur.fetchall():
+        d = _ops_money_row(r, OPS_SALES_NUMBERS)
+        d["sale_date"] = d["sale_date"].isoformat()
+        d["collected_date"] = d["collected_date"].isoformat() if d["collected_date"] else None
+        days.append(d)
+
+    cur.execute(
+        f"SELECT month, ({_OPS_OPEX_TOTAL_SQL}) AS total FROM ops_monthly_opex WHERE year = %s",
+        (year,),
+    )
+    opex = {r["month"]: float(r["total"] or 0) for r in cur.fetchall()}
+    return jsonify({"year": year, "years": years, "days": days, "opex": opex})
+
+
+@app.route("/api/ops/sales", methods=["POST"])
+@superuser_required
+def api_ops_sales_create():
+    data = request.get_json(force=True)
+    values = {}
+    try:
+        sale_date = _ops_date(data.get("sale_date"), "Date")
+        # the page lists every day of the month up front, so the first thing
+        # typed into an empty day creates it with that value already in
+        for f in OPS_SALES_NUMBERS:
+            if f in data:
+                values[f] = _ops_num(data[f], f.replace("_", " ").capitalize(), blank_ok=True) or 0
+        if "collected_date" in data:
+            values["collected_date"] = _ops_date(data["collected_date"], "Collected date", blank_ok=True)
+    except ValueError as exc:
+        return _ops_error(exc)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT 1 FROM ops_sales_days WHERE sale_date=%s", (sale_date,))
+    if cur.fetchone():
+        return _ops_error("That day already has an entry.")
+    columns = ", ".join(["sale_date", *values])
+    placeholders = ", ".join(["%s"] * (1 + len(values)))
+    cur.execute(
+        f"INSERT INTO ops_sales_days ({columns}) VALUES ({placeholders}) RETURNING id",
+        (sale_date, *values.values()),
+    )
+    new_id = cur.fetchone()["id"]
+    record_audit(cur, "Added a sales day", sale_date)
+    db.commit()
+    return jsonify({"status": "ok", "id": new_id})
+
+
+@app.route("/api/ops/sales/bulk", methods=["POST"])
+@superuser_required
+def api_ops_sales_bulk():
+    """Load many days at once (the spreadsheet import). A day that already
+    has an entry is left exactly as it is, never overwritten, so running
+    the same load twice is harmless."""
+    data = request.get_json(force=True)
+    days = data.get("days") or []
+    if not isinstance(days, list) or not days:
+        return _ops_error("Nothing to import.")
+    parsed = []
+    try:
+        for i, d in enumerate(days, 1):
+            row = {"sale_date": _ops_date(d.get("sale_date"), f"Row {i} date")}
+            for f in OPS_SALES_NUMBERS:
+                row[f] = _ops_num(d.get(f), f"Row {i} {f}", blank_ok=True) or 0
+            row["collected_date"] = _ops_date(d.get("collected_date"), f"Row {i} collected date", blank_ok=True)
+            row["note"] = (d.get("note") or "").strip() or None
+            parsed.append(row)
+    except ValueError as exc:
+        return _ops_error(exc)
+
+    db = get_db()
+    cur = db.cursor()
+    created = skipped = 0
+    for r in parsed:
+        cur.execute(
+            """INSERT INTO ops_sales_days
+                 (sale_date, sales, gross_profit, cash, gcash, bank, po, collected_date, note)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (sale_date) DO NOTHING""",
+            (r["sale_date"], r["sales"], r["gross_profit"], r["cash"], r["gcash"], r["bank"], r["po"],
+             r["collected_date"], r["note"]),
+        )
+        if cur.rowcount:
+            created += 1
+        else:
+            skipped += 1
+    record_audit(
+        cur, "Imported sales days", f"{parsed[0]['sale_date']} to {parsed[-1]['sale_date']}",
+        {"created": created, "skipped": skipped},
+    )
+    db.commit()
+    return jsonify({"status": "ok", "created": created, "skipped": skipped})
+
+
+@app.route("/api/ops/sales/<int:day_id>", methods=["POST"])
+@superuser_required
+def api_ops_sales_update(day_id):
+    data = request.get_json(force=True)
+    updates = {}
+    try:
+        for f in OPS_SALES_NUMBERS:
+            if f in data:
+                updates[f] = _ops_num(data[f], f.replace("_", " ").capitalize(), blank_ok=True) or 0
+        if "collected_date" in data:
+            updates["collected_date"] = _ops_date(data["collected_date"], "Collected date", blank_ok=True)
+        if "sale_date" in data:
+            updates["sale_date"] = _ops_date(data["sale_date"], "Date")
+        if "note" in data:
+            updates["note"] = (data["note"] or "").strip() or None
+    except ValueError as exc:
+        return _ops_error(exc)
+    if not updates:
+        return jsonify({"status": "ok"})
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT sale_date FROM ops_sales_days WHERE id=%s", (day_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such day.", 404)
+    if "sale_date" in updates:
+        cur.execute("SELECT 1 FROM ops_sales_days WHERE sale_date=%s AND id<>%s", (updates["sale_date"], day_id))
+        if cur.fetchone():
+            return _ops_error("That day already has an entry.")
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(
+        f"UPDATE ops_sales_days SET {sets}, updated_at=NOW() WHERE id=%s", (*updates.values(), day_id)
+    )
+    record_audit(cur, "Updated a sales day", row["sale_date"].isoformat(), updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/sales/<int:day_id>", methods=["DELETE"])
+@superuser_required
+def api_ops_sales_delete(day_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT sale_date FROM ops_sales_days WHERE id=%s", (day_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such day.", 404)
+    cur.execute("DELETE FROM ops_sales_days WHERE id=%s", (day_id,))
+    record_audit(cur, "Deleted a sales day", row["sale_date"].isoformat())
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/monthly-opex")
+@owner_required
+def api_ops_monthly_opex():
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT DISTINCT y FROM (
+               SELECT year AS y FROM ops_monthly_opex
+               UNION SELECT EXTRACT(YEAR FROM sale_date)::int FROM ops_sales_days) t
+           ORDER BY y DESC"""
+    )
+    years = [r["y"] for r in cur.fetchall()]
+    year = _ops_year_arg(years)
+    if year not in years:
+        years = sorted(set(years + [year]), reverse=True)
+
+    months = {m: {"month": m} for m in range(1, 13)}
+    cur.execute("SELECT * FROM ops_monthly_opex WHERE year=%s", (year,))
+    for r in cur.fetchall():
+        months[r["month"]].update(_ops_money_row(r, OPS_OPEX_FIELDS))
+    cur.execute("SELECT * FROM ops_electric_readings WHERE year=%s", (year,))
+    for r in cur.fetchall():
+        months[r["month"]].update(_ops_money_row(r, OPS_METER_FIELDS))
+    return jsonify({"year": year, "years": years, "months": list(months.values())})
+
+
+@app.route("/api/ops/monthly-opex", methods=["POST"])
+@superuser_required
+def api_ops_monthly_opex_set():
+    data = request.get_json(force=True)
+    field = data.get("field")
+    try:
+        year, month = int(data.get("year")), int(data.get("month"))
+        if field not in OPS_OPEX_FIELDS or not 1 <= month <= 12:
+            raise ValueError("Unknown cell.")
+        value = _ops_num(data.get("value"), field.replace("_", " ").capitalize(), blank_ok=True)
+    except (TypeError, ValueError) as exc:
+        return _ops_error(exc)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        f"""INSERT INTO ops_monthly_opex (year, month, {field}) VALUES (%s,%s,%s)
+            ON CONFLICT (year, month) DO UPDATE SET {field}=EXCLUDED.{field}, updated_at=NOW()""",
+        (year, month, value),
+    )
+    record_audit(cur, "Updated monthly OpEx", f"{year}-{month:02d}", {field: value})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/monthly-opex/bulk", methods=["POST"])
+@superuser_required
+def api_ops_monthly_opex_bulk():
+    """Load many months of costs and meter readings at once (the spreadsheet
+    import). It only fills cells that are still blank - anything already
+    entered is kept - and, unlike the single-cell electric route, takes the
+    Electric figure exactly as given instead of recomputing it."""
+    data = request.get_json(force=True)
+    rows = data.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        return _ops_error("Nothing to import.")
+    parsed = []
+    try:
+        for i, r in enumerate(rows, 1):
+            year, month = int(r.get("year")), int(r.get("month"))
+            if not 1 <= month <= 12:
+                raise ValueError(f"Row {i} has a bad month.")
+            cost = {f: _ops_num(r.get(f), f"Row {i} {f}", blank_ok=True) for f in OPS_OPEX_FIELDS}
+            meter = {f: _ops_num(r.get(f), f"Row {i} {f}", blank_ok=True) for f in OPS_METER_FIELDS}
+            parsed.append((year, month, cost, meter))
+    except (TypeError, ValueError) as exc:
+        return _ops_error(exc)
+
+    db = get_db()
+    cur = db.cursor()
+    cols = ", ".join(OPS_OPEX_FIELDS)
+    marks = ", ".join(["%s"] * len(OPS_OPEX_FIELDS))
+    keep = ", ".join(f"{f}=COALESCE(ops_monthly_opex.{f}, EXCLUDED.{f})" for f in OPS_OPEX_FIELDS)
+    mcols = ", ".join(OPS_METER_FIELDS)
+    mmarks = ", ".join(["%s"] * len(OPS_METER_FIELDS))
+    mkeep = ", ".join(f"{f}=COALESCE(ops_electric_readings.{f}, EXCLUDED.{f})" for f in OPS_METER_FIELDS)
+    for year, month, cost, meter in parsed:
+        if any(v is not None for v in cost.values()):
+            cur.execute(
+                f"""INSERT INTO ops_monthly_opex (year, month, {cols}) VALUES (%s,%s,{marks})
+                    ON CONFLICT (year, month) DO UPDATE SET {keep}, updated_at=NOW()""",
+                (year, month, *[cost[f] for f in OPS_OPEX_FIELDS]),
+            )
+        if any(v is not None for v in meter.values()):
+            cur.execute(
+                f"""INSERT INTO ops_electric_readings (year, month, {mcols}) VALUES (%s,%s,{mmarks})
+                    ON CONFLICT (year, month) DO UPDATE SET {mkeep}""",
+                (year, month, *[meter[f] for f in OPS_METER_FIELDS]),
+            )
+    record_audit(
+        cur, "Imported monthly OpEx",
+        f"{parsed[0][0]}-{parsed[0][1]:02d} to {parsed[-1][0]}-{parsed[-1][1]:02d}",
+        {"months": len(parsed)},
+    )
+    db.commit()
+    return jsonify({"status": "ok", "months": len(parsed)})
+
+
+@app.route("/api/ops/electric", methods=["POST"])
+@superuser_required
+def api_ops_electric_set():
+    """Sub-meter readings. Once before, after and rate are all in, the
+    month's Electric figure is set to (after - before) x rate - the same
+    sum the sheet does - and can still be overtyped afterwards."""
+    data = request.get_json(force=True)
+    field = data.get("field")
+    try:
+        year, month = int(data.get("year")), int(data.get("month"))
+        if field not in OPS_METER_FIELDS or not 1 <= month <= 12:
+            raise ValueError("Unknown cell.")
+        value = _ops_num(data.get("value"), field.replace("_", " ").capitalize(), blank_ok=True)
+    except (TypeError, ValueError) as exc:
+        return _ops_error(exc)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        f"""INSERT INTO ops_electric_readings (year, month, {field}) VALUES (%s,%s,%s)
+            ON CONFLICT (year, month) DO UPDATE SET {field}=EXCLUDED.{field}""",
+        (year, month, value),
+    )
+    cur.execute("SELECT * FROM ops_electric_readings WHERE year=%s AND month=%s", (year, month))
+    r = cur.fetchone()
+    electric = None
+    if r["meter_before"] is not None and r["meter_after"] is not None and r["rate"] is not None:
+        electric = round((float(r["meter_after"]) - float(r["meter_before"])) * float(r["rate"]), 2)
+        cur.execute(
+            """INSERT INTO ops_monthly_opex (year, month, electric) VALUES (%s,%s,%s)
+               ON CONFLICT (year, month) DO UPDATE SET electric=EXCLUDED.electric, updated_at=NOW()""",
+            (year, month, electric),
+        )
+    record_audit(cur, "Updated electric reading", f"{year}-{month:02d}", {field: value})
+    db.commit()
+    return jsonify({"status": "ok", "electric": electric})
+
+
+@app.route("/api/ops/suppliers")
+@owner_required
+def api_ops_suppliers():
+    cur = get_db().cursor()
+    cur.execute("SELECT id, name, location, product FROM ops_suppliers ORDER BY LOWER(name)")
+    return jsonify({"suppliers": [dict(r) for r in cur.fetchall()]})
+
+
+@app.route("/api/ops/suppliers", methods=["POST"])
+@superuser_required
+def api_ops_supplier_create():
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return _ops_error("A supplier needs a name.")
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT 1 FROM ops_suppliers WHERE LOWER(name)=LOWER(%s)", (name,))
+    if cur.fetchone():
+        return _ops_error(f"There is already a supplier called {name}.")
+    cur.execute(
+        "INSERT INTO ops_suppliers (name, location, product) VALUES (%s,%s,%s) RETURNING id",
+        (name, (data.get("location") or "").strip() or None, (data.get("product") or "").strip() or None),
+    )
+    new_id = cur.fetchone()["id"]
+    record_audit(cur, "Added a supplier", name)
+    db.commit()
+    return jsonify({"status": "ok", "id": new_id})
+
+
+@app.route("/api/ops/suppliers/<int:supplier_id>", methods=["POST"])
+@superuser_required
+def api_ops_supplier_update(supplier_id):
+    data = request.get_json(force=True)
+    updates = {f: (data[f] or "").strip() or None for f in ("name", "location", "product") if f in data}
+    if "name" in updates and not updates["name"]:
+        return _ops_error("A supplier needs a name.")
+    if not updates:
+        return jsonify({"status": "ok"})
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM ops_suppliers WHERE id=%s", (supplier_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such supplier.", 404)
+    if "name" in updates:
+        cur.execute(
+            "SELECT 1 FROM ops_suppliers WHERE LOWER(name)=LOWER(%s) AND id<>%s", (updates["name"], supplier_id)
+        )
+        if cur.fetchone():
+            return _ops_error(f"There is already a supplier called {updates['name']}.")
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE ops_suppliers SET {sets} WHERE id=%s", (*updates.values(), supplier_id))
+    record_audit(cur, "Updated a supplier", row["name"], updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/suppliers/<int:supplier_id>", methods=["DELETE"])
+@superuser_required
+def api_ops_supplier_delete(supplier_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM ops_suppliers WHERE id=%s", (supplier_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such supplier.", 404)
+    cur.execute("SELECT COUNT(*) AS n FROM ops_purchase_orders WHERE supplier_id=%s", (supplier_id,))
+    if cur.fetchone()["n"]:
+        return _ops_error("That supplier has purchase orders, so it can't be deleted.", 409)
+    cur.execute("DELETE FROM ops_suppliers WHERE id=%s", (supplier_id,))
+    record_audit(cur, "Deleted a supplier", row["name"])
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+def _ops_supplier_id(cur, name):
+    """Id for a supplier typed by name; an unknown name creates it, same as
+    a client typed into a PO does."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Pick a supplier.")
+    cur.execute("SELECT id FROM ops_suppliers WHERE LOWER(name)=LOWER(%s)", (name,))
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    cur.execute("INSERT INTO ops_suppliers (name) VALUES (%s) RETURNING id", (name,))
+    return cur.fetchone()["id"]
+
+
+@app.route("/api/ops/purchase-orders")
+@owner_required
+def api_ops_purchase_orders():
+    cur = get_db().cursor()
+    cur.execute(
+        "SELECT DISTINCT EXTRACT(YEAR FROM order_date)::int AS y FROM ops_purchase_orders ORDER BY y DESC"
+    )
+    years = [r["y"] for r in cur.fetchall()]
+    year = _ops_year_arg(years)
+    if year not in years:
+        years = sorted(set(years + [year]), reverse=True)
+
+    cur.execute(
+        """SELECT po.id, po.txn_no, po.order_date, po.supplier_id, s.name AS supplier,
+                  po.amount, po.updated_at
+           FROM ops_purchase_orders po JOIN ops_suppliers s ON s.id = po.supplier_id
+           WHERE EXTRACT(YEAR FROM po.order_date) = %s
+           ORDER BY po.order_date, po.txn_no""",
+        (year,),
+    )
+    pos = []
+    for r in cur.fetchall():
+        p = _ops_money_row(r, ("amount",))
+        p["order_date"] = p["order_date"].isoformat()
+        p["updated_at"] = p["updated_at"].isoformat() if p["updated_at"] else None
+        p["payments"] = []
+        pos.append(p)
+    by_id = {p["id"]: p for p in pos}
+    if by_id:
+        cur.execute(
+            "SELECT id, po_id, pay_date, amount FROM ops_po_payments WHERE po_id = ANY(%s) ORDER BY pay_date, id",
+            (list(by_id),),
+        )
+        for r in cur.fetchall():
+            by_id[r["po_id"]]["payments"].append(
+                {"id": r["id"], "pay_date": r["pay_date"].isoformat(), "amount": float(r["amount"])}
+            )
+    monthly = {}
+    for p in pos:
+        p["paid"] = round(sum(x["amount"] for x in p["payments"]), 2)
+        p["balance"] = round(p["amount"] - p["paid"], 2)
+        p["status"] = "Paid" if p["balance"] <= 0 else ("Partial" if p["paid"] > 0 else "Open")
+        m = int(p["order_date"][5:7])
+        monthly[m] = round(monthly.get(m, 0) + p["amount"], 2)
+    return jsonify(
+        {
+            "year": year,
+            "years": years,
+            "pos": pos,
+            "monthly": monthly,
+            "total_purchase": round(sum(p["amount"] for p in pos), 2),
+            "total_payments": round(sum(p["paid"] for p in pos), 2),
+        }
+    )
+
+
+@app.route("/api/ops/purchase-orders", methods=["POST"])
+@superuser_required
+def api_ops_po_create():
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    try:
+        order_date = _ops_date(data.get("order_date"), "Order date")
+        amount = _ops_num(data.get("amount"), "Amount")
+        if amount <= 0:
+            raise ValueError("Amount must be more than zero.")
+        supplier_id = _ops_supplier_id(cur, data.get("supplier"))
+    except ValueError as exc:
+        return _ops_error(exc)
+    txn_no = (data.get("txn_no") or "").strip()
+    if not txn_no:
+        prefix = f"{order_date[:4]}-"
+        cur.execute(
+            "SELECT txn_no FROM ops_purchase_orders WHERE txn_no LIKE %s ORDER BY txn_no DESC LIMIT 1",
+            (prefix + "%",),
+        )
+        last = cur.fetchone()
+        try:
+            n = int(last["txn_no"].split("-")[-1]) + 1 if last else 1
+        except ValueError:
+            n = 1
+        txn_no = f"{prefix}{n:04d}"
+    cur.execute("SELECT 1 FROM ops_purchase_orders WHERE txn_no=%s", (txn_no,))
+    if cur.fetchone():
+        return _ops_error(f"Transaction {txn_no} already exists.")
+    cur.execute(
+        """INSERT INTO ops_purchase_orders (txn_no, order_date, supplier_id, amount)
+           VALUES (%s,%s,%s,%s) RETURNING id""",
+        (txn_no, order_date, supplier_id, amount),
+    )
+    new_id = cur.fetchone()["id"]
+    record_audit(cur, "Added a purchase order", txn_no, {"amount": amount})
+    db.commit()
+    return jsonify({"status": "ok", "id": new_id, "txn_no": txn_no})
+
+
+@app.route("/api/ops/purchase-orders/<int:po_id>", methods=["POST"])
+@superuser_required
+def api_ops_po_update(po_id):
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT txn_no FROM ops_purchase_orders WHERE id=%s", (po_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such purchase order.", 404)
+    updates = {}
+    try:
+        if "order_date" in data:
+            updates["order_date"] = _ops_date(data["order_date"], "Order date")
+        if "amount" in data:
+            updates["amount"] = _ops_num(data["amount"], "Amount")
+            if updates["amount"] <= 0:
+                raise ValueError("Amount must be more than zero.")
+        if "supplier" in data:
+            updates["supplier_id"] = _ops_supplier_id(cur, data["supplier"])
+        if "txn_no" in data:
+            txn_no = (data["txn_no"] or "").strip()
+            if not txn_no:
+                raise ValueError("A purchase order needs a transaction number.")
+            cur.execute("SELECT 1 FROM ops_purchase_orders WHERE txn_no=%s AND id<>%s", (txn_no, po_id))
+            if cur.fetchone():
+                raise ValueError(f"Transaction {txn_no} already exists.")
+            updates["txn_no"] = txn_no
+    except ValueError as exc:
+        return _ops_error(exc)
+    if not updates:
+        return jsonify({"status": "ok"})
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE ops_purchase_orders SET {sets}, updated_at=NOW() WHERE id=%s", (*updates.values(), po_id))
+    record_audit(cur, "Updated a purchase order", row["txn_no"], updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/purchase-orders/<int:po_id>", methods=["DELETE"])
+@superuser_required
+def api_ops_po_delete(po_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT txn_no FROM ops_purchase_orders WHERE id=%s", (po_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such purchase order.", 404)
+    cur.execute("DELETE FROM ops_purchase_orders WHERE id=%s", (po_id,))
+    record_audit(cur, "Deleted a purchase order", row["txn_no"])
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/purchase-orders/<int:po_id>/payments", methods=["POST"])
+@superuser_required
+def api_ops_po_payment_create(po_id):
+    data = request.get_json(force=True)
+    try:
+        pay_date = _ops_date(data.get("pay_date"), "Payment date")
+        amount = _ops_num(data.get("amount"), "Amount")
+        if amount <= 0:
+            raise ValueError("Amount must be more than zero.")
+    except ValueError as exc:
+        return _ops_error(exc)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT txn_no FROM ops_purchase_orders WHERE id=%s", (po_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such purchase order.", 404)
+    cur.execute(
+        "INSERT INTO ops_po_payments (po_id, pay_date, amount) VALUES (%s,%s,%s) RETURNING id",
+        (po_id, pay_date, amount),
+    )
+    new_id = cur.fetchone()["id"]
+    cur.execute("UPDATE ops_purchase_orders SET updated_at=NOW() WHERE id=%s", (po_id,))
+    record_audit(cur, "Logged a PO payment", row["txn_no"], {"amount": amount})
+    db.commit()
+    return jsonify({"status": "ok", "id": new_id})
+
+
+@app.route("/api/ops/po-payments/<int:payment_id>", methods=["POST"])
+@superuser_required
+def api_ops_po_payment_update(payment_id):
+    data = request.get_json(force=True)
+    updates = {}
+    try:
+        if "pay_date" in data:
+            updates["pay_date"] = _ops_date(data["pay_date"], "Payment date")
+        if "amount" in data:
+            updates["amount"] = _ops_num(data["amount"], "Amount")
+            if updates["amount"] <= 0:
+                raise ValueError("Amount must be more than zero.")
+    except ValueError as exc:
+        return _ops_error(exc)
+    if not updates:
+        return jsonify({"status": "ok"})
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT po.id AS po_id, po.txn_no FROM ops_po_payments p
+           JOIN ops_purchase_orders po ON po.id = p.po_id WHERE p.id=%s""",
+        (payment_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such payment.", 404)
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE ops_po_payments SET {sets} WHERE id=%s", (*updates.values(), payment_id))
+    cur.execute("UPDATE ops_purchase_orders SET updated_at=NOW() WHERE id=%s", (row["po_id"],))
+    record_audit(cur, "Updated a PO payment", row["txn_no"], updates)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/po-payments/<int:payment_id>", methods=["DELETE"])
+@superuser_required
+def api_ops_po_payment_delete(payment_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT po.id AS po_id, po.txn_no FROM ops_po_payments p
+           JOIN ops_purchase_orders po ON po.id = p.po_id WHERE p.id=%s""",
+        (payment_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such payment.", 404)
+    cur.execute("DELETE FROM ops_po_payments WHERE id=%s", (payment_id,))
+    cur.execute("UPDATE ops_purchase_orders SET updated_at=NOW() WHERE id=%s", (row["po_id"],))
+    record_audit(cur, "Deleted a PO payment", row["txn_no"])
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/ops/operating-expenses")
+@owner_required
+def api_ops_operating_expenses():
+    """The Admin Expenses list (office_expenses), read-only here - it is one
+    table shared by both apps, edited from Admin."""
+    cur = get_db().cursor()
+    cur.execute(
+        "SELECT DISTINCT EXTRACT(YEAR FROM expense_date)::int AS y FROM office_expenses ORDER BY y DESC"
+    )
+    years = [r["y"] for r in cur.fetchall()]
+    year = _ops_year_arg(years)
+    if year not in years:
+        years = sorted(set(years + [year]), reverse=True)
+    cur.execute(
+        """SELECT id, expense_date, item, category, description, amount, paid_by, note
+           FROM office_expenses WHERE EXTRACT(YEAR FROM expense_date) = %s
+           ORDER BY expense_date, id""",
+        (year,),
+    )
+    expenses = []
+    for r in cur.fetchall():
+        e = _ops_money_row(r, ("amount",))
+        e["expense_date"] = e["expense_date"].isoformat()
+        expenses.append(e)
+    return jsonify(
+        {
+            "year": year,
+            "years": years,
+            "expenses": expenses,
+            "total": round(sum(e["amount"] for e in expenses), 2),
+        }
+    )
+
+
+@app.route("/api/ops/master")
+@owner_required
+def api_ops_master():
+    """The roll-up reports, all computed: revenue by month, quarterly and
+    the annual income statement. COGS is Sales - Gross Profit."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT EXTRACT(YEAR FROM sale_date)::int AS year, EXTRACT(MONTH FROM sale_date)::int AS month,
+                  SUM(sales) AS sales, SUM(gross_profit) AS gross_profit
+           FROM ops_sales_days GROUP BY 1, 2"""
+    )
+    cells = {(r["year"], r["month"]): {"sales": float(r["sales"] or 0), "gross_profit": float(r["gross_profit"] or 0)} for r in cur.fetchall()}
+    cur.execute(f"SELECT year, month, ({_OPS_OPEX_TOTAL_SQL}) AS total FROM ops_monthly_opex")
+    # a month whose cells were all cleared back to blank isn't a month with costs
+    opex = {(r["year"], r["month"]): float(r["total"]) for r in cur.fetchall() if r["total"]}
+    cur.execute(
+        "SELECT EXTRACT(YEAR FROM expense_date)::int AS year, SUM(amount) AS total FROM office_expenses GROUP BY 1"
+    )
+    asset_opex = {r["year"]: float(r["total"] or 0) for r in cur.fetchall()}
+
+    def figures(sales, gp, ox):
+        return {
+            "sales": round(sales, 2),
+            "gross_profit": round(gp, 2),
+            "opex": round(ox, 2),
+            "op_profit": round(gp - ox, 2),
+        }
+
+    keys = sorted(set(cells) | set(opex))
+    months = []
+    quarters = {}
+    years = {}
+    for (y, m) in keys:
+        c = cells.get((y, m), {"sales": 0.0, "gross_profit": 0.0})
+        ox = opex.get((y, m), 0.0)
+        months.append({"year": y, "month": m, **figures(c["sales"], c["gross_profit"], ox)})
+        for bucket, key in ((quarters, (y, (m - 1) // 3 + 1)), (years, y)):
+            b = bucket.setdefault(key, [0.0, 0.0, 0.0])
+            b[0] += c["sales"]
+            b[1] += c["gross_profit"]
+            b[2] += ox
+    quarterly = [
+        {"year": y, "quarter": q, **figures(*v)} for (y, q), v in sorted(quarters.items())
+    ]
+    annual = []
+    for y, (s, gp, ox) in sorted(years.items()):
+        cogs = s - gp
+        ass = asset_opex.get(y, 0.0)
+        annual.append(
+            {
+                "year": y,
+                "sales": round(s, 2),
+                "gross_profit": round(gp, 2),
+                "cogs": round(cogs, 2),
+                "opex": round(ox, 2),
+                "opex_asset": round(ass, 2),
+                "net_profit": round(s - cogs - ox - ass, 2),
+            }
+        )
+    return jsonify({"months": months, "quarterly": quarterly, "annual": annual})
 
 
 @app.route("/api/generate", methods=["POST"])

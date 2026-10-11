@@ -468,8 +468,19 @@ const tabExpensesBtn = document.getElementById("tabExpensesBtn");
 const expensesView = document.getElementById("expensesView");
 const tabInventoryBtn = document.getElementById("tabInventoryBtn");
 const inventoryView = document.getElementById("inventoryView");
+const tabDiscountsBtn = document.getElementById("tabDiscountsBtn");
+const discountsView = document.getElementById("discountsView");
 const tabNotesBtn = document.getElementById("tabNotesBtn");
 const notesView = document.getElementById("notesView");
+const OPS_TAB_DEFS = [
+  ["masterSales", "tabMasterSalesBtn", "masterSalesView"],
+  ["monthlyOpex", "tabMonthlyOpexBtn", "monthlyOpexView"],
+  ["suppliers", "tabSuppliersBtn", "suppliersView"],
+  ["purchaseOrders", "tabPurchaseOrdersBtn", "purchaseOrdersView"],
+  ["operatingExpense", "tabOperatingExpenseBtn", "operatingExpenseView"],
+  ["capitalExpense", "tabCapitalExpenseBtn", "capitalExpenseView"],
+  ["monthlySales", "tabMonthlySalesBtn", "monthlySalesView"],
+];
 const scheduleControls = document.getElementById("scheduleControls");
 const payrollControls = document.getElementById("payrollControls");
 const scheduleView = document.getElementById("scheduleView");
@@ -498,7 +509,13 @@ if (tabMyInfoBtn) TABS.myinfo = { btn: tabMyInfoBtn, view: myInfoView, controls:
 if (tabCollectionsBtn) TABS.collections = { btn: tabCollectionsBtn, view: collectionsView, controls: null };
 if (tabExpensesBtn) TABS.expenses = { btn: tabExpensesBtn, view: expensesView, controls: null };
 if (tabInventoryBtn) TABS.inventory = { btn: tabInventoryBtn, view: inventoryView, controls: null };
+if (tabDiscountsBtn) TABS.discounts = { btn: tabDiscountsBtn, view: discountsView, controls: null };
 if (tabNotesBtn) TABS.notes = { btn: tabNotesBtn, view: notesView, controls: null };
+// Operations only exists for the superuser and co-owners.
+OPS_TAB_DEFS.forEach(([name, btnId, viewId]) => {
+  const btn = document.getElementById(btnId);
+  if (btn) TABS[name] = { btn, view: document.getElementById(viewId), controls: null };
+});
 const loadedOnce = { payroll: false, employees: false, leave: false, activity: false };
 
 function showTab(tab) {
@@ -551,9 +568,18 @@ function showTab(tab) {
   if (tab === "inventory") {
     loadInventory();
   }
+  if (tab === "discounts") {
+    loadDiscounts();
+  }
   if (tab === "notes") {
     loadNotes();
   }
+  if (tab === "masterSales") loadMasterSales();
+  if (tab === "monthlySales") loadMonthlySales();
+  if (tab === "monthlyOpex") loadMonthlyOpex();
+  if (tab === "suppliers") loadSuppliers();
+  if (tab === "purchaseOrders") loadPurchaseOrders();
+  if (tab === "operatingExpense") loadOperatingExpense();
   if (tab === "mypay") {
     loadMyPay();
   }
@@ -587,7 +613,12 @@ if (tabMyInfoBtn) tabMyInfoBtn.addEventListener("click", () => showTab("myinfo")
 if (tabCollectionsBtn) tabCollectionsBtn.addEventListener("click", () => showTab("collections"));
 if (tabExpensesBtn) tabExpensesBtn.addEventListener("click", () => showTab("expenses"));
 if (tabInventoryBtn) tabInventoryBtn.addEventListener("click", () => showTab("inventory"));
+if (tabDiscountsBtn) tabDiscountsBtn.addEventListener("click", () => showTab("discounts"));
 if (tabNotesBtn) tabNotesBtn.addEventListener("click", () => showTab("notes"));
+OPS_TAB_DEFS.forEach(([name, btnId]) => {
+  const btn = document.getElementById(btnId);
+  if (btn) btn.addEventListener("click", () => showTab(name));
+});
 
 // Staff land on the dashboard - "when am I next in" is why they opened the
 // app. Managers land on the schedule, which is what they came to work on.
@@ -3700,6 +3731,44 @@ async function fetchAllPrintOrders() {
   return data;
 }
 
+// An in-page stand-in for window.confirm: native dialogs can be suppressed
+// by the browser (the Claude app's pane returns false without showing
+// anything), which made every delete button look dead.
+function confirmDialog(message, { title = "Are you sure?", confirmLabel = "Delete" } = {}) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById("confirmModal");
+    document.getElementById("confirmTitle").textContent = title;
+    document.getElementById("confirmMessage").textContent = message;
+    const okBtn = document.getElementById("confirmOk");
+    const cancelBtn = document.getElementById("confirmCancel");
+    okBtn.textContent = confirmLabel;
+    const finish = (answer) => {
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      modal.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKey);
+      resolve(answer);
+    };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onBackdrop = (e) => {
+      if (e.target === modal) finish(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") finish(false);
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    modal.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKey);
+    modal.classList.remove("hidden");
+    modal.classList.add("flex");
+    cancelBtn.focus();
+  });
+}
+
 async function postJSON(url, body) {
   const res = await fetch(url, {
     method: "POST",
@@ -4450,7 +4519,7 @@ async function openPrintClient(clientId) {
   });
   drawerBody.querySelectorAll(".print-discount-remove").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Remove this discount?")) return;
+      if (!(await confirmDialog("This special price will be removed from the client.", { title: "Remove this discount?", confirmLabel: "Remove" }))) return;
       const res = await fetch(`/api/print/clients/${c.id}/discounts/${btn.dataset.discount}`, { method: "DELETE" });
       if (!res.ok) {
         alert("Could not remove that discount.");
@@ -5032,7 +5101,7 @@ function renderCollections() {
   body.querySelectorAll(".po-list-delete").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm("Delete this purchase order? Any payments logged against it go with it.")) return;
+      if (!(await confirmDialog("Any payments logged against it are deleted too. This can't be undone.", { title: "Delete this purchase order?" }))) return;
       const res = await fetch(`/api/office/purchase-orders/${btn.dataset.po}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -5184,7 +5253,7 @@ function renderCollectionsDrawerBody(data) {
   });
   bodyEl.querySelectorAll(".po-delete").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Delete this purchase order? Any payments logged against it go with it.")) return;
+      if (!(await confirmDialog("Any payments logged against it are deleted too. This can't be undone.", { title: "Delete this purchase order?" }))) return;
       const res = await fetch(`/api/office/purchase-orders/${btn.dataset.po}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -5492,7 +5561,7 @@ async function loadExpenses() {
   const res = await fetch("/api/office/expenses");
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load expenses.")}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load expenses.")}</td></tr>`;
     return;
   }
   const data = await res.json();
@@ -5508,7 +5577,7 @@ function renderExpenses() {
     : "Money going out.";
 
   if (!officeExpenses.length) {
-    body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-400 py-6 text-center">No expenses logged yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="text-sm text-gray-400 py-6 text-center">No expenses logged yet.</td></tr>`;
     return;
   }
 
@@ -5516,7 +5585,7 @@ function renderExpenses() {
   body.querySelectorAll(".office-edit").forEach(wireOfficeEditCell);
   body.querySelectorAll(".office-delete-expense").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Delete this expense?")) return;
+      if (!(await confirmDialog("This expense will be removed for good. This can't be undone.", { title: "Delete this expense?" }))) return;
       const res = await fetch(`/api/office/expenses/${btn.dataset.id}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -5537,25 +5606,69 @@ function expenseRowHTML(e) {
   return `
     <tr data-id="${e.id}">
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "expense_date", e.expense_date, "date")}</td>
+      <td class="px-3 py-2 font-medium text-gray-900">${officeEditSpan("expense", e.id, "item", e.item)}</td>
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "category", e.category)}</td>
-      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "description", e.description)}</td>
+      <td class="px-3 py-2 text-gray-500">${officeEditSpan("expense", e.id, "description", e.description)}</td>
       <td class="px-3 py-2 text-right">${officeEditSpan("expense", e.id, "amount", e.amount.toFixed(2), "number")}</td>
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "paid_by", e.paid_by)}</td>
       <td class="px-3 py-2 text-gray-500">${officeEditSpan("expense", e.id, "note", e.note)}</td>
-      <td class="px-3 py-2 text-right"><button type="button" class="office-delete-expense text-gray-300 hover:text-red-600" data-id="${e.id}" aria-label="Delete">&#10005;</button></td>
+      <td class="px-3 py-2 text-right">${
+        IS_SUPERUSER
+          ? `<button type="button" class="office-delete-expense text-gray-300 hover:text-red-600" data-id="${e.id}" aria-label="Delete">&#10005;</button>`
+          : ""
+      }</td>
     </tr>`;
 }
 
-document.getElementById("expenseAddBtn").addEventListener("click", async () => {
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    await postJSON("/api/office/expenses", { expense_date: today, description: "New expense", amount: 1 });
-  } catch (err) {
-    alert(err.message);
+const EXPENSE_FORM_FIELDS = ["Item", "Date", "Amount", "Category", "PaidBy", "Description", "Note"];
+
+function openExpenseModal() {
+  EXPENSE_FORM_FIELDS.forEach((f) => (document.getElementById(`expense${f}`).value = ""));
+  document.getElementById("expenseDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("expenseError").classList.add("hidden");
+  const modal = document.getElementById("expenseModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("expenseItem").focus();
+}
+
+function closeExpenseModal() {
+  const modal = document.getElementById("expenseModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function saveExpense() {
+  const errorEl = document.getElementById("expenseError");
+  errorEl.classList.add("hidden");
+  const value = (f) => document.getElementById(`expense${f}`).value;
+  if (!value("Item").trim() || !value("Category").trim() || !value("PaidBy").trim() || !(Number(value("Amount")) > 0)) {
+    errorEl.textContent = "Item, amount, category and paid by are all needed.";
+    errorEl.classList.remove("hidden");
     return;
   }
+  try {
+    await postJSON("/api/office/expenses", {
+      expense_date: value("Date"),
+      amount: value("Amount"),
+      item: value("Item"),
+      description: value("Description"),
+      category: value("Category"),
+      paid_by: value("PaidBy"),
+      note: value("Note"),
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  closeExpenseModal();
   loadExpenses();
-});
+}
+
+document.getElementById("expenseAddBtn").addEventListener("click", openExpenseModal);
+document.getElementById("expenseCancel").addEventListener("click", closeExpenseModal);
+document.getElementById("expenseSave").addEventListener("click", saveExpense);
 
 // Inventory - stock on hand. Quantity is adjusted rather than freely
 // retyped, so a change stays traceable in office_inventory_adjustments.
@@ -5588,7 +5701,7 @@ function renderInventory() {
   });
   body.querySelectorAll(".office-delete-inventory").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Delete this item?")) return;
+      if (!(await confirmDialog("This item will be removed from the stock list. This can't be undone.", { title: "Delete this item?" }))) return;
       const res = await fetch(`/api/office/inventory/${btn.dataset.id}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -5647,6 +5760,151 @@ document.getElementById("inventoryAddBtn").addEventListener("click", async () =>
   loadInventory();
 });
 
+// Discounts - every client's special prices in one list. The rows are the
+// same ones the client drawer's "Special discounts" section edits, so the
+// two views never disagree. Price/discount is free text: a flat price
+// ("3.80") and a percentage ("10% off") both live here.
+let officeDiscounts = [];
+
+async function loadDiscounts() {
+  const body = document.getElementById("discountsBody");
+  const res = await fetch("/api/office/discounts");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    body.innerHTML = `<tr><td colspan="4" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load discounts.")}</td></tr>`;
+    return;
+  }
+  officeDiscounts = (await res.json()).discounts;
+  renderDiscounts();
+}
+
+function renderDiscounts() {
+  const body = document.getElementById("discountsBody");
+  const q = document.getElementById("discountsSearch").value.trim().toLowerCase();
+  const rows = q
+    ? officeDiscounts.filter((d) => (d.client_name + " " + d.item).toLowerCase().includes(q))
+    : officeDiscounts;
+  const clients = new Set(rows.map((d) => d.client_id)).size;
+  document.getElementById("discountsSubtitle").textContent = rows.length
+    ? `${rows.length} item${rows.length === 1 ? "" : "s"} across ${clients} client${clients === 1 ? "" : "s"}`
+    : "Special prices by client.";
+
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="4" class="text-sm text-gray-400 py-6 text-center">${
+      officeDiscounts.length ? "Nothing matches that search." : "No special prices yet - add one with \u201c+ Add\u201d."
+    }</td></tr>`;
+    return;
+  }
+
+  const cell = "w-full border border-transparent hover:border-gray-200 focus:border-brand-blue rounded px-1 py-0.5 text-sm";
+  let prevClient = null;
+  body.innerHTML = rows
+    .map((d) => {
+      const first = d.client_id !== prevClient;
+      prevClient = d.client_id;
+      return `
+      <tr class="${first ? "border-t border-gray-200" : ""}">
+        <td class="px-3 py-1.5 font-medium text-gray-900 align-middle">${first ? escapeHtml(d.client_name) : ""}</td>
+        <td class="px-3 py-1.5"><input class="discount-field ${cell}" data-id="${d.id}" data-field="item" value="${escapeHtml(d.item)}" /></td>
+        <td class="px-3 py-1.5"><div class="flex items-center justify-end gap-0.5">${
+          /^\d+(\.\d+)?$/.test(d.discount) ? `<span class="text-gray-500">₱</span>` : ""
+        }<input class="discount-field ${cell} text-right" style="width:4.25rem" data-id="${d.id}" data-field="discount" value="${escapeHtml(d.discount)}" /></div></td>
+        <td class="px-3 py-1.5 text-right"><button type="button" class="discount-delete text-gray-300 hover:text-red-600" data-id="${d.id}" aria-label="Delete">&#10005;</button></td>
+      </tr>`;
+    })
+    .join("");
+
+  body.querySelectorAll(".discount-field").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const row = officeDiscounts.find((d) => String(d.id) === input.dataset.id);
+      const next = { item: row.item, discount: row.discount, [input.dataset.field]: input.value.trim() };
+      if (!next.item || !next.discount) {
+        alert("Both an item and a price/discount are needed.");
+        renderDiscounts();
+        return;
+      }
+      try {
+        await postJSON(`/api/print/clients/${row.client_id}/discounts/${row.id}`, next);
+      } catch (err) {
+        alert(err.message);
+        renderDiscounts();
+        return;
+      }
+      row.item = next.item;
+      row.discount = next.discount;
+    });
+  });
+  body.querySelectorAll(".discount-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = officeDiscounts.find((d) => String(d.id) === btn.dataset.id);
+      if (!(await confirmDialog("This special price will be removed from the client.", { title: `Remove ${row.item} for ${row.client_name}?`, confirmLabel: "Remove" }))) return;
+      const res = await fetch(`/api/print/clients/${row.client_id}/discounts/${row.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        alert("Could not remove that.");
+        return;
+      }
+      loadDiscounts();
+    });
+  });
+}
+
+async function openDiscountModal() {
+  await loadPrintClients();
+  document.getElementById("discountClientList").innerHTML = printClients
+    .map((c) => `<option value="${escapeHtml(c.name)}"></option>`)
+    .join("");
+  ["discountClient", "discountItem", "discountValue"].forEach((id) => (document.getElementById(id).value = ""));
+  document.getElementById("discountError").classList.add("hidden");
+  const modal = document.getElementById("discountModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("discountClient").focus();
+}
+
+function closeDiscountModal() {
+  const modal = document.getElementById("discountModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function saveDiscount() {
+  const errorEl = document.getElementById("discountError");
+  errorEl.classList.add("hidden");
+  const name = document.getElementById("discountClient").value.trim();
+  const item = document.getElementById("discountItem").value.trim();
+  const discount = document.getElementById("discountValue").value.trim();
+  if (!name || !item || !discount) {
+    errorEl.textContent = "A client, an item and a price/discount are all needed.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    let client = printClients.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (!client) {
+      const res = await fetch("/api/print/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Could not add that client.");
+      client = { id: data.id, name };
+    }
+    await postJSON(`/api/print/clients/${client.id}/discounts`, { item, discount });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  closeDiscountModal();
+  loadDiscounts();
+}
+
+document.getElementById("discountAddBtn").addEventListener("click", openDiscountModal);
+document.getElementById("discountCancel").addEventListener("click", closeDiscountModal);
+document.getElementById("discountSave").addEventListener("click", saveDiscount);
+document.getElementById("discountsSearch").addEventListener("input", renderDiscounts);
+
 // Notes - miscellaneous admin records, optionally with one attachment.
 let officeNotes = [];
 const notesExpanded = new Set();
@@ -5684,7 +5942,7 @@ function renderNotes() {
   });
   list.querySelectorAll("[data-note-delete]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Delete this note?")) return;
+      if (!(await confirmDialog("This note, and any attachment on it, will be removed. This can't be undone.", { title: "Delete this note?" }))) return;
       const res = await fetch(`/api/office/notes/${btn.dataset.noteDelete}`, { method: "DELETE" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -5813,9 +6071,1181 @@ document.getElementById("noteAddBtn").addEventListener("click", async () => {
 window.loadCollections = loadCollections;
 window.loadExpenses = loadExpenses;
 window.loadInventory = loadInventory;
+window.loadDiscounts = loadDiscounts;
 window.loadNotes = loadNotes;
 
 } // end has_office_app guard
+
+// ---------------------------------------------------------------------------
+// Operations app (owners only) - Master Sales, Monthly Sales, Monthly OpEx,
+// Supplier, Purchase Order, Operating Expense, Capital Expense.
+//
+// The server refuses every /api/ops write from anyone but the superuser, so
+// OPS_EDIT only decides whether the controls are drawn: co-owners get the
+// same pages with plain text where the inputs would be.
+// ---------------------------------------------------------------------------
+if (document.getElementById("tabMasterSalesBtn")) {
+
+const OPS_EDIT = IS_SUPERUSER;
+const OPS_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const OPS_IN = "w-full min-w-0 border border-transparent hover:border-gray-200 focus:border-brand-blue rounded px-1 py-0.5 text-sm bg-transparent";
+
+document.querySelectorAll(".ops-edit-only").forEach((el) => el.classList.toggle("hidden", !OPS_EDIT));
+document.querySelectorAll(".ops-viewonly").forEach((el) => el.classList.toggle("hidden", OPS_EDIT));
+
+function opsFmt(n) {
+  return Number(n || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function opsRaw(s) {
+  return String(s).replace(/,/g, "").trim();
+}
+function opsDateLabel(iso) {
+  if (!iso) return "";
+  return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+// "Oct 1" - the year is already in the month header above it
+function opsDayLabel(iso) {
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+}
+function opsProfitClass(n) {
+  return Number(n) < 0 ? "text-red-600" : "text-green-600";
+}
+
+async function opsApi(url, method = "GET", body) {
+  const res = await fetch(url, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || "That didn't work.");
+  return data;
+}
+
+// Native alert() is swallowed by some browsers, so errors get a banner.
+function opsToast(message) {
+  const el = document.createElement("div");
+  el.className = "fixed bottom-4 left-1/2 -translate-x-1/2 z-[70] bg-red-600 text-white text-sm px-4 py-2 rounded-lg shadow-lg";
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+// Inputs for editors, plain text for co-owners.
+function opsNum(value, attrs, cls = "", peso = false) {
+  const shown = value === null || value === undefined ? "" : opsFmt(value);
+  if (!OPS_EDIT) return `<span class="${cls}">${peso && value ? "₱ " : ""}${shown || "—"}</span>`;
+  const input = `<input type="text" inputmode="decimal" data-num="1" ${attrs} value="${shown}" class="${OPS_IN} text-right ${cls}" />`;
+  // the peso sign only shows once a cell has a figure in it; invisible (not
+  // hidden) so the column doesn't shift when one appears
+  return peso ? `<div class="flex items-center"><span class="ops-peso text-gray-400 ${value ? "" : "invisible"}">₱</span>${input}</div>` : input;
+}
+function opsText(value, attrs, cls = "", extra = "") {
+  if (!OPS_EDIT) return `<span class="${cls}">${escapeHtml(value || "") || "—"}</span>`;
+  return `<input type="text" ${attrs} ${extra} value="${escapeHtml(value || "")}" class="${OPS_IN} ${cls}" />`;
+}
+function opsDate(value, attrs, cls = "") {
+  if (!OPS_EDIT) return `<span class="${cls}">${value ? opsDateLabel(value) : "—"}</span>`;
+  return `<input type="date" ${attrs} value="${value || ""}" class="${OPS_IN} ${cls}" />`;
+}
+
+document.addEventListener("focusin", (e) => {
+  if (e.target.dataset && e.target.dataset.num) e.target.value = opsRaw(e.target.value);
+});
+document.addEventListener("focusout", (e) => {
+  const t = e.target;
+  if (t.dataset && t.dataset.num && t.value !== "" && !Number.isNaN(Number(opsRaw(t.value)))) {
+    t.value = opsFmt(opsRaw(t.value));
+  }
+});
+function opsNumValue(input) {
+  const raw = opsRaw(input.value);
+  if (raw === "") return "";
+  const n = Number(raw);
+  return Number.isNaN(n) ? null : n;
+}
+
+function opsFillYears(select, years, year) {
+  select.innerHTML = years.map((y) => `<option value="${y}" ${y === year ? "selected" : ""}>${y}</option>`).join("");
+}
+function opsOpenModal(id) {
+  const modal = document.getElementById(id);
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+}
+function opsCloseModal(id) {
+  const modal = document.getElementById(id);
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+const opsHead = "text-[10px] uppercase tracking-wide font-mono text-gray-400";
+const opsLoadError = (el, err) => {
+  el.innerHTML = `<p class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</p>`;
+};
+
+// ---------------------------------------------------------------------------
+// Monthly Sales - every day of the year on one page, grouped by month
+// ---------------------------------------------------------------------------
+let opsSales = { year: null, years: [], days: [], opex: {} };
+// One month on screen at a time, picked from the month tabs; the rest of the
+// year is a click away rather than a scroll away.
+let salesMonth = null;
+let salesMonthYear = null;
+const salesHasData = {};
+const SALES_FIELDS = ["sales", "gross_profit", "cash", "gcash", "bank", "po"];
+const SALES_LABELS = { sales: "Sales", gross_profit: "Gross Profit", cash: "Cash", gcash: "Gcash", bank: "Bank", po: "PO" };
+
+function salesIsoToday() {
+  const t = new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+}
+
+// The current month in the current year; otherwise the latest month that
+// has entries; otherwise January.
+function salesDefaultMonth() {
+  const today = salesIsoToday();
+  if (Number(today.slice(0, 4)) === opsSales.year) return Number(today.slice(5, 7));
+  const withData = opsSales.days.map((d) => Number(d.sale_date.slice(5, 7)));
+  return withData.length ? Math.max(...withData) : 1;
+}
+
+async function loadMonthlySales(year) {
+  const body = document.getElementById("salesBody");
+  try {
+    opsSales = await opsApi("/api/ops/sales" + (year ? `?year=${year}` : ""));
+  } catch (err) {
+    opsLoadError(body, err);
+    return;
+  }
+  opsFillYears(document.getElementById("salesYear"), opsSales.years, opsSales.year);
+  if (salesMonth === null || salesMonthYear !== opsSales.year) {
+    salesMonth = salesDefaultMonth();
+    salesMonthYear = opsSales.year;
+  }
+  renderSales();
+}
+
+// Only worth flagging once a payment channel has been filled in - older
+// months were kept without the Cash/Gcash/Bank/PO split at all.
+// What Sales says minus what the payment channels add up to - the amount a
+// day is out by. Blank until a channel has been filled in.
+function salesDiscrepancy(d) {
+  const channels = d.cash + d.gcash + d.bank + d.po;
+  return channels > 0 ? Math.round((d.sales - channels) * 100) / 100 : null;
+}
+
+function salesDiscText(v) {
+  if (v === null) return "";
+  if (Math.abs(v) < 0.005) return "0.00";
+  return (v < 0 ? "-₱ " : "₱ ") + opsFmt(Math.abs(v));
+}
+
+function salesDiscClass(v) {
+  return v === null || Math.abs(v) < 0.005 ? "text-gray-400" : "text-red-600";
+}
+
+function salesMismatch(d) {
+  const channels = d.cash + d.gcash + d.bank + d.po;
+  return channels > 0 && d.sales !== 0 && Math.abs(d.sales - channels) > 0.5;
+}
+
+function renderSales() {
+  const body = document.getElementById("salesBody");
+  const days = opsSales.days;
+  const year = opsSales.year;
+  const m = salesMonth;
+  const key = `${year}-${String(m).padStart(2, "0")}`;
+  const today = salesIsoToday();
+  document.getElementById("salesSubtitle").textContent = days.length
+    ? `${days.length} day${days.length === 1 ? "" : "s"} logged in ${year}.`
+    : `${year} is laid out and ready - type into any day to start.`;
+
+  const byMonth = {};
+  days.forEach((d) => (byMonth[Number(d.sale_date.slice(5, 7))] ||= []).push(d));
+  for (let i = 1; i <= 12; i++) salesHasData[i] = !!byMonth[i];
+
+  // Underlined month tabs with a small bar under each one showing how that
+  // month's sales compare - so the strongest and weakest months read at a glance.
+  const monthSales = (i) => (byMonth[i] || []).reduce((n, d) => n + d.sales, 0);
+  const topSales = Math.max(1, ...OPS_MONTHS.map((_, i) => monthSales(i + 1)));
+  const arrow = (label, step, off) =>
+    `<button type="button" data-step="${step}" ${off ? "disabled" : ""} class="self-start px-2 pt-1.5 pb-1 text-lg leading-none ${off ? "text-gray-200" : "text-gray-400 hover:text-gray-700"} transition">${label}</button>`;
+  document.getElementById("salesChips").innerHTML =
+    arrow("&lsaquo;", -1, m === 1) +
+    OPS_MONTHS.map((name, i) => {
+      const n = i + 1;
+      const active = n === m;
+      const total = monthSales(n);
+      const height = total ? Math.max(3, Math.round((total / topSales) * 22)) : 0;
+      return `<div data-month="${n}" title="${name}${total ? " - " + printMoney(total) : " - no sales yet"}" class="shrink-0 cursor-pointer flex flex-col items-center">
+        <span class="px-4 pt-1.5 pb-1.5 text-sm border-b-2 -mb-px transition ${
+          active ? "border-brand-blue text-brand-blue font-semibold" : byMonth[n] ? "border-transparent text-gray-600 hover:text-gray-900" : "border-transparent text-gray-300 hover:text-gray-500"
+        }">${name}</span>
+        <span class="flex items-end h-6 pt-1.5"><span class="block w-5 rounded-sm ${active ? "bg-brand-blue" : "bg-gray-300"}" style="height:${height}px"></span></span>
+      </div>`;
+    }).join("") +
+    arrow("&rsaquo;", 1, m === 12);
+
+  const have = new Map((byMonth[m] || []).map((d) => [Number(d.sale_date.slice(8, 10)), d]));
+  const daysInMonth = new Date(year, m, 0).getDate();
+
+  const blankCell = (iso, f) =>
+    OPS_EDIT
+      ? `<div class="flex items-center"><span class="ops-peso text-gray-400 invisible">₱</span><input type="text" inputmode="decimal" data-num="1" data-date="${iso}" data-f="${f}" class="${OPS_IN} text-right" /></div>`
+      : `<span class="text-gray-300">—</span>`;
+
+  let dayRows = "";
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = have.get(day);
+    const iso = `${key}-${String(day).padStart(2, "0")}`;
+    const isToday = iso === today;
+    if (!d) {
+      dayRows += `<tr data-row-date="${iso}" class="${isToday ? "bg-blue-50" : "bg-gray-50/60"}">
+        <td class="px-3 py-1 whitespace-nowrap text-gray-400">${opsDayLabel(iso)}</td>
+        ${SALES_FIELDS.map((f) => `<td class="px-3 py-1">${blankCell(iso, f)}</td>`).join("")}
+        <td class="px-3 py-1 text-gray-300">${OPS_EDIT ? `<input type="date" data-date="${iso}" data-f="collected_date" class="${OPS_IN}" />` : "—"}</td>
+        <td></td><td></td></tr>`;
+      continue;
+    }
+    const bad = salesMismatch(d);
+    dayRows += `<tr data-day="${d.id}" data-row-date="${iso}" class="${bad ? "bg-amber-50" : isToday ? "bg-blue-50" : ""}" ${bad ? 'title="Cash + Gcash + Bank + PO doesn\'t add up to Sales"' : ""}>
+      <td class="px-3 py-1 whitespace-nowrap">${opsDayLabel(d.sale_date)}${d.note ? ` <span class="text-[10px] text-gray-400 italic">${escapeHtml(d.note)}</span>` : ""}</td>
+      ${SALES_FIELDS.map((f) => `<td class="px-3 py-1">${opsNum(d[f] || null, `data-day="${d.id}" data-f="${f}"`, "", true)}</td>`).join("")}
+      <td class="px-3 py-1 whitespace-nowrap">${opsDate(d.collected_date, `data-day="${d.id}" data-f="collected_date"`)}</td>
+      <td class="ops-disc px-3 py-1 text-right ${salesDiscClass(salesDiscrepancy(d))}">${salesDiscText(salesDiscrepancy(d))}</td>
+      <td class="px-3 py-1 text-right">${OPS_EDIT ? `<button type="button" class="sales-del text-gray-300 hover:text-red-600" data-day="${d.id}" aria-label="Delete">&#10005;</button>` : ""}</td>
+    </tr>`;
+  }
+  const kpi = (f, label) =>
+    `<span class="mr-4 whitespace-nowrap"><span class="text-white/60 text-[10px] uppercase tracking-wide font-mono">${label}</span> <b data-t="${f}"></b></span>`;
+  // Net Profit gets the lighter-blue tint the navbar's tab buttons sit on
+  const kpiNet = `<span class="inline-flex items-baseline gap-2 whitespace-nowrap bg-white/10 rounded-lg px-3 py-1.5"><span class="text-white/60 text-[10px] uppercase tracking-wide font-mono">Net Profit</span> <b class="text-base" data-t="net"></b></span>`;
+
+  body.innerHTML = `<table class="w-full min-w-[44rem]"><tbody>
+    <tr class="bg-brand-blue text-white sales-head">
+      <td colspan="10" class="px-3 py-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="inline-flex items-center gap-3">
+            <span class="font-display font-semibold text-2xl">${OPS_MONTHS[m - 1]} ${year}</span>
+            <button type="button" class="sales-summary-btn bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-md px-3 py-1 transition">Summary</button>
+          </span>
+          <span class="text-sm">${kpi("sales", "Sales")}${kpi("profit", "Profit")}${kpi("opex", "Op. Expense")}${kpiNet}</span>
+        </div>
+      </td>
+    </tr>
+    <tr class="${opsHead} bg-gray-50">
+      <th class="text-left px-3 py-1.5">Date</th>
+      ${SALES_FIELDS.map((f) => `<th class="text-right px-3 py-1.5">${SALES_LABELS[f]}</th>`).join("")}
+      <th class="text-left px-3 py-1.5">Collected</th>
+      <th class="text-right px-3 py-1.5">Discrepancy</th>
+      <th class="px-3 py-1.5"></th></tr>
+    ${dayRows}
+    <tr class="font-semibold bg-gray-50">
+      <td class="px-3 py-1.5">Total</td>
+      ${SALES_FIELDS.map((f) => `<td class="px-3 py-1.5 text-right" data-t="sum_${f}"></td>`).join("")}
+      <td></td>
+      <td class="px-3 py-1.5 text-right" data-t="sum_disc"></td>
+      <td></td>
+    </tr></tbody></table>`;
+  salesRecompute();
+}
+
+function salesRecompute() {
+  const m = salesMonth;
+  const list = opsSales.days.filter((d) => Number(d.sale_date.slice(5, 7)) === m);
+  const sums = {};
+  SALES_FIELDS.forEach((f) => (sums[f] = list.reduce((n, d) => n + d[f], 0)));
+  const opex = opsSales.opex[m] || 0;
+  const set = (name, text) => {
+    const el = document.querySelector(`#salesBody [data-t="${name}"]`);
+    if (el) el.textContent = text;
+  };
+  SALES_FIELDS.forEach((f) => set(`sum_${f}`, (sums[f] ? "₱ " : "") + opsFmt(sums[f])));
+  const discs = list.map(salesDiscrepancy).filter((v) => v !== null);
+  const discTotal = Math.round(discs.reduce((n, v) => n + v, 0) * 100) / 100;
+  const discEl = document.querySelector('#salesBody [data-t="sum_disc"]');
+  if (discEl) {
+    discEl.textContent = discs.length ? salesDiscText(discTotal) : "";
+    discEl.className = `px-3 py-1.5 text-right ${salesDiscClass(discs.length ? discTotal : null)}`;
+  }
+  set("sales", printMoney(sums.sales));
+  set("profit", printMoney(sums.gross_profit));
+  set("opex", printMoney(opex));
+  set("net", printMoney(sums.gross_profit - opex));
+}
+
+function salesFocusRow(iso, field = "sales") {
+  const tr = document.querySelector(`#salesBody tr[data-row-date="${iso}"]`);
+  if (!tr) return;
+  tr.scrollIntoView({ block: "center" });
+  const input = tr.querySelector(`[data-f="${field}"]`);
+  if (input && input.tagName === "INPUT") input.focus();
+}
+
+const salesBodyEl = document.getElementById("salesBody");
+salesBodyEl.addEventListener("click", async (e) => {
+  if (e.target.closest(".sales-summary-btn")) return openSalesSummary();
+  const del = e.target.closest(".sales-del");
+  if (!del) return;
+  const d = opsSales.days.find((x) => String(x.id) === del.dataset.day);
+  const ok = await confirmDialog(`${opsDateLabel(d.sale_date)}'s sales entry will be removed. This can't be undone.`, { title: "Delete this day?" });
+  if (!ok) return;
+  try {
+    await opsApi(`/api/ops/sales/${d.id}`, "DELETE");
+  } catch (err) {
+    opsToast(err.message);
+  }
+  loadMonthlySales(opsSales.year);
+});
+salesBodyEl.addEventListener("change", async (e) => {
+  const input = e.target;
+  const f = input.dataset.f;
+  if (!f) return;
+  const isNum = SALES_FIELDS.includes(f);
+  const value = isNum ? opsNumValue(input) : input.value;
+  if (value === null) {
+    opsToast("That needs to be a number.");
+    return renderSales();
+  }
+
+  // an empty day: the first value typed creates the day with it in
+  if (input.dataset.date) {
+    if (value === "") return;
+    const iso = input.dataset.date;
+    try {
+      await opsApi("/api/ops/sales", "POST", { sale_date: iso, [f]: value });
+    } catch (err) {
+      opsToast(err.message);
+      return loadMonthlySales(opsSales.year);
+    }
+    // Tab-ing across a new day should land in the next cell, not drop focus
+    // when the table redraws
+    const next = e.relatedTarget && e.relatedTarget.dataset ? e.relatedTarget.dataset : null;
+    await loadMonthlySales(opsSales.year);
+    if (next && next.date === iso && next.f) {
+      const target = document.querySelector(`#salesBody tr[data-row-date="${iso}"] [data-f="${next.f}"]`);
+      if (target) target.focus();
+    }
+    return;
+  }
+
+  const d = opsSales.days.find((x) => String(x.id) === input.dataset.day);
+  try {
+    await opsApi(`/api/ops/sales/${d.id}`, "POST", { [f]: value });
+  } catch (err) {
+    opsToast(err.message);
+    return loadMonthlySales(opsSales.year);
+  }
+  d[f] = isNum ? Number(value) || 0 : value || null;
+  const peso = input.parentElement && input.parentElement.querySelector(".ops-peso");
+  if (peso) peso.classList.toggle("invisible", !d[f]);
+  salesRecompute();
+  const row = input.closest("tr");
+  row.classList.toggle("bg-amber-50", salesMismatch(d));
+  const discCell = row.querySelector(".ops-disc");
+  if (discCell) {
+    const v = salesDiscrepancy(d);
+    discCell.textContent = salesDiscText(v);
+    discCell.className = `ops-disc px-3 py-1 text-right ${salesDiscClass(v)}`;
+  }
+  salesRecompute();
+});
+document.getElementById("salesChips").addEventListener("click", (e) => {
+  const hit = e.target.closest("[data-month], [data-step]");
+  if (!hit || hit.disabled) return;
+  salesMonth = hit.dataset.step ? Math.min(12, Math.max(1, salesMonth + Number(hit.dataset.step))) : Number(hit.dataset.month);
+  renderSales();
+});
+document.getElementById("salesYear").addEventListener("change", (e) => loadMonthlySales(Number(e.target.value)));
+document.getElementById("salesAddDay").addEventListener("click", async () => {
+  const today = salesIsoToday();
+  const year = Number(today.slice(0, 4));
+  if (year !== opsSales.year) await loadMonthlySales(year);
+  salesMonth = Number(today.slice(5, 7));
+  salesMonthYear = year;
+  renderSales();
+  salesFocusRow(today);
+});
+
+// ---------------------------------------------------------------------------
+// Monthly summary card - one month's headline figures on a single card, built
+// to be screenshotted for reporting. Compares against the month before and
+// the same month a year earlier wherever there is data to compare with.
+// ---------------------------------------------------------------------------
+function salesStats(data, m) {
+  const days = data.days.filter((d) => Number(d.sale_date.slice(5, 7)) === m);
+  const sum = (f) => days.reduce((n, d) => n + d[f], 0);
+  const sales = sum("sales");
+  const gp = sum("gross_profit");
+  const opex = (data.opex && data.opex[m]) || 0;
+  const trading = days.filter((d) => d.sales > 0);
+  const best = trading.reduce((a, d) => (!a || d.sales > a.sales ? d : a), null);
+  const worst = trading.reduce((a, d) => (!a || d.sales < a.sales ? d : a), null);
+  return {
+    has: days.length > 0,
+    sales, gp, opex, net: gp - opex,
+    tradingDays: trading.length,
+    best, worst,
+    channels: { cash: sum("cash"), gcash: sum("gcash"), bank: sum("bank"), po: sum("po") },
+  };
+}
+
+function pctChange(cur, prev) {
+  if (!prev) return null;
+  return ((cur - prev) / Math.abs(prev)) * 100;
+}
+
+// goodWhenUp: for costs a rise is bad news, so the colours flip
+function deltaHTML(pct, label, goodWhenUp = true) {
+  if (pct === null || !Number.isFinite(pct)) return "";
+  const up = pct >= 0;
+  const good = up === goodWhenUp;
+  return `<span class="${good ? "text-green-600" : "text-red-600"} whitespace-nowrap">${up ? "&#9650;" : "&#9660;"} ${Math.abs(pct).toFixed(1)}%</span> <span class="text-gray-400">${label}</span>`;
+}
+
+async function openSalesSummary() {
+  const year = opsSales.year;
+  const m = salesMonth;
+  const card = document.getElementById("salesSummaryCard");
+  card.innerHTML = `<p class="p-10 text-center text-sm text-gray-400">Working it out&hellip;</p>`;
+  opsOpenModal("salesSummaryModal");
+
+  let prevYearData = { days: [], opex: {} };
+  try {
+    prevYearData = await opsApi(`/api/ops/sales?year=${year - 1}`);
+  } catch (err) {
+    // no earlier year to compare with is fine
+  }
+  const cur = salesStats(opsSales, m);
+  const prevMonthKey = m > 1 ? [opsSales, m - 1] : [prevYearData, 12];
+  const prev = salesStats(prevMonthKey[0], prevMonthKey[1]);
+  const prevLabel = `${OPS_MONTHS[prevMonthKey[1] - 1]}`;
+  const yoy = salesStats(prevYearData, m);
+
+  // year to date, January through this month
+  const ytd = { sales: 0, gp: 0, opex: 0 };
+  for (let i = 1; i <= m; i++) {
+    const s = salesStats(opsSales, i);
+    ytd.sales += s.sales;
+    ytd.gp += s.gp;
+    ytd.opex += s.opex;
+  }
+
+  const opexKnown = cur.opex > 0;
+  const tile = (label, value, deltas, dark = false) => `
+    <div class="${dark ? "bg-brand-blue text-white" : "bg-gray-50 border border-gray-100"} rounded-xl px-4 py-3">
+      <p class="text-[11px] uppercase tracking-wide font-mono ${dark ? "text-white/60" : "text-gray-400"}">${label}</p>
+      <p class="font-semibold text-2xl mt-0.5">${value}</p>
+      <div class="text-xs mt-1 space-y-0.5 ${dark ? "[&_.text-gray-400]:text-white/50" : ""}">${deltas || "&nbsp;"}</div>
+    </div>`;
+  const deltas = (curV, prevV, yoyV, goodWhenUp = true) => {
+    const a = prev.has ? deltaHTML(pctChange(curV, prevV), `vs ${prevLabel}`, goodWhenUp) : "";
+    const b = yoy.has ? deltaHTML(pctChange(curV, yoyV), `vs ${OPS_MONTHS[m - 1].slice(0, 3)} ${year - 1}`, goodWhenUp) : "";
+    return [a, b].filter(Boolean).map((x) => `<p>${x}</p>`).join("");
+  };
+  const stat = (label, value, sub = "") => `
+    <div class="border border-gray-100 rounded-xl px-4 py-3">
+      <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400">${label}</p>
+      <p class="font-semibold text-lg mt-0.5">${value}</p>
+      ${sub ? `<p class="text-xs text-gray-400 mt-0.5">${sub}</p>` : ""}
+    </div>`;
+  const pct = (v) => (Number.isFinite(v) ? `${v.toFixed(1)}%` : "&mdash;");
+
+  const grossMargin = cur.sales ? (cur.gp / cur.sales) * 100 : NaN;
+  const opexPct = cur.sales && opexKnown ? (cur.opex / cur.sales) * 100 : NaN;
+  const netMargin = cur.sales && opexKnown ? (cur.net / cur.sales) * 100 : NaN;
+  const avgDaily = cur.tradingDays ? cur.sales / cur.tradingDays : 0;
+
+  const ch = cur.channels;
+  const chTotal = ch.cash + ch.gcash + ch.bank + ch.po;
+  const mix = [
+    ["Cash", ch.cash, "bg-brand-blue"],
+    ["Gcash", ch.gcash, "bg-brand-green"],
+    ["Bank", ch.bank, "bg-brand-tan"],
+    ["PO", ch.po, "bg-gray-400"],
+  ];
+  const mixHTML = chTotal
+    ? `<div class="flex h-3 rounded-full overflow-hidden bg-gray-100">${mix
+        .filter(([, v]) => v > 0)
+        .map(([, v, c]) => `<div class="${c}" style="width:${(v / chTotal) * 100}%"></div>`)
+        .join("")}</div>
+       <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">${mix
+         .map(([label, v, c]) => `<div class="text-sm"><span class="inline-block w-2.5 h-2.5 rounded-full ${c} mr-1.5 align-middle"></span>${label}<p class="font-semibold">${printMoney(v)}</p><p class="text-xs text-gray-400">${((v / chTotal) * 100).toFixed(1)}%</p></div>`)
+         .join("")}</div>
+       ${cur.sales && chTotal < cur.sales * 0.98 ? `<p class="text-[11px] text-gray-400 mt-2">Split recorded for ${((chTotal / cur.sales) * 100).toFixed(0)}% of the month's sales.</p>` : ""}`
+    : `<p class="text-sm text-gray-400">No Cash / Gcash / Bank / PO split recorded for this month.</p>`;
+
+  const ytdNet = ytd.gp - ytd.opex;
+  card.innerHTML = `
+    <div class="bg-brand-blue text-white px-6 py-5 flex items-start justify-between gap-4">
+      <div>
+        <p class="text-[11px] uppercase tracking-widest text-white/60 font-mono">Monthly sales report</p>
+        <h3 class="font-display font-semibold text-3xl leading-tight">${OPS_MONTHS[m - 1]} ${year}</h3>
+      </div>
+      <div class="text-right shrink-0">
+        <p class="font-display font-semibold">Metro Packaging Depot</p>
+        <p class="text-xs text-white/60">${cur.tradingDays} trading day${cur.tradingDays === 1 ? "" : "s"}</p>
+        <button type="button" id="salesSummaryClose" class="mt-1 text-xs text-white/70 hover:text-white underline">Close</button>
+      </div>
+    </div>
+    <div class="p-6 flex flex-col gap-5">
+      <div class="grid grid-cols-2 gap-3">
+        ${tile("Sales", printMoney(cur.sales), deltas(cur.sales, prev.sales, yoy.sales))}
+        ${tile("Gross profit", printMoney(cur.gp), deltas(cur.gp, prev.gp, yoy.gp))}
+        ${tile("Operating expense", opexKnown ? printMoney(cur.opex) : "&mdash;", opexKnown ? deltas(cur.opex, prev.opex, yoy.opex, false) : `<p class="text-gray-400">Not entered yet</p>`)}
+        ${tile("Net profit", printMoney(cur.net), opexKnown ? deltas(cur.net, prev.net, yoy.net) : `<p class="text-gray-400">Before operating expense</p>`, true)}
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        ${stat("Gross margin", pct(grossMargin), "gross profit / sales")}
+        ${stat("OpEx % of sales", pct(opexPct))}
+        ${stat("Net margin", pct(netMargin))}
+        ${stat("Average day", cur.tradingDays ? printMoney(avgDaily) : "&mdash;", `over ${cur.tradingDays} trading day${cur.tradingDays === 1 ? "" : "s"}`)}
+        ${stat("Best day", cur.best ? printMoney(cur.best.sales) : "&mdash;", cur.best ? opsDayLabel(cur.best.sale_date) : "")}
+        ${stat("Slowest day", cur.worst ? printMoney(cur.worst.sales) : "&mdash;", cur.worst ? opsDayLabel(cur.worst.sale_date) : "")}
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-2">How customers paid</p>
+        ${mixHTML}
+      </div>
+      <div class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+        <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-1">Year to date &middot; ${m === 1 ? "January" : "January &ndash; " + OPS_MONTHS[m - 1]} ${year}</p>
+        <div class="grid grid-cols-3 gap-3 text-sm">
+          <div><p class="text-gray-400 text-xs">Sales</p><p class="font-semibold">${printMoney(ytd.sales)}</p></div>
+          <div><p class="text-gray-400 text-xs">Gross profit</p><p class="font-semibold">${printMoney(ytd.gp)}</p></div>
+          <div><p class="text-gray-400 text-xs">Net profit</p><p class="font-semibold">${printMoney(ytdNet)}</p></div>
+        </div>
+      </div>
+      <p class="text-[11px] text-gray-400">Percentages compare with ${prev.has ? prevLabel : "the previous month (no data)"}${yoy.has ? ` and ${OPS_MONTHS[m - 1]} ${year - 1}` : ""}. Net profit is gross profit less operating expense.</p>
+    </div>`;
+  document.getElementById("salesSummaryClose").addEventListener("click", closeSalesSummary);
+}
+
+function closeSalesSummary() {
+  opsCloseModal("salesSummaryModal");
+}
+document.getElementById("salesSummaryModal").addEventListener("click", (e) => {
+  if (e.target.id === "salesSummaryModal") closeSalesSummary();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSalesSummary();
+});
+
+// ---------------------------------------------------------------------------
+// Monthly OpEx - the cost grid, plus the electric sub-meter that feeds it
+// ---------------------------------------------------------------------------
+let opsOpex = { year: null, years: [], months: [] };
+// the electric sub-meter table is tucked away until asked for
+let opexMeterOpen = false;
+const OPEX_COLS = [
+  ["rent", "Rent"], ["salary", "Salary"], ["electric", "Electric"], ["water", "Water"],
+  ["internet", "Internet"], ["rent_tax_bookkeeper", "Rent Tax + Book keeper"], ["govt_contribution", "Gov't Contribution"],
+  ["misc", "Misc"],
+];
+
+async function loadMonthlyOpex(year) {
+  const body = document.getElementById("opexBody");
+  try {
+    opsOpex = await opsApi("/api/ops/monthly-opex" + (year ? `?year=${year}` : ""));
+  } catch (err) {
+    opsLoadError(body, err);
+    return;
+  }
+  // Net Profit is the year's gross profit less these costs
+  try {
+    const sales = await opsApi(`/api/ops/sales?year=${opsOpex.year}`);
+    opsOpex.gp = sales.days.reduce((n, d) => n + d.gross_profit, 0);
+  } catch (err) {
+    opsOpex.gp = 0;
+  }
+  opsFillYears(document.getElementById("opexYear"), opsOpex.years, opsOpex.year);
+  renderOpex();
+}
+
+function opexRowTotal(row) {
+  return OPEX_COLS.reduce((n, [f]) => n + (row[f] || 0), 0);
+}
+
+function renderOpex() {
+  const rows = opsOpex.months;
+  const banner = `
+    <div class="bg-brand-blue text-white flex flex-wrap items-center justify-between gap-2" style="padding:14px 16px">
+      <span class="inline-flex items-center gap-3">
+        <span class="font-display font-semibold text-2xl">Year ${opsOpex.year}</span>
+        <button type="button" class="opex-summary-btn bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-md px-3 py-1 transition">Summary</button>
+      </span>
+    </div>`;
+  const grid = `
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+      ${banner}
+      <table class="text-sm w-full">
+        <thead><tr class="${opsHead} bg-gray-50 border-b border-gray-200">
+          <th class="text-left px-3 py-2">Month</th>
+          ${OPEX_COLS.map(([, label]) => `<th class="text-right px-3 py-2">${label}</th>`).join("")}
+          <th class="text-right px-3 py-2 text-green-700">Total</th></tr></thead>
+        <tbody class="divide-y divide-gray-100">
+          ${rows.map((r) => `<tr>
+            <td class="px-3 py-1 whitespace-nowrap">${OPS_MONTHS[r.month - 1]}</td>
+            ${OPEX_COLS.map(([f]) => `<td class="px-3 py-1" style="min-width:7.5rem">${opsNum(r[f], `data-m="${r.month}" data-f="${f}"`, "", true)}</td>`).join("")}
+            <td class="px-3 py-1 text-right font-semibold" data-row-total="${r.month}"></td></tr>`).join("")}
+        </tbody>
+        <tfoot><tr class="font-semibold bg-gray-50 border-t border-gray-200">
+          <td class="px-3 py-1.5">Total</td>
+          ${OPEX_COLS.map(([f]) => `<td class="px-3 py-1.5 text-right" data-col-total="${f}"></td>`).join("")}
+          <td class="px-3 py-1.5 text-right" data-col-total="all"></td></tr></tfoot>
+      </table>
+    </div>`;
+  const meter = `
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+      <table class="text-sm">
+        <thead><tr class="${opsHead} bg-gray-50 border-b border-gray-200">
+          <th class="text-left px-3 py-2">Month</th><th class="text-right px-3 py-2">Sub meter before</th>
+          <th class="text-right px-3 py-2">Sub meter after</th><th class="text-right px-3 py-2">Consume</th>
+          <th class="text-right px-3 py-2">Rate</th><th class="text-right px-3 py-2">Amount</th></tr></thead>
+        <tbody class="divide-y divide-gray-100">
+          ${rows.map((r) => `<tr>
+            <td class="px-3 py-1 whitespace-nowrap">${OPS_MONTHS[r.month - 1]}</td>
+            <td class="px-3 py-1" style="min-width:6rem">${opsNum(r.meter_before, `data-m="${r.month}" data-meter="meter_before"`)}</td>
+            <td class="px-3 py-1" style="min-width:6rem">${opsNum(r.meter_after, `data-m="${r.month}" data-meter="meter_after"`)}</td>
+            <td class="px-3 py-1 text-right" data-consume="${r.month}"></td>
+            <td class="px-3 py-1" style="min-width:6rem">${opsNum(r.rate, `data-m="${r.month}" data-meter="rate"`, "", true)}</td>
+            <td class="px-3 py-1 text-right" data-amount="${r.month}"></td></tr>`).join("")}
+        </tbody>
+      </table>
+      <p class="text-[11px] text-gray-400 px-3 py-2 border-t border-gray-100">Once before, after and rate are in, that month's Electric is set to consume &times; rate.</p>
+    </div>`;
+  document.getElementById("opexBody").innerHTML = `<div class="w-full min-w-0">${grid}</div>
+    <div class="w-full max-w-3xl">
+      <button type="button" id="opexMeterToggle" class="flex items-center gap-2 text-sm font-medium text-gray-700 hover:text-brand-blue transition">
+        <span id="opexMeterCaret" class="inline-block w-3">${opexMeterOpen ? "&#9662;" : "&#9656;"}</span>Electric meter
+        <span class="text-xs font-normal text-gray-400">sub-meter readings that set the Electric figure</span>
+      </button>
+      <div id="opexMeterBody" class="mt-2 ${opexMeterOpen ? "" : "hidden"}">${meter}</div>
+    </div>`;
+  opexRecompute();
+}
+
+function opexRecompute() {
+  const rows = opsOpex.months;
+  rows.forEach((r) => {
+    const t = document.querySelector(`[data-row-total="${r.month}"]`);
+    if (t) t.textContent = opexRowTotal(r) ? "₱ " + opsFmt(opexRowTotal(r)) : "";
+    const consume = r.meter_before != null && r.meter_after != null ? r.meter_after - r.meter_before : null;
+    const c = document.querySelector(`[data-consume="${r.month}"]`);
+    if (c) c.textContent = consume === null ? "" : opsFmt(consume).replace(/\.00$/, "");
+    const a = document.querySelector(`[data-amount="${r.month}"]`);
+    if (a) a.textContent = consume !== null && r.rate != null && consume * r.rate ? "₱ " + opsFmt(consume * r.rate) : "";
+    const prev = rows[r.month - 2];
+    const before = document.querySelector(`input[data-m="${r.month}"][data-meter="meter_before"]`);
+    if (before) before.placeholder = prev && prev.meter_after != null ? opsFmt(prev.meter_after) : "";
+  });
+  OPEX_COLS.forEach(([f]) => {
+    const el = document.querySelector(`[data-col-total="${f}"]`);
+    if (el) {
+      const colTotal = rows.reduce((n, r) => n + (r[f] || 0), 0);
+      el.textContent = (colTotal ? "₱ " : "") + opsFmt(colTotal);
+    }
+  });
+  const yearTotal = rows.reduce((n, r) => n + opexRowTotal(r), 0);
+  const all = document.querySelector('[data-col-total="all"]');
+  if (all) all.textContent = (yearTotal ? "₱ " : "") + opsFmt(yearTotal);
+}
+
+// Year summary card - where the money goes, month by month and by category,
+// built to be screenshotted like the monthly sales one.
+async function openOpexSummary() {
+  const card = document.getElementById("salesSummaryCard");
+  card.innerHTML = `<p class="p-10 text-center text-sm text-gray-400">Working it out&hellip;</p>`;
+  opsOpenModal("salesSummaryModal");
+
+  const year = opsOpex.year;
+  let prevTotal = 0;
+  try {
+    const prev = await opsApi(`/api/ops/monthly-opex?year=${year - 1}`);
+    prevTotal = prev.months.reduce((n, r) => n + opexRowTotal(r), 0);
+  } catch (err) {
+    // no earlier year to compare with is fine
+  }
+
+  const rows = opsOpex.months;
+  const monthTotals = rows.map(opexRowTotal);
+  const total = monthTotals.reduce((n, v) => n + v, 0);
+  const filled = monthTotals.map((v, i) => [v, i]).filter(([v]) => v > 0);
+  const avg = filled.length ? total / filled.length : 0;
+  const high = filled.reduce((a, c) => (!a || c[0] > a[0] ? c : a), null);
+  const low = filled.reduce((a, c) => (!a || c[0] < a[0] ? c : a), null);
+  const gp = opsOpex.gp || 0;
+  const net = gp - total;
+  const categories = OPEX_COLS.map(([f, label]) => [label, rows.reduce((n, r) => n + (r[f] || 0), 0)])
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const topMonth = Math.max(1, ...monthTotals);
+
+  const tile = (label, value, sub, dark = false) => `
+    <div class="${dark ? "bg-brand-blue text-white" : "bg-gray-50 border border-gray-100"} rounded-xl px-4 py-3">
+      <p class="text-[11px] uppercase tracking-wide font-mono ${dark ? "text-white/60" : "text-gray-400"}">${label}</p>
+      <p class="font-semibold text-2xl mt-0.5">${value}</p>
+      <div class="text-xs mt-1 ${dark ? "[&_.text-gray-400]:text-white/50" : ""}">${sub || "&nbsp;"}</div>
+    </div>`;
+  const change = prevTotal ? deltaHTML(pctChange(total, prevTotal), `vs ${year - 1}`, false) : "";
+
+  const bars = rows
+    .map((r, i) => {
+      const v = monthTotals[i];
+      const h = v ? Math.max(4, Math.round((v / topMonth) * 80)) : 0;
+      return `<div class="flex-1 flex flex-col items-center justify-end gap-1" title="${OPS_MONTHS[i]}${v ? " - " + printMoney(v) : ""}">
+        <span class="block w-full rounded-sm bg-brand-blue" style="height:${h}px"></span>
+        <span class="text-[11px] text-gray-400">${OPS_MONTHS[i].slice(0, 3)}</span></div>`;
+    })
+    .join("");
+  const catBars = categories.length
+    ? categories
+        .map(([label, v]) => `<div>
+          <div class="flex justify-between text-sm"><span>${label}</span><span class="font-semibold">${printMoney(v)} <span class="text-gray-400 font-normal">${((v / total) * 100).toFixed(1)}%</span></span></div>
+          <div class="h-2 rounded-full bg-gray-100 mt-1"><div class="h-2 rounded-full bg-brand-blue" style="width:${(v / total) * 100}%"></div></div></div>`)
+        .join("")
+    : `<p class="text-sm text-gray-400">No costs entered for ${year} yet.</p>`;
+
+  card.innerHTML = `
+    <div class="bg-brand-blue text-white px-6 py-5 flex items-start justify-between gap-4">
+      <div>
+        <p class="text-[11px] uppercase tracking-widest text-white/60 font-mono">Operating expense report</p>
+        <h3 class="font-display font-semibold text-3xl leading-tight">Year ${year}</h3>
+      </div>
+      <div class="text-right shrink-0">
+        <p class="font-display font-semibold">Metro Packaging Depot</p>
+        <p class="text-xs text-white/60">${filled.length} month${filled.length === 1 ? "" : "s"} entered</p>
+        <button type="button" id="salesSummaryClose" class="mt-1 text-xs text-white/70 hover:text-white underline">Close</button>
+      </div>
+    </div>
+    <div class="p-6 flex flex-col gap-5">
+      <div class="grid grid-cols-2 gap-3">
+        ${tile("Total operating expense", printMoney(total), change, true)}
+        ${tile("Monthly average", filled.length ? printMoney(avg) : "&mdash;", filled.length ? `over ${filled.length} month${filled.length === 1 ? "" : "s"}` : "")}
+        ${tile("Highest month", high ? printMoney(high[0]) : "&mdash;", high ? OPS_MONTHS[high[1]] : "")}
+        ${tile("Lowest month", low ? printMoney(low[0]) : "&mdash;", low ? OPS_MONTHS[low[1]] : "")}
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-2">Month by month</p>
+        <div class="flex items-end gap-1.5" style="height:112px">${bars}</div>
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-2">Where it goes</p>
+        <div class="flex flex-col gap-3">${catBars}</div>
+      </div>
+      <div class="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+        <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-1">Net profit for ${year}</p>
+        <div class="grid grid-cols-3 gap-3 text-sm">
+          <div><p class="text-gray-400 text-xs">Gross profit</p><p class="font-semibold">${printMoney(gp)}</p></div>
+          <div><p class="text-gray-400 text-xs">Operating expense</p><p class="font-semibold">${printMoney(total)}</p></div>
+          <div><p class="text-gray-400 text-xs">Net profit</p><p class="font-semibold">${printMoney(net)}</p></div>
+        </div>
+      </div>
+      <p class="text-[11px] text-gray-400">Net profit is the year's gross profit from Monthly Sales less the operating expense above.${prevTotal ? ` The change compares with ${year - 1}.` : ""}</p>
+    </div>`;
+  document.getElementById("salesSummaryClose").addEventListener("click", closeSalesSummary);
+}
+
+document.getElementById("opexBody").addEventListener("click", (e) => {
+  if (e.target.closest(".opex-summary-btn")) return openOpexSummary();
+  if (e.target.closest("#opexMeterToggle")) {
+    opexMeterOpen = !opexMeterOpen;
+    document.getElementById("opexMeterBody").classList.toggle("hidden", !opexMeterOpen);
+    document.getElementById("opexMeterCaret").innerHTML = opexMeterOpen ? "&#9662;" : "&#9656;";
+  }
+});
+
+document.getElementById("opexBody").addEventListener("change", async (e) => {
+  const input = e.target;
+  const m = Number(input.dataset.m);
+  if (!m) return;
+  const row = opsOpex.months[m - 1];
+  const value = opsNumValue(input);
+  if (value === null) {
+    opsToast("That needs to be a number.");
+    return renderOpex();
+  }
+  try {
+    if (input.dataset.f) {
+      await opsApi("/api/ops/monthly-opex", "POST", { year: opsOpex.year, month: m, field: input.dataset.f, value });
+      row[input.dataset.f] = value === "" ? null : value;
+    } else {
+      const res = await opsApi("/api/ops/electric", "POST", { year: opsOpex.year, month: m, field: input.dataset.meter, value });
+      row[input.dataset.meter] = value === "" ? null : value;
+      if (res.electric !== null && res.electric !== undefined) {
+        row.electric = res.electric;
+        const cell = document.querySelector(`input[data-m="${m}"][data-f="electric"]`);
+        if (cell) cell.value = opsFmt(res.electric);
+      }
+    }
+  } catch (err) {
+    opsToast(err.message);
+    return loadMonthlyOpex(opsOpex.year);
+  }
+  // the peso sign appears once a cell has a figure in it
+  const peso = input.parentElement && input.parentElement.querySelector(".ops-peso");
+  if (peso) peso.classList.toggle("invisible", !value);
+  opexRecompute();
+});
+document.getElementById("opexYear").addEventListener("change", (e) => loadMonthlyOpex(Number(e.target.value)));
+
+// ---------------------------------------------------------------------------
+// Supplier
+// ---------------------------------------------------------------------------
+let opsSuppliers = [];
+
+async function loadSuppliers() {
+  const body = document.getElementById("suppliersBody");
+  try {
+    opsSuppliers = (await opsApi("/api/ops/suppliers")).suppliers;
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="4" class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</td></tr>`;
+    return;
+  }
+  body.innerHTML = opsSuppliers.length
+    ? opsSuppliers
+        .map((s) => `<tr>
+          <td class="px-3 py-1.5 font-medium text-gray-900">${opsText(s.name, `data-id="${s.id}" data-f="name"`)}</td>
+          <td class="px-3 py-1.5">${opsText(s.location, `data-id="${s.id}" data-f="location"`)}</td>
+          <td class="px-3 py-1.5">${opsText(s.product, `data-id="${s.id}" data-f="product"`)}</td>
+          <td class="px-3 py-1.5 text-right">${OPS_EDIT ? `<button type="button" class="supplier-del text-gray-300 hover:text-red-600" data-id="${s.id}" aria-label="Delete">&#10005;</button>` : ""}</td></tr>`)
+        .join("")
+    : `<tr><td colspan="4" class="text-sm text-gray-400 p-6 text-center">No suppliers yet.</td></tr>`;
+}
+
+document.getElementById("suppliersBody").addEventListener("change", async (e) => {
+  const input = e.target;
+  if (!input.dataset.id) return;
+  try {
+    await opsApi(`/api/ops/suppliers/${input.dataset.id}`, "POST", { [input.dataset.f]: input.value });
+  } catch (err) {
+    opsToast(err.message);
+  }
+  loadSuppliers();
+});
+document.getElementById("suppliersBody").addEventListener("click", async (e) => {
+  const del = e.target.closest(".supplier-del");
+  if (!del) return;
+  const s = opsSuppliers.find((x) => String(x.id) === del.dataset.id);
+  const ok = await confirmDialog("A supplier with purchase orders can't be deleted.", { title: `Delete ${s.name}?` });
+  if (!ok) return;
+  try {
+    await opsApi(`/api/ops/suppliers/${s.id}`, "DELETE");
+  } catch (err) {
+    opsToast(err.message);
+  }
+  loadSuppliers();
+});
+document.getElementById("supplierAddBtn").addEventListener("click", () => {
+  ["supplierName", "supplierLocation", "supplierProduct"].forEach((id) => (document.getElementById(id).value = ""));
+  document.getElementById("supplierError").classList.add("hidden");
+  opsOpenModal("supplierModal");
+  document.getElementById("supplierName").focus();
+});
+document.getElementById("supplierCancel").addEventListener("click", () => opsCloseModal("supplierModal"));
+document.getElementById("supplierSave").addEventListener("click", async () => {
+  const errorEl = document.getElementById("supplierError");
+  try {
+    await opsApi("/api/ops/suppliers", "POST", {
+      name: document.getElementById("supplierName").value,
+      location: document.getElementById("supplierLocation").value,
+      product: document.getElementById("supplierProduct").value,
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  opsCloseModal("supplierModal");
+  loadSuppliers();
+});
+
+// ---------------------------------------------------------------------------
+// Purchase Order - supplier POs and the payments against them
+// ---------------------------------------------------------------------------
+let opsPO = { year: null, years: [], pos: [], monthly: {}, total_purchase: 0, total_payments: 0 };
+const poOpen = new Set();
+let poPayTarget = null; // po id a payment is being logged against
+const PO_STATUS_CLASS = {
+  Paid: "bg-green-100 text-green-700",
+  Partial: "bg-amber-100 text-amber-700",
+  Open: "bg-gray-100 text-gray-600",
+};
+
+async function loadPurchaseOrders(year) {
+  const body = document.getElementById("poBody");
+  try {
+    opsPO = await opsApi("/api/ops/purchase-orders" + (year ? `?year=${year}` : ""));
+    opsSuppliers = (await opsApi("/api/ops/suppliers")).suppliers;
+  } catch (err) {
+    opsLoadError(body, err);
+    return;
+  }
+  opsFillYears(document.getElementById("poYear"), opsPO.years, opsPO.year);
+  document.getElementById("poSupplierList").innerHTML = opsSuppliers.map((s) => `<option value="${escapeHtml(s.name)}"></option>`).join("");
+  renderPurchaseOrders();
+}
+
+function renderPurchaseOrders() {
+  const kpi = (label, value, cls = "") =>
+    `<div class="bg-white border border-gray-200 rounded-lg px-3 py-2"><p class="${opsHead}">${label}</p><p class="font-semibold text-lg ${cls}">${printMoney(value)}</p></div>`;
+  const balance = opsPO.total_purchase - opsPO.total_payments;
+  document.getElementById("poKpis").innerHTML =
+    kpi("Total purchase", opsPO.total_purchase) + kpi("Payments", opsPO.total_payments) + kpi("Balance", balance, balance > 0 ? "text-red-600" : "");
+
+  const body = document.getElementById("poBody");
+  if (!opsPO.pos.length) {
+    body.innerHTML = `<p class="text-sm text-gray-400 p-8 text-center">No purchase orders in ${opsPO.year}.</p>`;
+  } else {
+    const rows = opsPO.pos
+      .map((p) => {
+        const open = poOpen.has(p.id);
+        const pays = open
+          ? `<tr class="bg-gray-50"><td colspan="9" class="px-3 py-2">
+              <div class="max-w-md ml-6">
+                ${p.payments.length ? p.payments.map((x) => `<div class="flex items-center gap-2 py-0.5">
+                    <span class="w-36">${opsDate(x.pay_date, `data-pay="${x.id}" data-f="pay_date"`)}</span>
+                    <span class="w-32">${opsNum(x.amount, `data-pay="${x.id}" data-f="amount"`)}</span>
+                    ${OPS_EDIT ? `<button type="button" class="pay-del text-gray-300 hover:text-red-600" data-pay="${x.id}" aria-label="Delete">&#10005;</button>` : ""}
+                  </div>`).join("") : `<p class="text-xs text-gray-400 italic">No payments yet.</p>`}
+                ${OPS_EDIT ? `<button type="button" class="pay-add text-xs text-brand-blue hover:underline mt-1" data-po="${p.id}">+ Log a payment</button>` : ""}
+              </div></td></tr>`
+          : "";
+        return `<tr data-po="${p.id}">
+          <td class="px-3 py-1.5 whitespace-nowrap">${opsDate(p.order_date, `data-po="${p.id}" data-f="order_date"`)}</td>
+          <td class="px-3 py-1.5" style="min-width:6rem">${opsText(p.txn_no, `data-po="${p.id}" data-f="txn_no"`)}</td>
+          <td class="px-3 py-1.5" style="min-width:9rem">${opsText(p.supplier, `data-po="${p.id}" data-f="supplier"`, "", 'list="poSupplierList"')}</td>
+          <td class="px-3 py-1.5" style="min-width:7rem">${opsNum(p.amount, `data-po="${p.id}" data-f="amount"`)}</td>
+          <td class="px-3 py-1.5 text-right">${opsFmt(p.paid)}</td>
+          <td class="px-3 py-1.5 text-right ${p.balance > 0 ? "text-red-600" : "text-gray-400"}">${opsFmt(p.balance)}</td>
+          <td class="px-3 py-1.5"><span class="text-xs rounded-full px-2 py-0.5 ${PO_STATUS_CLASS[p.status]}">${p.status}</span></td>
+          <td class="px-3 py-1.5 text-xs text-gray-400 whitespace-nowrap">${opsDateLabel(p.updated_at)}</td>
+          <td class="px-3 py-1.5 text-right whitespace-nowrap">
+            <button type="button" class="po-toggle text-xs text-brand-blue hover:underline" data-po="${p.id}">${open ? "Hide" : "Payments"} (${p.payments.length})</button>
+            ${OPS_EDIT ? `<button type="button" class="po-del text-gray-300 hover:text-red-600 ml-2" data-po="${p.id}" aria-label="Delete">&#10005;</button>` : ""}
+          </td></tr>${pays}`;
+      })
+      .join("");
+    body.innerHTML = `<table class="w-full text-sm min-w-[56rem]">
+      <thead><tr class="${opsHead} bg-gray-50 border-b border-gray-200">
+        <th class="text-left px-3 py-2">Order date</th><th class="text-left px-3 py-2">Transaction no</th>
+        <th class="text-left px-3 py-2">Supplier</th><th class="text-right px-3 py-2">Amount</th>
+        <th class="text-right px-3 py-2">Paid</th><th class="text-right px-3 py-2">Balance</th>
+        <th class="text-left px-3 py-2">Status</th><th class="text-left px-3 py-2">Updated</th><th class="px-3 py-2"></th></tr></thead>
+      <tbody class="divide-y divide-gray-100">${rows}</tbody></table>`;
+  }
+
+  const monthly = Object.keys(opsPO.monthly).map(Number).sort((a, b) => a - b);
+  document.getElementById("poMonthly").innerHTML = `
+    <p class="${opsHead} px-3 py-2 border-b border-gray-200 bg-gray-50 rounded-t-xl">Monthly transaction</p>
+    ${monthly.length ? monthly.map((m) => `<div class="flex justify-between px-3 py-1.5 text-sm border-b border-gray-100 last:border-0"><span>${OPS_MONTHS[m - 1]}</span><span>${opsFmt(opsPO.monthly[m])}</span></div>`).join("") : `<p class="text-xs text-gray-400 italic px-3 py-3">Nothing yet.</p>`}`;
+}
+
+const poBodyEl = document.getElementById("poBody");
+poBodyEl.addEventListener("change", async (e) => {
+  const input = e.target;
+  const isPay = input.dataset.pay;
+  if (!isPay && !input.dataset.po) return;
+  const f = input.dataset.f;
+  const value = f === "amount" ? opsNumValue(input) : input.value;
+  if (value === null || value === "") {
+    opsToast("That can't be blank.");
+    return renderPurchaseOrders();
+  }
+  try {
+    await opsApi(isPay ? `/api/ops/po-payments/${isPay}` : `/api/ops/purchase-orders/${input.dataset.po}`, "POST", { [f]: value });
+  } catch (err) {
+    opsToast(err.message);
+  }
+  loadPurchaseOrders(opsPO.year);
+});
+poBodyEl.addEventListener("click", async (e) => {
+  const toggle = e.target.closest(".po-toggle");
+  if (toggle) {
+    const id = Number(toggle.dataset.po);
+    poOpen.has(id) ? poOpen.delete(id) : poOpen.add(id);
+    return renderPurchaseOrders();
+  }
+  const add = e.target.closest(".pay-add");
+  if (add) {
+    poPayTarget = Number(add.dataset.po);
+    const p = opsPO.pos.find((x) => x.id === poPayTarget);
+    document.getElementById("poPayTitle").textContent = `Log a payment - ${p.txn_no}`;
+    document.getElementById("poPayDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("poPayAmount").value = p.balance > 0 ? p.balance : "";
+    document.getElementById("poPayError").classList.add("hidden");
+    opsOpenModal("poPayModal");
+    return document.getElementById("poPayAmount").focus();
+  }
+  const payDel = e.target.closest(".pay-del");
+  if (payDel) {
+    if (!(await confirmDialog("This payment will be removed and the balance goes back up.", { title: "Delete this payment?" }))) return;
+    try {
+      await opsApi(`/api/ops/po-payments/${payDel.dataset.pay}`, "DELETE");
+    } catch (err) {
+      opsToast(err.message);
+    }
+    return loadPurchaseOrders(opsPO.year);
+  }
+  const del = e.target.closest(".po-del");
+  if (del) {
+    const p = opsPO.pos.find((x) => String(x.id) === del.dataset.po);
+    if (!(await confirmDialog("Any payments logged against it are deleted too. This can't be undone.", { title: `Delete ${p.txn_no}?` }))) return;
+    try {
+      await opsApi(`/api/ops/purchase-orders/${p.id}`, "DELETE");
+    } catch (err) {
+      opsToast(err.message);
+    }
+    loadPurchaseOrders(opsPO.year);
+  }
+});
+document.getElementById("poYear").addEventListener("change", (e) => loadPurchaseOrders(Number(e.target.value)));
+
+document.getElementById("poAddBtn").addEventListener("click", () => {
+  ["poSupplier", "poAmountInput", "poTxn"].forEach((id) => (document.getElementById(id).value = ""));
+  document.getElementById("poDateInput").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("poError").classList.add("hidden");
+  opsOpenModal("poModal");
+  document.getElementById("poSupplier").focus();
+});
+document.getElementById("poCancel").addEventListener("click", () => opsCloseModal("poModal"));
+document.getElementById("poSave").addEventListener("click", async () => {
+  const errorEl = document.getElementById("poError");
+  let created;
+  try {
+    created = await opsApi("/api/ops/purchase-orders", "POST", {
+      supplier: document.getElementById("poSupplier").value,
+      order_date: document.getElementById("poDateInput").value,
+      amount: document.getElementById("poAmountInput").value,
+      txn_no: document.getElementById("poTxn").value,
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  opsCloseModal("poModal");
+  loadPurchaseOrders(Number(document.getElementById("poDateInput").value.slice(0, 4)));
+});
+document.getElementById("poPayCancel").addEventListener("click", () => opsCloseModal("poPayModal"));
+document.getElementById("poPaySave").addEventListener("click", async () => {
+  const errorEl = document.getElementById("poPayError");
+  try {
+    await opsApi(`/api/ops/purchase-orders/${poPayTarget}/payments`, "POST", {
+      pay_date: document.getElementById("poPayDate").value,
+      amount: document.getElementById("poPayAmount").value,
+    });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  opsCloseModal("poPayModal");
+  poOpen.add(poPayTarget);
+  loadPurchaseOrders(opsPO.year);
+});
+
+// ---------------------------------------------------------------------------
+// Operating Expense - read-only window onto the Admin expenses list
+// ---------------------------------------------------------------------------
+async function loadOperatingExpense(year) {
+  const body = document.getElementById("opExpBody");
+  let data;
+  try {
+    data = await opsApi("/api/ops/operating-expenses" + (year ? `?year=${year}` : ""));
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</td></tr>`;
+    return;
+  }
+  opsFillYears(document.getElementById("opExpYear"), data.years, data.year);
+  document.getElementById("opExpSubtitle").textContent = data.expenses.length
+    ? `${printMoney(data.total)} across ${data.expenses.length} expense${data.expenses.length === 1 ? "" : "s"} in ${data.year}.`
+    : "The same list as Admin › Expenses.";
+  const cell = (v) => escapeHtml(v || "") || "—";
+  body.innerHTML = data.expenses.length
+    ? data.expenses
+        .map((x) => `<tr>
+          <td class="px-3 py-1.5 whitespace-nowrap">${opsDateLabel(x.expense_date)}</td>
+          <td class="px-3 py-1.5 font-medium text-gray-900">${cell(x.item)}</td>
+          <td class="px-3 py-1.5">${cell(x.category)}</td>
+          <td class="px-3 py-1.5 text-gray-500">${cell(x.description)}</td>
+          <td class="px-3 py-1.5 text-right">${opsFmt(x.amount)}</td>
+          <td class="px-3 py-1.5">${cell(x.paid_by)}</td>
+          <td class="px-3 py-1.5 text-gray-500">${cell(x.note)}</td></tr>`)
+        .join("") +
+      `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="4">Total</td><td class="px-3 py-2 text-right">${opsFmt(data.total)}</td><td colspan="2"></td></tr>`
+    : `<tr><td colspan="7" class="text-sm text-gray-400 p-6 text-center">No expenses in ${data.year}.</td></tr>`;
+}
+document.getElementById("opExpYear").addEventListener("change", (e) => loadOperatingExpense(Number(e.target.value)));
+
+// ---------------------------------------------------------------------------
+// Master Sales - computed roll-ups
+// ---------------------------------------------------------------------------
+async function loadMasterSales() {
+  const body = document.getElementById("masterSalesBody");
+  let data;
+  try {
+    data = await opsApi("/api/ops/master");
+  } catch (err) {
+    opsLoadError(body, err);
+    return;
+  }
+  const num = (v, cls = "") => `<td class="px-3 py-1 text-right ${cls}">${opsFmt(v)}</td>`;
+  const profit = (v) => `<td class="px-3 py-1 text-right ${opsProfitClass(v)}">${opsFmt(v)}</td>`;
+  const card = (title, note, head, rows) => `
+    <div class="border border-gray-200 rounded-xl bg-white shadow-sm overflow-x-auto">
+      <div class="bg-brand-blue text-white px-4 py-2 rounded-t-xl"><p class="font-display font-semibold">${title}</p></div>
+      <table class="w-full text-sm"><thead><tr class="${opsHead} bg-gray-50 border-b border-gray-200">${head}</tr></thead>
+        <tbody class="divide-y divide-gray-100">${rows}</tbody></table>
+      ${note ? `<p class="text-[11px] text-gray-400 px-4 py-2 border-t border-gray-100">${note}</p>` : ""}
+    </div>`;
+  const th = (labels, left = 2) => labels.map((l, i) => `<th class="px-3 py-2 ${i < left ? "text-left" : "text-right"}">${l}</th>`).join("");
+
+  const years = [...new Set(data.months.map((m) => m.year))];
+  let life = [0, 0, 0];
+  const monthRows = years
+    .map((y) => {
+      const list = data.months.filter((m) => m.year === y);
+      const tot = [0, 0, 0];
+      const lines = list.map((m) => {
+        tot[0] += m.sales; tot[1] += m.gross_profit; tot[2] += m.opex;
+        return `<tr><td class="px-3 py-1 text-gray-400">${y}</td><td class="px-3 py-1">${OPS_MONTHS[m.month - 1]}</td>${num(m.sales)}${num(m.gross_profit)}${num(m.opex)}${profit(m.op_profit)}</tr>`;
+      });
+      life = life.map((v, i) => v + tot[i]);
+      return lines.join("") + `<tr class="font-semibold bg-gray-50"><td class="px-3 py-1.5">${y}</td><td class="px-3 py-1.5">Total</td>${num(tot[0])}${num(tot[1])}${num(tot[2])}${profit(tot[1] - tot[2])}</tr>`;
+    })
+    .join("");
+  const revenue = card(
+    "Metro Packaging Depot Revenue", "",
+    th(["Year", "Month", "Sales", "Gross Profit", "Operating Expense", "Operating Profit"]),
+    (monthRows || `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">Nothing logged yet.</td></tr>`) +
+      (years.length ? `<tr class="font-semibold border-t-2 border-gray-300"><td class="px-3 py-2" colspan="2">Lifetime Total</td>${num(life[0])}${num(life[1])}${num(life[2])}${profit(life[1] - life[2])}</tr>` : "")
+  );
+  const quarterly = card(
+    "Quarterly Report", "",
+    th(["Year", "Quarter", "Sales", "Gross Profit", "Monthly OpEx", "Ops Profit"]),
+    data.quarterly.map((q) => `<tr><td class="px-3 py-1 text-gray-400">${q.year}</td><td class="px-3 py-1">Q${q.quarter}</td>${num(q.sales)}${num(q.gross_profit)}${num(q.opex)}${profit(q.op_profit)}</tr>`).join("") ||
+      `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">Nothing logged yet.</td></tr>`
+  );
+  const lifeNet = data.annual.reduce((n, a) => n + a.net_profit, 0);
+  const annual = card(
+    "Annual Income Statement",
+    "COGS = Sales &minus; Gross Profit. OpEx/Asset is the year's Operating Expense list. Net Profit = Sales &minus; COGS &minus; Monthly OpEx &minus; OpEx/Asset.",
+    th(["Year", "Sales", "Monthly OpEx", "COGS", "OpEx/Asset", "Net Profit"], 1),
+    data.annual.map((a) => `<tr><td class="px-3 py-1 font-medium">${a.year}</td>${num(a.sales)}${num(a.opex)}${num(a.cogs)}${num(a.opex_asset)}${profit(a.net_profit)}</tr>`).join("") +
+      (data.annual.length ? `<tr class="font-semibold border-t-2 border-gray-300"><td class="px-3 py-2" colspan="5">Lifetime Net Profit</td>${profit(lifeNet)}</tr>` : "")
+  );
+  body.innerHTML = `${revenue}<div class="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">${quarterly}${annual}</div>`;
+}
+
+window.loadMasterSales = loadMasterSales;
+window.loadMonthlySales = loadMonthlySales;
+window.loadMonthlyOpex = loadMonthlyOpex;
+window.loadSuppliers = loadSuppliers;
+window.loadPurchaseOrders = loadPurchaseOrders;
+window.loadOperatingExpense = loadOperatingExpense;
+
+} // end has_ops_app guard
+
 // ---------------------------------------------------------------------------
 // App switching (Payroll & HRMS <-> Admin)
 //
@@ -5833,9 +7263,9 @@ const appMenu = document.getElementById("appMenu");
 const appLabel = document.getElementById("appLabel");
 const payrollLockModal = document.getElementById("payrollLockModal");
 
-const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", office: "Admin" };
+const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", office: "Admin", ops: "Operations" };
 // where each app opens: the first thing you want to see in it
-const APP_HOME = { payroll: "dashboard", admin: "status", office: "collections" };
+const APP_HOME = { payroll: "dashboard", admin: "status", office: "collections", ops: "masterSales" };
 
 let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't

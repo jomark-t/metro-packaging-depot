@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>{{ business_name }} — Monthly Schedule</title>
+<title>{{ business_name }}</title>
 <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='icons/favicon-32x32.png') }}" />
 <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='icons/favicon-16x16.png') }}" />
 <link rel="shortcut icon" href="{{ url_for('static', filename='icons/favicon.ico') }}" />
@@ -224,6 +224,21 @@
     padding: 0 .3rem; border-radius: 4px; transition: color .15s;
   }
   .cps-menu-btn:hover { color: #111827; background: #f3f4f6; }
+  /* One size for every table's column headings, app-wide (the printed
+     order sheet keeps its own) */
+  table:not(.print-lines) th { font-size: 12px !important; letter-spacing: .04em; }
+  /* Monthly Sales is meant to read like the spreadsheet it replaces: tight
+     rows, small type, a month on one screen. These beat the Tailwind
+     padding/size utilities the shared ops helpers put on every cell. */
+  #salesBody td, #salesBody th { white-space: nowrap; }
+  #salesBody table { font-size: 14px; border-collapse: collapse; }
+  #salesBody td, #salesBody th { border: 1px solid #e5e7eb; padding-top: 1px !important; padding-bottom: 1px !important; padding-left: 8px !important; padding-right: 8px !important; line-height: 22px; }
+  #salesBody input { height: 22px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 14px !important; line-height: 20px; }
+  #salesBody input[type="date"] { width: 8rem; }
+  #salesBody th { font-size: 12px !important; letter-spacing: .04em; text-align: center !important; font-weight: 600; padding-top: 9px !important; padding-bottom: 9px !important; }
+  #opexBody th { font-size: 12px !important; letter-spacing: .04em; }
+  #opexBody td, #opexBody th { white-space: nowrap; }
+  #salesBody .sales-head td { padding: 14px 16px !important; border-color: #1c33bb; }
 </style>
 </head>
 <body class="bg-[#F3F4F8] text-black" data-payroll-unlocked="{{ 1 if current_user.payroll_unlocked else 0 }}" data-superuser="{{ 1 if current_user.is_superuser else 0 }}">
@@ -272,6 +287,15 @@
           <span class="flex-1">
             <span class="block text-sm text-gray-900">Admin</span>
             <span class="block text-[11px] text-gray-400">Collections, expenses, stock</span>
+          </span>
+          <span class="app-tick text-brand-blue hidden">&#10003;</span>
+        </button>
+        {% endif %}
+        {% if current_user.has_ops_app %}
+        <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="ops">
+          <span class="flex-1">
+            <span class="block text-sm text-gray-900">Operations</span>
+            <span class="block text-[11px] text-gray-400">Sales, costs, purchase orders</span>
           </span>
           <span class="app-tick text-brand-blue hidden">&#10003;</span>
         </button>
@@ -372,7 +396,14 @@
       <button id="tabCollectionsBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Collections</button>
       <button id="tabExpensesBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Expenses</button>
       <button id="tabInventoryBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Inventory</button>
+      <button id="tabDiscountsBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Discounts</button>
       <button id="tabNotesBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Notes</button>
+      {% endif %}
+      {# Operations - the owners' books; superuser and co-owners only. #}
+      {% if current_user.has_ops_app %}
+      {% for tab_id, tab_label in [("tabMasterSalesBtn", "Master Sales"), ("tabMonthlySalesBtn", "Monthly Sales"), ("tabMonthlyOpexBtn", "Monthly OpEx"), ("tabSuppliersBtn", "Supplier"), ("tabPurchaseOrdersBtn", "Purchase Order"), ("tabOperatingExpenseBtn", "Operating Expense"), ("tabCapitalExpenseBtn", "Capital Expense")] %}
+      <button id="{{ tab_id }}" data-app="ops" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">{{ tab_label }}</button>
+      {% endfor %}
       {% endif %}
       {# The audit trail spans everyone's pay and login changes, including
          the managers' own - superuser only. #}
@@ -1138,6 +1169,7 @@
         <thead>
           <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
             <th class="text-left px-3 py-2">Date</th>
+            <th class="text-left px-3 py-2">Item</th>
             <th class="text-left px-3 py-2">Category</th>
             <th class="text-left px-3 py-2">Description</th>
             <th class="text-right px-3 py-2">Amount</th>
@@ -1176,6 +1208,99 @@
     </div>
   </div>
 
+  <div id="expenseModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-3">Add an expense</h3>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Item</span>
+        <input id="expenseItem" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="What was bought" />
+      </label>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Date</span>
+          <input id="expenseDate" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Amount</span>
+          <input id="expenseAmount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Category</span>
+          <input id="expenseCategory" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Paid by</span>
+          <input id="expensePaidBy" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Description <span class="text-gray-400">(optional)</span></span>
+        <input id="expenseDescription" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+      </label>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Note <span class="text-gray-400">(optional)</span></span>
+        <input id="expenseNote" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+      </label>
+      <p id="expenseError" class="text-xs text-red-600 mb-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-3">
+        <button id="expenseCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="expenseSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="discountsView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Discounts</h2>
+        <p id="discountsSubtitle" class="text-sm text-gray-500">Special prices by client.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input id="discountsSearch" type="search" placeholder="Search clients or items…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+        <button id="discountAddBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ Add</button>
+      </div>
+    </div>
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm max-w-3xl">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+            <th class="text-left px-3 py-2">Client</th>
+            <th class="text-left px-3 py-2">Item</th>
+            <th class="text-right px-3 py-2">Price / discount</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody id="discountsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="discountModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-3">Add a special price</h3>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Client <span class="text-gray-400">(a new name adds the client)</span></span>
+        <input id="discountClient" list="discountClientList" autocomplete="off" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Type a client's name" />
+        <datalist id="discountClientList"></datalist>
+      </label>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Item</span>
+        <input id="discountItem" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. PET 16oz" />
+      </label>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Price / discount</span>
+        <input id="discountValue" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. 3.80 or 10% off" />
+      </label>
+      <p id="discountError" class="text-xs text-red-600 mb-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-3">
+        <button id="discountCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="discountSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div id="notesView" style="display:none">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
@@ -1187,6 +1312,225 @@
     <div id="notesList" class="flex flex-col gap-3"></div>
   </div>
   {% endif %}
+
+  {# Operations app - the owners' books. Superuser + co-owners only (the
+     server enforces it on every /api/ops route; this guard just keeps the
+     markup out of everyone else's page). Co-owners get the same views with
+     the editing controls switched off in script.js. #}
+  {% if current_user.has_ops_app %}
+  <div id="masterSalesView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Master Sales</h2>
+        <p class="text-sm text-gray-500">Revenue, quarterly and annual roll-up - worked out from Monthly Sales and OpEx.</p>
+      </div>
+    </div>
+    <div id="masterSalesBody" class="flex flex-col gap-6"></div>
+  </div>
+
+  <div id="monthlySalesView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Monthly Sales <span class="ops-viewonly hidden align-middle text-[10px] uppercase tracking-wide font-mono text-gray-400 border border-gray-300 rounded px-1.5 py-0.5 ml-1">View only</span></h2>
+        <p id="salesSubtitle" class="text-sm text-gray-500">Every day of every month, laid out and ready.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="salesYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
+        <button id="salesAddDay" class="border border-gray-300 bg-white text-sm font-semibold px-3 py-2 rounded-lg hover:border-brand-blue hover:text-brand-blue transition whitespace-nowrap">Today</button>
+      </div>
+    </div>
+    <div id="salesChips" class="flex items-start border-b border-gray-200 mb-3 max-w-full overflow-x-auto"></div>
+    <div id="salesBody" class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm max-w-7xl"></div>
+  </div>
+
+  <div id="monthlyOpexView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Monthly OpEx <span class="ops-viewonly hidden align-middle text-[10px] uppercase tracking-wide font-mono text-gray-400 border border-gray-300 rounded px-1.5 py-0.5 ml-1">View only</span></h2>
+        <p class="text-sm text-gray-500">Rent, salary, utilities and the like, month by month.</p>
+      </div>
+      <select id="opexYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
+    </div>
+    <div id="opexBody" class="flex flex-col gap-5"></div>
+  </div>
+
+  <div id="suppliersView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Supplier <span class="ops-viewonly hidden align-middle text-[10px] uppercase tracking-wide font-mono text-gray-400 border border-gray-300 rounded px-1.5 py-0.5 ml-1">View only</span></h2>
+        <p class="text-sm text-gray-500">Who we buy from.</p>
+      </div>
+      <button id="supplierAddBtn" class="ops-edit-only bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ Add supplier</button>
+    </div>
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm max-w-3xl">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+            <th class="text-left px-3 py-2">Supplier</th>
+            <th class="text-left px-3 py-2">Location</th>
+            <th class="text-left px-3 py-2">Product</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody id="suppliersBody" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="purchaseOrdersView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Purchase Order <span class="ops-viewonly hidden align-middle text-[10px] uppercase tracking-wide font-mono text-gray-400 border border-gray-300 rounded px-1.5 py-0.5 ml-1">View only</span></h2>
+        <p class="text-sm text-gray-500">What we've ordered from suppliers, and what's been paid.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="poYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
+        <button id="poAddBtn" class="ops-edit-only bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ New PO</button>
+      </div>
+    </div>
+    <div id="poKpis" class="grid grid-cols-3 gap-2 mb-4 max-w-xl"></div>
+    <div class="flex flex-col xl:flex-row gap-5 items-start">
+      <div id="poBody" class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm w-full xl:flex-1 min-w-0"></div>
+      <div id="poMonthly" class="border border-gray-200 rounded-xl bg-white shadow-sm w-full xl:w-64 shrink-0"></div>
+    </div>
+  </div>
+
+  <div id="operatingExpenseView" style="display:none">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Operating Expense</h2>
+        <p id="opExpSubtitle" class="text-sm text-gray-500">The same list as Admin &rsaquo; Expenses.</p>
+      </div>
+      <select id="opExpYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
+    </div>
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+            <th class="text-left px-3 py-2">Date</th>
+            <th class="text-left px-3 py-2">Item</th>
+            <th class="text-left px-3 py-2">Category</th>
+            <th class="text-left px-3 py-2">Description</th>
+            <th class="text-right px-3 py-2">Amount</th>
+            <th class="text-left px-3 py-2">Paid by</th>
+            <th class="text-left px-3 py-2">Note</th>
+          </tr>
+        </thead>
+        <tbody id="opExpBody" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+    <p class="text-xs text-gray-400 mt-2">Read-only here - add or change expenses from Admin &rsaquo; Expenses and they show up in both places.</p>
+  </div>
+
+  <div id="capitalExpenseView" style="display:none">
+    <div class="mb-4">
+      <h2 class="font-display font-semibold text-xl leading-tight">Capital Expense</h2>
+      <p class="text-sm text-gray-500">Machines, molds and other assets.</p>
+    </div>
+    <div class="border border-dashed border-gray-300 rounded-xl bg-white p-8 text-center max-w-xl">
+      <p class="text-sm text-gray-600">This list is waiting on its sheet.</p>
+      <p class="text-xs text-gray-400 mt-1">Send the Capital Expense tab from the Google Sheet and its columns will be built to match.</p>
+    </div>
+  </div>
+
+  {# One month's report card - built to be screenshotted. Filled by openSalesSummary(). #}
+  <div id="salesSummaryModal" class="fixed inset-0 bg-black/50 z-50 hidden items-start sm:items-center justify-center p-4 overflow-y-auto">
+    <div id="salesSummaryCard" class="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-xl my-4"></div>
+  </div>
+
+  <div id="supplierModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-3">Add a supplier</h3>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Name</span>
+        <input id="supplierName" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+      </label>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Location <span class="text-gray-400">(optional)</span></span>
+          <input id="supplierLocation" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Product <span class="text-gray-400">(optional)</span></span>
+          <input id="supplierProduct" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <p id="supplierError" class="text-xs text-red-600 mb-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-3">
+        <button id="supplierCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="supplierSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="poModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-3">New purchase order</h3>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Supplier <span class="text-gray-400">(a new name adds the supplier)</span></span>
+        <input id="poSupplier" list="poSupplierList" autocomplete="off" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        <datalist id="poSupplierList"></datalist>
+      </label>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Order date</span>
+          <input id="poDateInput" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Amount</span>
+          <input id="poAmountInput" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Transaction no <span class="text-gray-400">(blank = next number)</span></span>
+        <input id="poTxn" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. 2026-0140" />
+      </label>
+      <p id="poError" class="text-xs text-red-600 mb-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-3">
+        <button id="poCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="poSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="poPayModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-xs p-5">
+      <h3 id="poPayTitle" class="font-display font-semibold text-lg leading-tight mb-3">Log a payment</h3>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Date</span>
+          <input id="poPayDate" type="date" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+        <label class="text-sm">
+          <span class="text-xs text-gray-500 block mb-1">Amount</span>
+          <input id="poPayAmount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        </label>
+      </div>
+      <p id="poPayError" class="text-xs text-red-600 mb-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-3">
+        <button id="poPayCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="poPaySave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Delete confirmation - see confirmDialog() in script.js #}
+  <div id="confirmModal" class="fixed inset-0 bg-black/50 z-[60] hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <div class="flex items-start gap-3">
+        <span class="w-9 h-9 rounded-full bg-red-50 text-red-600 grid place-items-center shrink-0 text-lg leading-none">&#9888;</span>
+        <div class="min-w-0">
+          <h3 id="confirmTitle" class="font-display font-semibold text-lg leading-tight"></h3>
+          <p id="confirmMessage" class="text-sm text-gray-600 mt-1"></p>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button id="confirmCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="confirmOk" type="button" class="bg-red-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-red-700 transition">Delete</button>
+      </div>
+    </div>
+  </div>
 
   {# Client details, opened from a client name on any card. #}
   <div id="printScrim" class="fixed inset-0 bg-black/40 z-40 hidden"></div>
