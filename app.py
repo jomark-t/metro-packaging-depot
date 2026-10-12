@@ -7,6 +7,8 @@ Then open: http://127.0.0.1:5000
 """
 
 import calendar
+import csv
+import io
 import os
 import re
 import secrets
@@ -684,6 +686,9 @@ def init_db():
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
+    # what the shop itself took off the shelf (StoreHub "MPD Usage"); it is part
+    # of Sales but was never paid for, so it explains Sales - payments
+    cur.execute("ALTER TABLE ops_sales_days ADD COLUMN IF NOT EXISTS own_use NUMERIC(12,2) NOT NULL DEFAULT 0")
     cur.execute(
         """CREATE TABLE IF NOT EXISTS ops_monthly_opex (
             id SERIAL PRIMARY KEY,
@@ -4989,7 +4994,7 @@ def api_office_note_attachment_delete(note_id):
 # superuser_required. Routes live under /api/ops/.
 # ---------------------------------------------------------------------------
 
-OPS_SALES_NUMBERS = ("sales", "gross_profit", "cash", "gcash", "bank", "po")
+OPS_SALES_NUMBERS = ("sales", "gross_profit", "cash", "gcash", "bank", "po", "own_use")
 OPS_OPEX_FIELDS = (
     "rent", "salary", "electric", "water", "internet", "rent_tax_bookkeeper", "govt_contribution", "misc",
 )
@@ -5064,7 +5069,7 @@ def api_ops_sales():
     years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
 
     cur.execute(
-        """SELECT id, sale_date, sales, gross_profit, cash, gcash, bank, po, collected_date, note
+        """SELECT id, sale_date, sales, gross_profit, cash, gcash, bank, po, own_use, collected_date, note
            FROM ops_sales_days WHERE EXTRACT(YEAR FROM sale_date) = %s
            ORDER BY sale_date""",
         (year,),
@@ -5145,10 +5150,10 @@ def api_ops_sales_bulk():
     for r in parsed:
         cur.execute(
             """INSERT INTO ops_sales_days
-                 (sale_date, sales, gross_profit, cash, gcash, bank, po, collected_date, note)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 (sale_date, sales, gross_profit, cash, gcash, bank, po, own_use, collected_date, note)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (sale_date) DO NOTHING""",
-            (r["sale_date"], r["sales"], r["gross_profit"], r["cash"], r["gcash"], r["bank"], r["po"],
+            (r["sale_date"], r["sales"], r["gross_profit"], r["cash"], r["gcash"], r["bank"], r["po"], r["own_use"],
              r["collected_date"], r["note"]),
         )
         if cur.rowcount:
@@ -5161,6 +5166,121 @@ def api_ops_sales_bulk():
     )
     db.commit()
     return jsonify({"status": "ok", "created": created, "skipped": skipped})
+
+
+def _storehub_parse(text):
+    """One StoreHub "Transactions" export -> one figure set per day.
+
+    Sales is the receipt Total (already net of discounts), own-use receipts
+    (MPD Usage) included - that is how the books have always counted it.
+    Own use is also reported on its own, since nobody pays for it. Cancelled
+    receipts are left out. Payments go to the matching column: Cash, GCash, BPI as Bank, P.O. as
+    PO; a card or cheque counts as Bank, since that is where it lands."""
+    rows = list(csv.reader(io.StringIO(text)))
+    header = rows[0] if rows else []
+    if "Time" not in header or "Total" not in header or "Is_Cancelled" not in header:
+        raise ValueError("That doesn't look like a StoreHub transactions export.")
+    idx = {}
+    for i, h in enumerate(header):  # "Employee" appears twice - the first one is the cashier
+        idx.setdefault(h, i)
+
+    def num(r, name):
+        i = idx.get(name)
+        v = r[i].strip() if i is not None and i < len(r) else ""
+        try:
+            return float(v) if v else 0.0
+        except ValueError:
+            return 0.0
+
+    days = {}
+    for r in rows[1:]:
+        if not r or not r[idx["Time"]].strip():
+            continue
+        try:
+            day = datetime.strptime(r[idx["Time"]].strip(), "%m/%d/%Y %H:%M").date().isoformat()
+        except ValueError:
+            raise ValueError(f"Couldn't read the date '{r[idx['Time']]}'.")
+        d = days.setdefault(
+            day,
+            {"date": day, "receipts": 0, "sales": 0.0, "cash": 0.0, "gcash": 0.0, "bank": 0.0, "po": 0.0,
+             "card_cheque": 0.0, "discounts": 0.0, "own_use": 0.0, "own_use_receipts": 0, "cancelled": 0, "cancelled_amount": 0.0},
+        )
+        total = num(r, "Total")
+        if r[idx["Is_Cancelled"]].strip() == "True":
+            d["cancelled"] += 1
+            d["cancelled_amount"] += total
+            continue
+        if num(r, "MPD Usage") or num(r, "Usage (Deleted)"):
+            d["own_use"] += total
+            d["own_use_receipts"] += 1
+        d["receipts"] += 1
+        d["sales"] += total
+        d["discounts"] += num(r, "Discount")
+        d["cash"] += num(r, "Cash")
+        d["gcash"] += num(r, "GCash")
+        d["bank"] += num(r, "BPI")
+        d["po"] += num(r, "P.O.")
+        d["card_cheque"] += num(r, "Credit Card") + num(r, "Debit Card") + num(r, "Check")
+    out = []
+    for day in sorted(days):
+        d = days[day]
+        d["bank"] += d["card_cheque"]
+        out.append({k: (round(v, 2) if isinstance(v, float) else v) for k, v in d.items()})
+    return out
+
+
+@app.route("/api/ops/sales/storehub", methods=["POST"])
+@superuser_required
+def api_ops_sales_storehub():
+    """Fill Monthly Sales from a StoreHub export. Without apply=1 it only
+    reports what would change. A day already in the table has its Sales,
+    payment split and Own Use replaced by the POS figures; its Gross Profit, collected
+    date and note are never touched (the export carries no cost data)."""
+    upload = request.files.get("file")
+    if upload is None:
+        return _ops_error("Choose the StoreHub CSV first.")
+    try:
+        parsed = _storehub_parse(upload.read().decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        return _ops_error(exc)
+    if not parsed:
+        return _ops_error("There are no transactions in that file.")
+    apply = request.form.get("apply") == "1"
+
+    db = get_db()
+    cur = db.cursor()
+    changed = 0
+    for d in parsed:
+        cur.execute(
+            "SELECT id, sales, cash, gcash, bank, po, own_use FROM ops_sales_days WHERE sale_date=%s", (d["date"],)
+        )
+        row = cur.fetchone()
+        new_vals = (d["sales"], d["cash"], d["gcash"], d["bank"], d["po"], d["own_use"])
+        if row is None:
+            d["status"] = "new"
+        else:
+            old_vals = tuple(float(row[k]) for k in ("sales", "cash", "gcash", "bank", "po", "own_use"))
+            d["was"] = {"sales": old_vals[0], "cash": old_vals[1], "gcash": old_vals[2], "bank": old_vals[3], "po": old_vals[4], "own_use": old_vals[5]}
+            d["status"] = "same" if all(abs(a - b) < 0.005 for a, b in zip(old_vals, new_vals)) else "update"
+        if apply and d["status"] != "same":
+            if row is None:
+                cur.execute(
+                    "INSERT INTO ops_sales_days (sale_date, sales, cash, gcash, bank, po, own_use) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    (d["date"], *new_vals),
+                )
+            else:
+                cur.execute(
+                    "UPDATE ops_sales_days SET sales=%s, cash=%s, gcash=%s, bank=%s, po=%s, own_use=%s, updated_at=NOW() WHERE id=%s",
+                    (*new_vals, row["id"]),
+                )
+            changed += 1
+    if apply:
+        record_audit(
+            cur, "Imported StoreHub sales", f"{parsed[0]['date']} to {parsed[-1]['date']}",
+            {"days": len(parsed), "changed": changed},
+        )
+        db.commit()
+    return jsonify({"status": "ok", "applied": apply, "changed": changed, "days": parsed})
 
 
 @app.route("/api/ops/sales/<int:day_id>", methods=["POST"])

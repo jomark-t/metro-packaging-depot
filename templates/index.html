@@ -1355,6 +1355,8 @@
         <p id="salesSubtitle" class="text-sm text-gray-500">Every day of every month, laid out and ready.</p>
       </div>
       <div class="flex items-center gap-2">
+        <button id="salesImportBtn" type="button" class="ops-edit-only border border-gray-300 bg-white text-sm font-semibold px-3 py-2 rounded-lg hover:border-brand-blue hover:text-brand-blue transition whitespace-nowrap">Import StoreHub</button>
+        <input id="salesImportFile" type="file" accept=".csv,text/csv" class="hidden" />
         <select id="salesYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
         <button id="salesAddDay" class="border border-gray-300 bg-white text-sm font-semibold px-3 py-2 rounded-lg hover:border-brand-blue hover:text-brand-blue transition whitespace-nowrap">Today</button>
       </div>
@@ -1495,6 +1497,20 @@
   {# One month's report card - built to be screenshotted. Filled by openSalesSummary(). #}
   <div id="salesSummaryModal" class="fixed inset-0 bg-black/50 z-50 hidden items-start sm:items-center justify-center p-4 overflow-y-auto">
     <div id="salesSummaryCard" class="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-xl my-4"></div>
+  </div>
+
+  {# Fill Monthly Sales from a StoreHub export - see the import block in script.js #}
+  <div id="storehubModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-3xl p-5 max-h-[90vh] overflow-y-auto">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-1">Import from StoreHub</h3>
+      <p id="storehubFile" class="text-xs text-gray-500 mb-3"></p>
+      <div id="storehubPreview"></div>
+      <p id="storehubError" class="text-xs text-red-600 mt-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-4">
+        <button id="storehubCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="storehubGo" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Import</button>
+      </div>
+    </div>
   </div>
 
   <div id="supplierModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">

@@ -6393,8 +6393,8 @@ let opsSales = { year: null, years: [], days: [], opex: {} };
 let salesMonth = null;
 let salesMonthYear = null;
 const salesHasData = {};
-const SALES_FIELDS = ["sales", "gross_profit", "cash", "gcash", "bank", "po"];
-const SALES_LABELS = { sales: "Sales", gross_profit: "Gross Profit", cash: "Cash", gcash: "Gcash", bank: "Bank", po: "PO" };
+const SALES_FIELDS = ["sales", "gross_profit", "cash", "gcash", "bank", "po", "own_use"];
+const SALES_LABELS = { sales: "Sales", gross_profit: "Gross Profit", cash: "Cash", gcash: "Gcash", bank: "Bank", po: "PO", own_use: "Own Use" };
 
 function salesIsoToday() {
   const t = new Date();
@@ -6432,7 +6432,8 @@ async function loadMonthlySales(year) {
 // day is out by. Blank until a channel has been filled in.
 function salesDiscrepancy(d) {
   const channels = d.cash + d.gcash + d.bank + d.po;
-  return channels > 0 ? Math.round((d.sales - channels) * 100) / 100 : null;
+  // what the shop took for its own use is part of Sales but nobody paid for it
+  return channels > 0 ? Math.round((d.sales - channels - (d.own_use || 0)) * 100) / 100 : null;
 }
 
 function salesDiscText(v) {
@@ -6447,7 +6448,7 @@ function salesDiscClass(v) {
 
 function salesMismatch(d) {
   const channels = d.cash + d.gcash + d.bank + d.po;
-  return channels > 0 && d.sales !== 0 && Math.abs(d.sales - channels) > 0.5;
+  return channels > 0 && d.sales !== 0 && Math.abs(d.sales - channels - (d.own_use || 0)) > 0.5;
 }
 
 function renderSales() {
@@ -6509,7 +6510,7 @@ function renderSales() {
       continue;
     }
     const bad = salesMismatch(d);
-    dayRows += `<tr data-day="${d.id}" data-row-date="${iso}" class="${bad ? "bg-amber-50" : isToday ? "bg-blue-50" : ""}" ${bad ? 'title="Cash + Gcash + Bank + PO doesn\'t add up to Sales"' : ""}>
+    dayRows += `<tr data-day="${d.id}" data-row-date="${iso}" class="${bad ? "bg-amber-50" : isToday ? "bg-blue-50" : ""}" ${bad ? 'title="Cash + Gcash + Bank + PO + Own Use doesn\'t add up to Sales"' : ""}>
       <td class="px-3 py-1 whitespace-nowrap">${opsDayLabel(d.sale_date)}${d.note ? ` <span class="text-[10px] text-gray-400 italic">${escapeHtml(d.note)}</span>` : ""}</td>
       ${SALES_FIELDS.map((f) => `<td class="px-3 py-1">${opsNum(d[f] || null, `data-day="${d.id}" data-f="${f}"`, "", true)}</td>`).join("")}
       <td class="px-3 py-1 whitespace-nowrap">${opsDate(d.collected_date, `data-day="${d.id}" data-f="collected_date"`)}</td>
@@ -6524,7 +6525,7 @@ function renderSales() {
 
   body.innerHTML = `<table class="w-full min-w-[44rem]"><tbody>
     <tr class="bg-brand-blue text-white sales-head">
-      <td colspan="10" class="px-3 py-2">
+      <td colspan="11" class="px-3 py-2">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <span class="inline-flex items-center gap-3">
             <span class="font-display font-semibold text-2xl">${OPS_MONTHS[m - 1]} ${year}</span>
@@ -6658,6 +6659,105 @@ document.getElementById("salesChips").addEventListener("click", (e) => {
   renderSales();
 });
 document.getElementById("salesYear").addEventListener("change", (e) => loadMonthlySales(Number(e.target.value)));
+// Import a StoreHub "Transactions" export: the server reads the file and
+// reports what each day would become; nothing is saved until Import is pressed.
+let storehubFile = null;
+
+async function storehubSend(apply) {
+  const form = new FormData();
+  form.append("file", storehubFile);
+  form.append("apply", apply ? "1" : "0");
+  const res = await fetch("/api/ops/sales/storehub", { method: "POST", body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || "That didn't work.");
+  return data;
+}
+
+function renderStorehubPreview(data) {
+  const money = (v) => (v ? opsFmt(v) : "&mdash;");
+  const todayIso = salesIsoToday();
+  const badge = {
+    new: `<span class="text-xs rounded-full px-2 py-0.5 bg-green-100 text-green-700">New</span>`,
+    update: `<span class="text-xs rounded-full px-2 py-0.5 bg-amber-100 text-amber-700">Replaces</span>`,
+    same: `<span class="text-xs rounded-full px-2 py-0.5 bg-gray-100 text-gray-500">Already there</span>`,
+  };
+  const rows = data.days
+    .map((d) => {
+      const notes = [];
+      if (d.status === "update") notes.push(`was ${printMoney(d.was.sales)}${d.was.own_use ? ` + ${printMoney(d.was.own_use)} own use` : ""}`);
+      if (d.own_use) notes.push(`${d.own_use_receipts} own-use receipt${d.own_use_receipts === 1 ? "" : "s"} (${printMoney(d.own_use)}) counted in Sales`);
+      if (d.cancelled) notes.push(`${d.cancelled} cancelled receipt${d.cancelled === 1 ? "" : "s"} (${printMoney(d.cancelled_amount)}) left out`);
+      if (d.card_cheque) notes.push(`${printMoney(d.card_cheque)} card/cheque counted as Bank`);
+      if (d.date === todayIso) notes.push("today - may not be complete");
+      return `<tr class="border-b border-gray-100">
+        <td class="py-1.5 pr-3 whitespace-nowrap font-medium">${opsDateLabel(d.date)}</td>
+        <td class="py-1.5 pr-3 text-right text-gray-500">${d.receipts}</td>
+        <td class="py-1.5 pr-3 text-right font-medium">${opsFmt(d.sales)}</td>
+        <td class="py-1.5 pr-3 text-right">${money(d.cash)}</td>
+        <td class="py-1.5 pr-3 text-right">${money(d.gcash)}</td>
+        <td class="py-1.5 pr-3 text-right">${money(d.bank)}</td>
+        <td class="py-1.5 pr-3 text-right">${money(d.po)}</td>
+        <td class="py-1.5 pr-3 text-right">${money(d.own_use)}</td>
+        <td class="py-1.5">${badge[d.status]}</td>
+        <td class="py-1.5 pl-3 text-xs text-gray-400">${notes.join(" &middot; ")}</td></tr>`;
+    })
+    .join("");
+  const total = data.days.reduce((n, d) => n + d.sales, 0);
+  const touching = data.days.filter((d) => d.status !== "same").length;
+  document.getElementById("storehubPreview").innerHTML = `
+    <table class="w-full text-sm">
+      <thead><tr class="${opsHead} border-b border-gray-200">
+        <th class="text-left py-1.5 pr-3">Day</th><th class="text-right py-1.5 pr-3">Receipts</th><th class="text-right py-1.5 pr-3">Sales</th>
+        <th class="text-right py-1.5 pr-3">Cash</th><th class="text-right py-1.5 pr-3">Gcash</th><th class="text-right py-1.5 pr-3">Bank</th><th class="text-right py-1.5 pr-3">PO</th><th class="text-right py-1.5 pr-3">Own Use</th>
+        <th class="text-left py-1.5"></th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p class="text-sm mt-3"><b>${data.days.length}</b> day${data.days.length === 1 ? "" : "s"}, <b>${printMoney(total)}</b> in sales.
+      ${touching ? `${touching} will be added or changed.` : "Everything is already in Monthly Sales."}
+      <span class="text-gray-400">Gross profit, collected dates and notes are left as they are.</span></p>`;
+  const go = document.getElementById("storehubGo");
+  go.disabled = !touching;
+  go.classList.toggle("opacity-50", !touching);
+  go.textContent = touching ? `Import ${touching} day${touching === 1 ? "" : "s"}` : "Nothing to import";
+}
+
+document.getElementById("salesImportBtn").addEventListener("click", () => document.getElementById("salesImportFile").click());
+document.getElementById("salesImportFile").addEventListener("change", async (e) => {
+  storehubFile = e.target.files[0];
+  e.target.value = "";
+  if (!storehubFile) return;
+  document.getElementById("storehubFile").textContent = storehubFile.name;
+  document.getElementById("storehubError").classList.add("hidden");
+  document.getElementById("storehubPreview").innerHTML = `<p class="text-sm text-gray-400">Reading the file&hellip;</p>`;
+  opsOpenModal("storehubModal");
+  try {
+    renderStorehubPreview(await storehubSend(false));
+  } catch (err) {
+    document.getElementById("storehubPreview").innerHTML = "";
+    document.getElementById("storehubGo").disabled = true;
+    const el = document.getElementById("storehubError");
+    el.textContent = err.message;
+    el.classList.remove("hidden");
+  }
+});
+document.getElementById("storehubCancel").addEventListener("click", () => opsCloseModal("storehubModal"));
+document.getElementById("storehubGo").addEventListener("click", async () => {
+  const go = document.getElementById("storehubGo");
+  go.disabled = true;
+  try {
+    const data = await storehubSend(true);
+    opsCloseModal("storehubModal");
+    const last = data.days[data.days.length - 1].date;
+    salesMonth = Number(last.slice(5, 7));
+    salesMonthYear = Number(last.slice(0, 4));
+    await loadMonthlySales(salesMonthYear);
+  } catch (err) {
+    const el = document.getElementById("storehubError");
+    el.textContent = err.message;
+    el.classList.remove("hidden");
+    go.disabled = false;
+  }
+});
+
 document.getElementById("salesAddDay").addEventListener("click", async () => {
   const today = salesIsoToday();
   const year = Number(today.slice(0, 4));
