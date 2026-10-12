@@ -8303,8 +8303,11 @@ let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't
 // re-prompt, and an expired one does
 // The superuser never has to unlock payroll, so the flag is sticky for
-// them - leaving the app must not arm the PIN prompt again.
-const payrollAlwaysUnlocked = document.body.dataset.superuser === "1";
+// them - leaving the app must not arm the PIN prompt again. The same goes
+// for a co-owner (an outside account, not a manager): their payroll is
+// read-only and the server never asks them for a PIN.
+const payrollAlwaysUnlocked =
+  document.body.dataset.superuser === "1" || (!IS_MANAGER && !CURRENT_USER.staff_name);
 let payrollUnlocked = payrollAlwaysUnlocked || document.body.dataset.payrollUnlocked === "1";
 let pendingApp = null; // the app to enter once the PIN lands
 
