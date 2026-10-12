@@ -732,6 +732,22 @@ def init_db():
             amount NUMERIC(12,2) NOT NULL
         )"""
     )
+    # a payroll cutoff marked as credited: its total feeds Monthly OpEx's Salary
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS payroll_credits (
+            pay_date DATE PRIMARY KEY,
+            total NUMERIC(12,2) NOT NULL,
+            credited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            credited_by TEXT
+        )"""
+    )
+    # what was bought, the 2025 sheet's box count and delivery date, how a
+    # supplier is paid (on order, or in installments), and a note on a payment
+    cur.execute("ALTER TABLE ops_purchase_orders ADD COLUMN IF NOT EXISTS description TEXT")
+    cur.execute("ALTER TABLE ops_purchase_orders ADD COLUMN IF NOT EXISTS boxes INTEGER")
+    cur.execute("ALTER TABLE ops_purchase_orders ADD COLUMN IF NOT EXISTS delivery_date DATE")
+    cur.execute("ALTER TABLE ops_suppliers ADD COLUMN IF NOT EXISTS terms TEXT")
+    cur.execute("ALTER TABLE ops_po_payments ADD COLUMN IF NOT EXISTS note TEXT")
 
     cur.execute(
         """CREATE TABLE IF NOT EXISTS office_inventory_items (
@@ -4944,12 +4960,22 @@ def _ops_error(exc, status=400):
     return jsonify({"status": "error", "message": str(exc)}), status
 
 
-def _ops_year_arg(default_years):
-    """?year= if it is a sane integer, else the latest year with data."""
+def _ops_years_and_year(data_years):
+    """The years a page offers, and the one it opens on. Years with data are
+    always there; so is the current year even before its first entry, and
+    from December the coming year too, so the new year is ready to fill in
+    the moment the old one ends. It opens on the current year unless ?year=
+    asks for another."""
+    today = date.today()
+    years = set(data_years) | {today.year}
+    if today.month == 12:
+        years.add(today.year + 1)
     try:
-        return int(request.args.get("year"))
+        year = int(request.args.get("year"))
     except (TypeError, ValueError):
-        return default_years[0] if default_years else date.today().year
+        year = today.year
+    years.add(year)
+    return sorted(years, reverse=True), year
 
 
 def _ops_money_row(row, keys):
@@ -4970,10 +4996,7 @@ def api_ops_sales():
                UNION SELECT year AS y FROM ops_monthly_opex) t
            ORDER BY y DESC"""
     )
-    years = [r["y"] for r in cur.fetchall()]
-    year = _ops_year_arg(years)
-    if year not in years:
-        years = sorted(set(years + [year]), reverse=True)
+    years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
 
     cur.execute(
         """SELECT id, sale_date, sales, gross_profit, cash, gcash, bank, po, collected_date, note
@@ -5138,10 +5161,7 @@ def api_ops_monthly_opex():
                UNION SELECT EXTRACT(YEAR FROM sale_date)::int FROM ops_sales_days) t
            ORDER BY y DESC"""
     )
-    years = [r["y"] for r in cur.fetchall()]
-    year = _ops_year_arg(years)
-    if year not in years:
-        years = sorted(set(years + [year]), reverse=True)
+    years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
 
     months = {m: {"month": m} for m in range(1, 13)}
     cur.execute("SELECT * FROM ops_monthly_opex WHERE year=%s", (year,))
@@ -5271,8 +5291,20 @@ def api_ops_electric_set():
 @owner_required
 def api_ops_suppliers():
     cur = get_db().cursor()
-    cur.execute("SELECT id, name, location, product FROM ops_suppliers ORDER BY LOWER(name)")
-    return jsonify({"suppliers": [dict(r) for r in cur.fetchall()]})
+    cur.execute(
+        """SELECT s.id, s.name, s.location, s.product, s.terms,
+                  COALESCE((SELECT SUM(amount) FROM ops_purchase_orders WHERE supplier_id = s.id), 0) AS ordered,
+                  COALESCE((SELECT SUM(p.amount) FROM ops_po_payments p
+                            JOIN ops_purchase_orders po ON po.id = p.po_id
+                            WHERE po.supplier_id = s.id), 0) AS paid
+           FROM ops_suppliers s ORDER BY LOWER(s.name)"""
+    )
+    suppliers = []
+    for r in cur.fetchall():
+        d = _ops_money_row(r, ("ordered", "paid"))
+        d["balance"] = round(d["ordered"] - d["paid"], 2)
+        suppliers.append(d)
+    return jsonify({"suppliers": suppliers})
 
 
 @app.route("/api/ops/suppliers", methods=["POST"])
@@ -5288,8 +5320,11 @@ def api_ops_supplier_create():
     if cur.fetchone():
         return _ops_error(f"There is already a supplier called {name}.")
     cur.execute(
-        "INSERT INTO ops_suppliers (name, location, product) VALUES (%s,%s,%s) RETURNING id",
-        (name, (data.get("location") or "").strip() or None, (data.get("product") or "").strip() or None),
+        "INSERT INTO ops_suppliers (name, location, product, terms) VALUES (%s,%s,%s,%s) RETURNING id",
+        (
+            name, (data.get("location") or "").strip() or None, (data.get("product") or "").strip() or None,
+            (data.get("terms") or "").strip() or None,
+        ),
     )
     new_id = cur.fetchone()["id"]
     record_audit(cur, "Added a supplier", name)
@@ -5301,7 +5336,7 @@ def api_ops_supplier_create():
 @superuser_required
 def api_ops_supplier_update(supplier_id):
     data = request.get_json(force=True)
-    updates = {f: (data[f] or "").strip() or None for f in ("name", "location", "product") if f in data}
+    updates = {f: (data[f] or "").strip() or None for f in ("name", "location", "product", "terms") if f in data}
     if "name" in updates and not updates["name"]:
         return _ops_error("A supplier needs a name.")
     if not updates:
@@ -5364,14 +5399,11 @@ def api_ops_purchase_orders():
     cur.execute(
         "SELECT DISTINCT EXTRACT(YEAR FROM order_date)::int AS y FROM ops_purchase_orders ORDER BY y DESC"
     )
-    years = [r["y"] for r in cur.fetchall()]
-    year = _ops_year_arg(years)
-    if year not in years:
-        years = sorted(set(years + [year]), reverse=True)
+    years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
 
     cur.execute(
         """SELECT po.id, po.txn_no, po.order_date, po.supplier_id, s.name AS supplier,
-                  po.amount, po.updated_at
+                  po.description, po.boxes, po.delivery_date, po.amount, po.updated_at
            FROM ops_purchase_orders po JOIN ops_suppliers s ON s.id = po.supplier_id
            WHERE EXTRACT(YEAR FROM po.order_date) = %s
            ORDER BY po.order_date, po.txn_no""",
@@ -5381,18 +5413,19 @@ def api_ops_purchase_orders():
     for r in cur.fetchall():
         p = _ops_money_row(r, ("amount",))
         p["order_date"] = p["order_date"].isoformat()
+        p["delivery_date"] = p["delivery_date"].isoformat() if p["delivery_date"] else None
         p["updated_at"] = p["updated_at"].isoformat() if p["updated_at"] else None
         p["payments"] = []
         pos.append(p)
     by_id = {p["id"]: p for p in pos}
     if by_id:
         cur.execute(
-            "SELECT id, po_id, pay_date, amount FROM ops_po_payments WHERE po_id = ANY(%s) ORDER BY pay_date, id",
+            "SELECT id, po_id, pay_date, amount, note FROM ops_po_payments WHERE po_id = ANY(%s) ORDER BY pay_date, id",
             (list(by_id),),
         )
         for r in cur.fetchall():
             by_id[r["po_id"]]["payments"].append(
-                {"id": r["id"], "pay_date": r["pay_date"].isoformat(), "amount": float(r["amount"])}
+                {"id": r["id"], "pay_date": r["pay_date"].isoformat(), "amount": float(r["amount"]), "note": r["note"]}
             )
     monthly = {}
     for p in pos:
@@ -5444,11 +5477,31 @@ def api_ops_po_create():
     if cur.fetchone():
         return _ops_error(f"Transaction {txn_no} already exists.")
     cur.execute(
-        """INSERT INTO ops_purchase_orders (txn_no, order_date, supplier_id, amount)
-           VALUES (%s,%s,%s,%s) RETURNING id""",
-        (txn_no, order_date, supplier_id, amount),
+        """INSERT INTO ops_purchase_orders (txn_no, order_date, supplier_id, amount, description)
+           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+        (txn_no, order_date, supplier_id, amount, (data.get("description") or "").strip() or None),
     )
     new_id = cur.fetchone()["id"]
+    # settled when ordered (the usual case), or a part paid up front
+    paid_amount = amount if data.get("paid") else None
+    if paid_amount is None and str(data.get("paid_amount") or "").strip():
+        try:
+            paid_amount = _ops_num(data.get("paid_amount"), "Amount paid")
+            if not 0 < paid_amount <= amount:
+                raise ValueError("Amount paid must be more than zero and no more than the order.")
+        except ValueError as exc:
+            db.rollback()
+            return _ops_error(exc)
+    if paid_amount:
+        try:
+            paid_date = _ops_date(data.get("paid_date"), "Payment date", blank_ok=True) or order_date
+        except ValueError as exc:
+            db.rollback()
+            return _ops_error(exc)
+        cur.execute(
+            "INSERT INTO ops_po_payments (po_id, pay_date, amount, note) VALUES (%s,%s,%s,%s)",
+            (new_id, paid_date, paid_amount, "Paid on order" if data.get("paid") else None),
+        )
     record_audit(cur, "Added a purchase order", txn_no, {"amount": amount})
     db.commit()
     return jsonify({"status": "ok", "id": new_id, "txn_no": txn_no})
@@ -5474,6 +5527,13 @@ def api_ops_po_update(po_id):
                 raise ValueError("Amount must be more than zero.")
         if "supplier" in data:
             updates["supplier_id"] = _ops_supplier_id(cur, data["supplier"])
+        if "description" in data:
+            updates["description"] = (data["description"] or "").strip() or None
+        if "boxes" in data:
+            raw = data["boxes"]
+            updates["boxes"] = int(raw) if str(raw or "").strip() else None
+        if "delivery_date" in data:
+            updates["delivery_date"] = _ops_date(data["delivery_date"], "Delivery date", blank_ok=True)
         if "txn_no" in data:
             txn_no = (data["txn_no"] or "").strip()
             if not txn_no:
@@ -5526,14 +5586,134 @@ def api_ops_po_payment_create(po_id):
     if row is None:
         return _ops_error("No such purchase order.", 404)
     cur.execute(
-        "INSERT INTO ops_po_payments (po_id, pay_date, amount) VALUES (%s,%s,%s) RETURNING id",
-        (po_id, pay_date, amount),
+        "INSERT INTO ops_po_payments (po_id, pay_date, amount, note) VALUES (%s,%s,%s,%s) RETURNING id",
+        (po_id, pay_date, amount, (data.get("note") or "").strip() or None),
     )
     new_id = cur.fetchone()["id"]
     cur.execute("UPDATE ops_purchase_orders SET updated_at=NOW() WHERE id=%s", (po_id,))
     record_audit(cur, "Logged a PO payment", row["txn_no"], {"amount": amount})
     db.commit()
     return jsonify({"status": "ok", "id": new_id})
+
+
+@app.route("/api/ops/suppliers/<int:supplier_id>/pay", methods=["POST"])
+@superuser_required
+def api_ops_supplier_pay(supplier_id):
+    """One payment to a supplier, applied to its unpaid purchase orders
+    oldest first and split into one payment row per PO. This is how a lump
+    sum against several POs gets recorded without doing the arithmetic by
+    hand; a payment can never exceed what is still owed."""
+    data = request.get_json(force=True)
+    try:
+        pay_date = _ops_date(data.get("pay_date"), "Payment date")
+        amount = _ops_num(data.get("amount"), "Amount")
+        if amount <= 0:
+            raise ValueError("Amount must be more than zero.")
+    except ValueError as exc:
+        return _ops_error(exc)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM ops_suppliers WHERE id=%s", (supplier_id,))
+    supplier = cur.fetchone()
+    if supplier is None:
+        return _ops_error("No such supplier.", 404)
+    cur.execute(
+        """SELECT po.id, po.txn_no, po.amount - COALESCE(SUM(p.amount), 0) AS balance
+           FROM ops_purchase_orders po LEFT JOIN ops_po_payments p ON p.po_id = po.id
+           WHERE po.supplier_id = %s
+           GROUP BY po.id ORDER BY po.order_date, po.txn_no""",
+        (supplier_id,),
+    )
+    open_pos = [(r["id"], r["txn_no"], float(r["balance"])) for r in cur.fetchall() if r["balance"] > 0]
+    owed = round(sum(b for _, _, b in open_pos), 2)
+    if amount > owed + 0.005:
+        return _ops_error(f"{supplier['name']} is only owed {owed:,.2f}.")
+    left = amount
+    applied = []
+    for po_id, txn_no, balance in open_pos:
+        if left <= 0.004:
+            break
+        part = round(min(left, balance), 2)
+        cur.execute(
+            "INSERT INTO ops_po_payments (po_id, pay_date, amount, note) VALUES (%s,%s,%s,%s)",
+            (po_id, pay_date, part, "Applied oldest first"),
+        )
+        cur.execute("UPDATE ops_purchase_orders SET updated_at=NOW() WHERE id=%s", (po_id,))
+        applied.append({"txn_no": txn_no, "amount": part})
+        left = round(left - part, 2)
+    record_audit(cur, "Paid a supplier", supplier["name"], {"amount": amount, "applied_to": applied})
+    db.commit()
+    return jsonify({"status": "ok", "applied": applied})
+
+
+@app.route("/api/ops/purchase-orders/bulk", methods=["POST"])
+@superuser_required
+def api_ops_po_bulk():
+    """Load many purchase orders at once (the spreadsheet import). A
+    transaction number that already exists is skipped, never overwritten.
+    `dry_run` reports what would happen without saving anything."""
+    data = request.get_json(force=True)
+    pos = data.get("pos") or []
+    dry_run = bool(data.get("dry_run"))
+    if not isinstance(pos, list) or not pos:
+        return _ops_error("Nothing to import.")
+    db = get_db()
+    cur = db.cursor()
+    created = skipped = payments = 0
+    new_suppliers = set()
+    cur.execute("SELECT LOWER(name) AS n FROM ops_suppliers")
+    known = {r["n"] for r in cur.fetchall()}
+    try:
+        for i, po in enumerate(pos, 1):
+            txn_no = (po.get("txn_no") or "").strip()
+            if not txn_no:
+                raise ValueError(f"Row {i} has no transaction number.")
+            order_date = _ops_date(po.get("order_date"), f"Row {i} order date")
+            amount = _ops_num(po.get("amount"), f"Row {i} amount")
+            delivery = _ops_date(po.get("delivery_date"), f"Row {i} delivery date", blank_ok=True)
+            boxes = int(po["boxes"]) if str(po.get("boxes") or "").strip() else None
+            cur.execute("SELECT 1 FROM ops_purchase_orders WHERE txn_no=%s", (txn_no,))
+            if cur.fetchone():
+                skipped += 1
+                continue
+            name = (po.get("supplier") or "").strip()
+            if not name:
+                raise ValueError(f"Row {i} has no supplier.")
+            if name.lower() not in known:
+                new_suppliers.add(name)
+                known.add(name.lower())
+            supplier_id = _ops_supplier_id(cur, name)
+            cur.execute(
+                """INSERT INTO ops_purchase_orders
+                     (txn_no, order_date, supplier_id, amount, description, boxes, delivery_date)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (txn_no, order_date, supplier_id, amount, (po.get("description") or "").strip() or None, boxes, delivery),
+            )
+            po_id = cur.fetchone()["id"]
+            created += 1
+            for pay in po.get("payments") or []:
+                cur.execute(
+                    "INSERT INTO ops_po_payments (po_id, pay_date, amount, note) VALUES (%s,%s,%s,%s)",
+                    (
+                        po_id, _ops_date(pay.get("pay_date"), f"Row {i} payment date"),
+                        _ops_num(pay.get("amount"), f"Row {i} payment"), (pay.get("note") or "").strip() or None,
+                    ),
+                )
+                payments += 1
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        return _ops_error(exc)
+    if dry_run:
+        db.rollback()
+    else:
+        record_audit(cur, "Imported purchase orders", f"{created} orders", {"payments": payments, "skipped": skipped})
+        db.commit()
+    return jsonify(
+        {
+            "status": "ok", "dry_run": dry_run, "created": created, "skipped": skipped,
+            "payments": payments, "new_suppliers": sorted(new_suppliers),
+        }
+    )
 
 
 @app.route("/api/ops/po-payments/<int:payment_id>", methods=["POST"])
@@ -5599,10 +5779,7 @@ def api_ops_operating_expenses():
     cur.execute(
         "SELECT DISTINCT EXTRACT(YEAR FROM expense_date)::int AS y FROM office_expenses ORDER BY y DESC"
     )
-    years = [r["y"] for r in cur.fetchall()]
-    year = _ops_year_arg(years)
-    if year not in years:
-        years = sorted(set(years + [year]), reverse=True)
+    years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
     cur.execute(
         """SELECT id, expense_date, item, category, description, amount, paid_by, note
            FROM office_expenses WHERE EXTRACT(YEAR FROM expense_date) = %s
@@ -6445,6 +6622,88 @@ def api_payroll_save():
     )
     db.commit()
     return jsonify({"status": "ok"})
+
+
+def _payroll_cutoff_from_request(data):
+    year, month, payday = int(data.get("year")), int(data.get("month")), int(data.get("payday"))
+    if payday not in (10, 25) or not 1 <= month <= 12:
+        raise ValueError("That isn't a real payroll cutoff.")
+    return (year, month, payday, *payroll_period_range(year, month, payday))
+
+
+@app.route("/api/payroll/credited")
+@payroll_view_required
+def api_payroll_credited_state():
+    try:
+        year, month, payday, start, end, pay_date = _payroll_cutoff_from_request(request.args)
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    cur = get_db().cursor()
+    cur.execute("SELECT total, credited_at, credited_by FROM payroll_credits WHERE pay_date=%s", (pay_date,))
+    row = cur.fetchone()
+    return jsonify(
+        {
+            "credited": row is not None,
+            "total": float(row["total"]) if row else None,
+            "credited_at": row["credited_at"].isoformat() if row else None,
+            "credited_by": row["credited_by"] if row else None,
+        }
+    )
+
+
+@app.route("/api/payroll/credited", methods=["POST"])
+@superuser_required
+def api_payroll_credited():
+    """"Payroll credited": this cutoff's total net pay is what went into
+    people's accounts, so it counts toward Salary in Monthly OpEx. A month's
+    Salary is the total of every credited cutoff paid in that month (the
+    10th and the 25th). Pressing it again after a correction refreshes the
+    figure. `dry_run` reports the effect without saving anything."""
+    data = request.get_json(force=True)
+    try:
+        year, month, payday, start, end, pay_date = _payroll_cutoff_from_request(data)
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    dry_run = bool(data.get("dry_run"))
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT COUNT(*) AS c FROM payroll_extras WHERE pay_date=%s", (pay_date.isoformat(),))
+    if cur.fetchone()["c"] == 0:
+        return jsonify({"status": "error", "message": "Save this cutoff's payroll first - until then the figures are only an estimate."}), 400
+
+    payroll = compute_payroll(db, start, end, pay_date)
+    total = round(sum(p["net_pay"] for p in payroll["staff"]), 2)
+
+    cur.execute(
+        "SELECT COALESCE(SUM(total), 0) AS t FROM payroll_credits "
+        "WHERE EXTRACT(YEAR FROM pay_date)=%s AND EXTRACT(MONTH FROM pay_date)=%s AND pay_date<>%s",
+        (year, month, pay_date),
+    )
+    month_salary = round(float(cur.fetchone()["t"]) + total, 2)
+    cur.execute("SELECT salary FROM ops_monthly_opex WHERE year=%s AND month=%s", (year, month))
+    existing = cur.fetchone()
+    current_salary = float(existing["salary"]) if existing and existing["salary"] is not None else None
+
+    if dry_run:
+        return jsonify({"status": "ok", "dry_run": True, "total": total, "month_salary": month_salary, "current_salary": current_salary})
+
+    cur.execute(
+        """INSERT INTO payroll_credits (pay_date, total, credited_by) VALUES (%s,%s,%s)
+           ON CONFLICT (pay_date) DO UPDATE SET total=EXCLUDED.total, credited_at=NOW(), credited_by=EXCLUDED.credited_by""",
+        (pay_date, total, session.get("display_name")),
+    )
+    cur.execute(
+        """INSERT INTO ops_monthly_opex (year, month, salary) VALUES (%s,%s,%s)
+           ON CONFLICT (year, month) DO UPDATE SET salary=EXCLUDED.salary, updated_at=NOW()""",
+        (year, month, month_salary),
+    )
+    record_audit(
+        cur, "Payroll credited", f"pay date {pay_date}",
+        {"cutoff_total": total, "salary_for_month": month_salary, "was": current_salary},
+    )
+    db.commit()
+    return jsonify({"status": "ok", "total": total, "month_salary": month_salary, "current_salary": current_salary})
 
 
 @app.route("/api/payroll/pdf")
