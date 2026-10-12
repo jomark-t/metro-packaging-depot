@@ -240,6 +240,11 @@
   /* Monthly Sales is meant to read like the spreadsheet it replaces: tight
      rows, small type, a month on one screen. These beat the Tailwind
      padding/size utilities the shared ops helpers put on every cell. */
+  /* Employees for a co-owner: read-only, so nothing that saves is offered */
+  .hr-view-only .save-employee-btn, .hr-view-only .archive-employee-btn, .hr-view-only .restore-employee-btn,
+  .hr-view-only .add-advance-btn, .hr-view-only .delete-advance-btn, .hr-view-only .photo-input,
+  .hr-view-only label[title="Upload photo"], .hr-view-only .advance-status,
+  .hr-view-only .advance-list-wrap + .grid, .hr-view-only .advance-list-wrap + .grid + div, .hr-view-only .advance-list-wrap + .grid + div + p { display: none; }
   #salesBody td, #salesBody th { white-space: nowrap; }
   #salesBody table { font-size: 14px; border-collapse: collapse; }
   #salesBody td, #salesBody th { border: 1px solid #e5e7eb; padding-top: 1px !important; padding-bottom: 1px !important; padding-left: 8px !important; padding-right: 8px !important; line-height: 22px; }
@@ -358,7 +363,7 @@
       <button id="tabScheduleBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Schedule</button>
       {# Time Off is for people who take it or approve it - an outside
          viewer has neither a schedule nor a say. #}
-      {% if current_user.staff_name or current_user.is_manager %}
+      {% if current_user.staff_name or current_user.is_manager or current_user.can_view_payroll %}
       <button id="tabLeaveBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">
         Time Off<span id="pendingLeaveBadge" class="ml-1.5 hidden bg-brand-green text-white text-[10px] font-bold rounded-full px-1.5 py-0.5"></span>
       </button>
@@ -379,8 +384,9 @@
       {% if current_user.staff_name and not current_user.is_manager %}
       <button id="tabMyInfoBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">My Details</button>
       {% endif %}
-      {# Employee records (addresses, bank details, IDs) stay manager-only. #}
-      {% if current_user.is_manager %}
+      {# Employee records (addresses, bank details, IDs): managers edit them,
+         a co-owner with payroll access can look but not touch. #}
+      {% if current_user.is_manager or current_user.can_view_payroll %}
       <button id="tabEmployeesBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Employees</button>
       {% endif %}
       {# Cup printing - the order book for the printing side of the shop.
@@ -1805,7 +1811,7 @@
       </div>
       <label class="inline-flex items-center gap-2 text-sm mt-3">
         <input type="checkbox" id="newAdminPayroll" class="rounded border-gray-300 text-brand-blue focus:ring-brand-blue" />
-        Can view payroll (read-only)
+        Can view everything (read-only)
       </label>
       <div class="flex items-center gap-3 mt-4 flex-wrap">
         <button id="saveNewAdminBtn" class="bg-brand-green text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition disabled:opacity-60">Add person</button>

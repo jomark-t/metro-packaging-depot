@@ -403,6 +403,9 @@ def init_db():
     # FALSE: read-only everywhere, Dashboard and Schedule by default, and
     # the Payroll tab only if this flag is switched on for them.
     cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS can_view_payroll BOOLEAN NOT NULL DEFAULT FALSE")
+    # a co-owner promoted to superuser from the Admin screen - told apart from
+    # the original owner, who can't be edited or removed there
+    cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS full_access BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS note TEXT")
     cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
 
@@ -2023,6 +2026,41 @@ def payroll_unlocked():
 
 
 @app.before_request
+def _refresh_role():
+    """Read the superuser flag fresh on every request, so promoting or
+    demoting a co-owner takes effect at once instead of at their next
+    login (and a removed account stops working immediately)."""
+    uid = session.get("user_id")
+    if uid is None or request.path.startswith("/static"):
+        return None
+    cur = get_db().cursor()
+    cur.execute("SELECT is_superuser FROM app_users WHERE id=%s", (uid,))
+    row = cur.fetchone()
+    if row is None:
+        session.clear()
+        return None
+    session["is_superuser"] = bool(row["is_superuser"])
+    return None
+
+
+# Signing out and the payroll lock/unlock change nothing in the books, so a
+# view-only account keeps them
+VIEW_ONLY_ALLOWED_PATHS = ("/logout", "/api/payroll/unlock", "/api/payroll/lock")
+
+
+@app.before_request
+def _guard_view_only():
+    """A co-owner without full access can look at everything and change
+    nothing. One rule here covers every write route, present and future,
+    rather than a check in each of them."""
+    if request.method in ("GET", "HEAD", "OPTIONS") or "user_id" not in session:
+        return None
+    if request.path in VIEW_ONLY_ALLOWED_PATHS or not is_coowner_viewer():
+        return None
+    return jsonify({"status": "error", "message": "This account is view-only."}), 403
+
+
+@app.before_request
 def _guard_payroll():
     """Refuse payroll and employee data until the PIN has been re-entered.
 
@@ -2104,6 +2142,12 @@ def can_view_payroll():
     return bool(row and row["can_view_payroll"])
 
 
+def is_coowner_viewer():
+    """A co-owner account that has not been given full access: sees every
+    app, edits none of them."""
+    return is_outside_viewer() and can_view_payroll()
+
+
 def payroll_view_required(view):
     """Reading payroll figures. Saving them stays superuser-only."""
 
@@ -2111,6 +2155,22 @@ def payroll_view_required(view):
     @login_required
     def wrapped(*args, **kwargs):
         if not can_view_payroll():
+            return jsonify({"status": "error", "message": "Not allowed"}), 403
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def hr_view_required(view):
+    """Reading employee records, advances and leave. A manager, or an outside
+    account switched on for payroll (a co-owner): Payroll and HRMS are one
+    area, so seeing one means seeing the other. Every write stays
+    manager_required, so for a co-owner this is view-only."""
+
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not (is_manager() or can_view_payroll()):
             return jsonify({"status": "error", "message": "Not allowed"}), 403
         return view(*args, **kwargs)
 
@@ -2335,7 +2395,8 @@ def index():
     # money, so unlike Cup Printing it defaults to off for everyone but a
     # manager, and is granted per-person rather than blanket.
     has_cup_printing_app = True if (manager or outside_viewer) else access["can_access_cup_printing_app"]
-    has_office_app = True if manager else access["can_access_admin_app"]
+    view_only = is_coowner_viewer()
+    has_office_app = True if (manager or view_only) else access["can_access_admin_app"]
     has_ops_app = is_owner()
 
     current_user = {
@@ -2343,6 +2404,7 @@ def index():
         "is_superuser": session.get("is_superuser"),
         "is_manager": manager,
         "is_outside_viewer": outside_viewer,
+        "is_view_only": view_only,
         "can_view_payroll": can_view_payroll(),
         "has_cup_printing_app": has_cup_printing_app,
         "has_office_app": has_office_app,
@@ -2375,7 +2437,7 @@ STAFF_INTEGER_FIELDS = {"target", "pto_entitlement"}
 
 
 @app.route("/api/staff")
-@manager_required
+@hr_view_required
 def api_staff_list():
     db = get_db()
     cur = db.cursor()
@@ -2753,7 +2815,7 @@ def api_my_details_update():
 
 
 @app.route("/api/staff/<name>/advances")
-@manager_required
+@hr_view_required
 def api_staff_advances(name):
     """This person's cash advance ledger and what's still outstanding."""
     if name not in roster_by_name():
@@ -2875,8 +2937,8 @@ def api_staff_pto(name):
     if name not in staff_by_name:
         return jsonify({"status": "error", "message": "Unknown staff member"}), 400
     # a staff member may see their own balance (they need it to request
-    # leave); everyone else's is manager-only
-    if not is_manager() and session.get("staff_name") != name:
+    # leave); everyone else's is for managers and co-owners
+    if not (is_manager() or can_view_payroll()) and session.get("staff_name") != name:
         return jsonify({"status": "error", "message": "Not allowed"}), 403
 
     year = int(request.args.get("year") or date.today().year)
@@ -2955,10 +3017,10 @@ def _leave_rows(cur, staff_name=None, status=None, limit=200):
 @app.route("/api/leave/requests")
 @login_required
 def api_leave_requests():
-    """Managers see everyone's; a staff member sees only their own."""
+    """Managers and co-owners see everyone's; a staff member sees only their own."""
     db = get_db()
     cur = db.cursor()
-    if is_manager():
+    if is_manager() or (not session.get("staff_name") and can_view_payroll()):
         staff_name = request.args.get("name") or None
     else:
         staff_name = session.get("staff_name")
@@ -6520,10 +6582,10 @@ def api_dashboard():
 # ---------------------------------------------------------------------------
 def _outside_account_rows(cur):
     cur.execute(
-        """SELECT id, display_name, login_enabled, can_view_payroll, note, created_at,
+        """SELECT id, display_name, login_enabled, can_view_payroll, full_access, note, created_at,
                   (pin_hash IS NOT NULL) AS has_pin, locked_until
            FROM app_users
-           WHERE staff_name IS NULL AND NOT is_superuser
+           WHERE staff_name IS NULL AND (NOT is_superuser OR full_access)
            ORDER BY display_name"""
     )
     return [
@@ -6532,6 +6594,7 @@ def _outside_account_rows(cur):
             "display_name": r["display_name"],
             "login_enabled": r["login_enabled"],
             "can_view_payroll": r["can_view_payroll"],
+            "full_access": r["full_access"],
             "note": r["note"],
             "has_pin": r["has_pin"],
             "locked": bool(r["locked_until"] and r["locked_until"] > datetime.now()),
@@ -6591,8 +6654,8 @@ def api_admin_update_user(user_id):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT id, display_name, login_enabled, can_view_payroll FROM app_users "
-        "WHERE id=%s AND staff_name IS NULL AND NOT is_superuser",
+        "SELECT id, display_name, login_enabled, can_view_payroll, full_access FROM app_users "
+        "WHERE id=%s AND staff_name IS NULL AND (NOT is_superuser OR full_access)",
         (user_id,),
     )
     row = cur.fetchone()
@@ -6610,6 +6673,13 @@ def api_admin_update_user(user_id):
         if value != row["can_view_payroll"]:
             changes["can_view_payroll"] = {"from": row["can_view_payroll"], "to": value}
         cur.execute("UPDATE app_users SET can_view_payroll=%s WHERE id=%s", (value, user_id))
+    if "full_access" in data:
+        value = bool(data["full_access"])
+        if value != row["full_access"]:
+            if user_id == session.get("user_id"):
+                return jsonify({"status": "error", "message": "You can't change your own access."}), 400
+            changes["full_access"] = {"from": row["full_access"], "to": value}
+            cur.execute("UPDATE app_users SET full_access=%s, is_superuser=%s WHERE id=%s", (value, value, user_id))
     if "note" in data:
         cur.execute("UPDATE app_users SET note=%s WHERE id=%s", ((data.get("note") or "").strip() or None, user_id))
 
@@ -6637,12 +6707,14 @@ def api_admin_delete_user(user_id):
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT display_name FROM app_users WHERE id=%s AND staff_name IS NULL AND NOT is_superuser",
+        "SELECT display_name FROM app_users WHERE id=%s AND staff_name IS NULL AND (NOT is_superuser OR full_access)",
         (user_id,),
     )
     row = cur.fetchone()
     if row is None:
         return jsonify({"status": "error", "message": "Account not found"}), 404
+    if user_id == session.get("user_id"):
+        return jsonify({"status": "error", "message": "You can't remove your own account."}), 400
     cur.execute("DELETE FROM app_users WHERE id=%s", (user_id,))
     record_audit(cur, "Deleted outside account", row["display_name"])
     db.commit()

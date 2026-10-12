@@ -9,6 +9,8 @@ const CURRENT_USER = window.CURRENT_USER || {
 const IS_SUPERUSER = !!CURRENT_USER.is_superuser;
 // Superuser or Clare - the only roles that get Payroll and Employees.
 const IS_MANAGER = !!CURRENT_USER.is_manager;
+// A co-owner opens Employees and Time Off to look, never to change
+const HR_VIEW_ONLY = !IS_MANAGER && !CURRENT_USER.staff_name && !!CURRENT_USER.can_view_payroll;
 
 const userMenuBtn = document.getElementById("userMenuBtn");
 const userMenu = document.getElementById("userMenu");
@@ -1156,8 +1158,12 @@ async function loadAdminUsers() {
               Can log in
             </label>
             <label class="inline-flex items-center gap-2">
-              <input type="checkbox" class="admin-payroll rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${u.can_view_payroll ? "checked" : ""} />
-              Can view payroll
+              <input type="checkbox" class="admin-payroll rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${u.can_view_payroll || u.full_access ? "checked" : ""} ${u.full_access ? "disabled" : ""} />
+              Can view everything (read-only)
+            </label>
+            <label class="inline-flex items-center gap-2" title="Same powers as the owner: add, edit and delete everything, and manage these accounts.">
+              <input type="checkbox" class="admin-full rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${u.full_access ? "checked" : ""} />
+              Full access (superuser)
             </label>
           </div>
         </div>
@@ -1184,6 +1190,7 @@ async function loadAdminUsers() {
         body: JSON.stringify({
           login_enabled: card.querySelector(".admin-enabled").checked,
           can_view_payroll: card.querySelector(".admin-payroll").checked,
+          full_access: card.querySelector(".admin-full").checked,
           ...(pin ? { pin } : {}),
         }),
       });
@@ -1193,6 +1200,21 @@ async function loadAdminUsers() {
         return;
       }
       await loadAdminUsers();
+    });
+
+    // switching full access on is a big step - make it a deliberate one
+    const fullBox = card.querySelector(".admin-full");
+    fullBox.addEventListener("change", async () => {
+      const name = card.querySelector(".font-display").textContent.trim();
+      if (fullBox.checked) {
+        const ok = await confirmDialog(
+          `${name} will be able to add, edit and delete everything in the app, including payroll, and manage these accounts. Press Save to apply it.`,
+          { title: "Give full access?", confirmLabel: "Give full access" }
+        );
+        if (!ok) fullBox.checked = false;
+      }
+      card.querySelector(".admin-payroll").disabled = fullBox.checked;
+      if (fullBox.checked) card.querySelector(".admin-payroll").checked = true;
     });
 
     card.querySelector(".admin-delete").addEventListener("click", async () => {
@@ -1396,6 +1418,16 @@ async function initLeaveTab() {
   leaveStartInput.value = today;
   leaveEndInput.value = today;
 
+  if (HR_VIEW_ONLY) {
+    // no one to file for and nothing to decide: just the list of everyone's requests
+    leaveView.querySelector("section").style.display = "none";
+    leaveView.firstElementChild.style.gridTemplateColumns = "1fr";
+    leaveListTitle.textContent = "All requests";
+    leaveStatusFilter.addEventListener("change", loadLeaveRequests);
+    loadLeaveRequests();
+    return;
+  }
+
   // The superuser isn't a staff member, so he can only file on someone's
   // behalf - the picker is the only way for him to use this form at all.
   if (IS_MANAGER) {
@@ -1509,7 +1541,7 @@ function leaveRowHtml(r, canDecide) {
     actions = `
       <button type="button" class="leave-approve-btn text-[11px] font-semibold bg-brand-green text-white rounded-md px-2.5 py-1 hover:brightness-95" data-id="${r.id}">Approve</button>
       <button type="button" class="leave-deny-btn text-[11px] font-semibold bg-white text-red-600 border border-red-200 rounded-md px-2.5 py-1 hover:bg-red-50 ml-1" data-id="${r.id}">Deny</button>`;
-  } else if (r.status === "pending") {
+  } else if (r.status === "pending" && !HR_VIEW_ONLY) {
     actions = `<button type="button" class="leave-cancel-btn text-[11px] text-gray-500 underline" data-id="${r.id}">Withdraw</button>`;
   } else if (r.decided_by) {
     actions = `<span class="text-[11px] text-gray-400">by ${escapeHtml(r.decided_by)}</span>`;
@@ -2619,6 +2651,7 @@ function renderEmployees() {
 
   employeesGrid.querySelectorAll("[data-name]").forEach((card) => {
     const name = card.dataset.name;
+    if (HR_VIEW_ONLY) card.classList.add("hr-view-only");
     card.querySelector(".save-employee-btn").addEventListener("click", () => saveEmployee(card, name));
     const photoInput = card.querySelector(".photo-input");
     photoInput.addEventListener("change", () => uploadEmployeePhoto(card, name, photoInput));
@@ -2662,6 +2695,13 @@ function renderEmployees() {
     if (archiveBtn) archiveBtn.addEventListener("click", () => archiveEmployee(card, name));
     const restoreBtn = card.querySelector(".restore-employee-btn");
     if (restoreBtn) restoreBtn.addEventListener("click", () => restoreEmployee(card, name));
+
+    if (HR_VIEW_ONLY) {
+      // everything on the card is for reading; only the Paid Time Off year picker still works
+      card.querySelectorAll("input, textarea, select").forEach((el) => {
+        if (!el.classList.contains("pto-year-select")) el.disabled = true;
+      });
+    }
   });
 }
 
@@ -8371,6 +8411,15 @@ window.fetch = async function (...args) {
   if (res.status === 423) {
     payrollUnlocked = false;
     openPayrollLock();
+  }
+  // a view-only account (a co-owner without full access) can open everything
+  // and change nothing; the server refuses every write and this says so
+  if (res.status === 403 && CURRENT_USER.is_view_only) {
+    const el = document.createElement("div");
+    el.textContent = "This account is view-only - nothing was changed.";
+    el.className = "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-gray-900 text-white text-sm rounded-lg px-4 py-2 shadow-lg";
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
   }
   return res;
 };
