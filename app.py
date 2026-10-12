@@ -658,6 +658,13 @@ def init_db():
     )
     # what was bought - the expense's headline; description became optional
     cur.execute("ALTER TABLE office_expenses ADD COLUMN IF NOT EXISTS item TEXT")
+    # 'operating' (used up) or 'capital' (assets that last: machines, molds,
+    # renovation, fixtures). Both stay in the one list; the type splits them.
+    cur.execute("ALTER TABLE office_expenses ADD COLUMN IF NOT EXISTS expense_type TEXT NOT NULL DEFAULT 'operating'")
+    # depreciation of a capital item: how long it lasts and what it is worth
+    # at the end. NULL life means "use the category's default".
+    cur.execute("ALTER TABLE office_expenses ADD COLUMN IF NOT EXISTS life_months INTEGER")
+    cur.execute("ALTER TABLE office_expenses ADD COLUMN IF NOT EXISTS salvage_value NUMERIC(12,2) NOT NULL DEFAULT 0")
 
     # Operations app (owners only) - daily sales, monthly operating costs,
     # supplier purchase orders. Money is NUMERIC; every table is additive.
@@ -4132,6 +4139,57 @@ def api_print_client_create():
     return jsonify({"status": "ok", "id": client_id})
 
 
+@app.route("/api/print/clients/<int:client_id>/merge", methods=["POST"])
+@superuser_required
+def api_print_client_merge(client_id):
+    """Fold a duplicate client into another: every order, collection,
+    agreed price, discount and payment moves to the client kept, details the
+    kept client is missing are copied over, and the duplicate is removed."""
+    data = request.get_json(force=True)
+    try:
+        into_id = int(data.get("into_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Pick the client to keep."}), 400
+    if into_id == client_id:
+        return jsonify({"status": "error", "message": "That is the same client."}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM print_clients WHERE id=%s", (client_id,))
+    dup = cur.fetchone()
+    cur.execute("SELECT * FROM print_clients WHERE id=%s", (into_id,))
+    keep = cur.fetchone()
+    if dup is None or keep is None:
+        return jsonify({"status": "error", "message": "No such client."}), 404
+
+    moved = {}
+    # a price agreed for the same product on both sides: the kept client's wins
+    cur.execute(
+        """DELETE FROM print_client_prices WHERE client_id=%s AND product_id IN
+             (SELECT product_id FROM print_client_prices WHERE client_id=%s)""",
+        (client_id, into_id),
+    )
+    for table in ("print_client_prices", "print_client_discounts", "print_orders", "print_payments", "purchase_orders"):
+        cur.execute(f"UPDATE {table} SET client_id=%s WHERE client_id=%s", (into_id, client_id))
+        moved[table] = cur.rowcount
+
+    fill = {}
+    for field in ("primary_contact", "secondary_contact", "phone", "email", "instagram", "facebook",
+                  "trade_name", "tax_id", "logo_filename", "notes"):
+        if not keep.get(field) and dup.get(field):
+            fill[field] = dup[field]
+    if dup.get("is_discounted") and not keep.get("is_discounted"):
+        fill["is_discounted"] = True
+    if fill:
+        sets = ", ".join(f"{f}=%s" for f in fill)
+        cur.execute(f"UPDATE print_clients SET {sets} WHERE id=%s", (*fill.values(), into_id))
+
+    cur.execute("DELETE FROM print_clients WHERE id=%s", (client_id,))
+    record_audit(cur, "Merged clients", f"{dup['name']} into {keep['name']}", {"moved": moved, "copied": list(fill)})
+    db.commit()
+    return jsonify({"status": "ok", "kept": keep["name"], "moved": moved})
+
+
 @app.route("/api/print/clients/<int:client_id>/discounts", methods=["POST"])
 @login_required
 def api_print_client_discount_create(client_id):
@@ -4493,7 +4551,8 @@ def api_purchase_order_payment_delete(payment_id):
 
 
 OFFICE_EXPENSE_REQUIRED = {"item": "Item", "category": "Category", "paid_by": "Paid by"}
-OFFICE_EXPENSE_FIELDS = ("expense_date", "item", "category", "description", "amount", "paid_by", "note")
+OFFICE_EXPENSE_FIELDS = ("expense_date", "item", "category", "description", "amount", "paid_by", "note", "expense_type")
+EXPENSE_TYPES = ("operating", "capital")
 
 
 @app.route("/api/office/expenses")
@@ -4537,13 +4596,16 @@ def api_office_expense_create():
     for field, label in OFFICE_EXPENSE_REQUIRED.items():
         if not (data.get(field) or "").strip():
             return jsonify({"status": "error", "message": f"{label} is required."}), 400
+    expense_type = (data.get("expense_type") or "operating").strip()
+    if expense_type not in EXPENSE_TYPES:
+        return jsonify({"status": "error", "message": "Type must be operating or capital."}), 400
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
         """INSERT INTO office_expenses
-             (expense_date, item, category, description, amount, paid_by, note, created_by)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+             (expense_date, item, category, description, amount, paid_by, note, expense_type, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (
             expense_date,
             data["item"].strip(),
@@ -4552,6 +4614,7 @@ def api_office_expense_create():
             amount,
             (data.get("paid_by") or "").strip() or None,
             (data.get("note") or "").strip() or None,
+            expense_type,
             session.get("display_name") or "Unknown",
         ),
     )
@@ -4587,6 +4650,8 @@ def api_office_expense_update(expense_id):
     for field, label in OFFICE_EXPENSE_REQUIRED.items():
         if field in updates and not updates[field]:
             return jsonify({"status": "error", "message": f"{label} is required."}), 400
+    if "expense_type" in updates and updates["expense_type"] not in EXPENSE_TYPES:
+        return jsonify({"status": "error", "message": "Type must be operating or capital."}), 400
     if not updates:
         return jsonify({"status": "ok"})
 
@@ -5775,16 +5840,20 @@ def api_ops_po_payment_delete(payment_id):
 def api_ops_operating_expenses():
     """The Admin Expenses list (office_expenses), read-only here - it is one
     table shared by both apps, edited from Admin."""
+    kind = request.args.get("type") or "operating"
+    if kind not in (*EXPENSE_TYPES, "all"):
+        kind = "operating"
     cur = get_db().cursor()
     cur.execute(
         "SELECT DISTINCT EXTRACT(YEAR FROM expense_date)::int AS y FROM office_expenses ORDER BY y DESC"
     )
     years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
     cur.execute(
-        """SELECT id, expense_date, item, category, description, amount, paid_by, note
+        """SELECT id, expense_date, item, category, description, amount, paid_by, note, expense_type
            FROM office_expenses WHERE EXTRACT(YEAR FROM expense_date) = %s
+             AND (%s = 'all' OR expense_type = %s)
            ORDER BY expense_date, id""",
-        (year,),
+        (year, kind, kind),
     )
     expenses = []
     for r in cur.fetchall():
@@ -5799,6 +5868,193 @@ def api_ops_operating_expenses():
             "total": round(sum(e["amount"] for e in expenses), 2),
         }
     )
+
+
+@app.route("/api/ops/expenses/bulk", methods=["POST"])
+@superuser_required
+def api_ops_expenses_bulk():
+    """Load many expenses at once (the spreadsheet import). A row that
+    already exists - same date, item and amount - is skipped, so running a
+    load twice is harmless. `dry_run` reports without saving."""
+    data = request.get_json(force=True)
+    rows = data.get("expenses") or []
+    dry_run = bool(data.get("dry_run"))
+    if not isinstance(rows, list) or not rows:
+        return _ops_error("Nothing to import.")
+    db = get_db()
+    cur = db.cursor()
+    created = skipped = 0
+    try:
+        for i, r in enumerate(rows, 1):
+            expense_date = _ops_date(r.get("expense_date"), f"Row {i} date")
+            amount = _ops_num(r.get("amount"), f"Row {i} amount")
+            item = (r.get("item") or "").strip()
+            kind = (r.get("expense_type") or "operating").strip()
+            if not item or amount <= 0 or kind not in EXPENSE_TYPES:
+                raise ValueError(f"Row {i} needs an item, an amount above zero and a valid type.")
+            cur.execute(
+                "SELECT 1 FROM office_expenses WHERE expense_date=%s AND item=%s AND amount=%s",
+                (expense_date, item, amount),
+            )
+            if cur.fetchone():
+                skipped += 1
+                continue
+            cur.execute(
+                """INSERT INTO office_expenses
+                     (expense_date, item, category, amount, paid_by, note, expense_type, created_by)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    expense_date, item, (r.get("category") or "").strip() or None, amount,
+                    (r.get("paid_by") or "").strip() or None, (r.get("note") or "").strip() or None,
+                    kind, session.get("display_name") or "Unknown",
+                ),
+            )
+            created += 1
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        return _ops_error(exc)
+    if dry_run:
+        db.rollback()
+    else:
+        record_audit(cur, "Imported expenses", f"{created} rows", {"skipped": skipped})
+        db.commit()
+    return jsonify({"status": "ok", "dry_run": dry_run, "created": created, "skipped": skipped})
+
+
+# ---------------------------------------------------------------------------
+# Depreciation - straight line, starting the month after the purchase.
+# Renovation is spread over the one-year lease; the rest over their usual lives.
+# ---------------------------------------------------------------------------
+CAPITAL_LIFE_MONTHS = {"Renovation": 12, "Equipment": 60, "Furniture & fixtures": 60, "Signage": 36}
+CAPITAL_FALLBACK_LIFE_MONTHS = 60
+
+
+def _asset_life_months(category, life_months):
+    return life_months or CAPITAL_LIFE_MONTHS.get(category or "", CAPITAL_FALLBACK_LIFE_MONTHS)
+
+
+def _asset_start(expense_date):
+    """First day of the month after the purchase."""
+    y, m = expense_date.year, expense_date.month + 1
+    if m == 13:
+        y, m = y + 1, 1
+    return date(y, m, 1)
+
+
+def _asset_schedule(cost, salvage, life_months, start):
+    """{year: depreciation charge}. Whole months, an even slice each; the
+    last year takes whatever rounding leaves so the total is exactly
+    cost - salvage."""
+    base = max(float(cost) - float(salvage), 0.0)
+    months_by_year = {}
+    y, m = start.year, start.month
+    for _ in range(life_months):
+        months_by_year[y] = months_by_year.get(y, 0) + 1
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
+    years = sorted(months_by_year)
+    amounts, running = {}, 0.0
+    for yy in years[:-1]:
+        amounts[yy] = round(base * months_by_year[yy] / life_months, 2)
+        running += amounts[yy]
+    amounts[years[-1]] = round(base - running, 2)
+    return amounts
+
+
+def _capital_assets(cur):
+    cur.execute(
+        """SELECT id, expense_date, item, category, amount, life_months, salvage_value
+           FROM office_expenses WHERE expense_type = 'capital' ORDER BY expense_date, id"""
+    )
+    assets = []
+    for r in cur.fetchall():
+        life = _asset_life_months(r["category"], r["life_months"])
+        start = _asset_start(r["expense_date"])
+        cost, salvage = float(r["amount"]), float(r["salvage_value"] or 0)
+        assets.append(
+            {
+                "id": r["id"], "expense_date": r["expense_date"], "item": r["item"], "category": r["category"],
+                "cost": cost, "salvage": salvage, "life_months": life, "life_is_default": r["life_months"] is None,
+                "start": start, "schedule": _asset_schedule(cost, salvage, life, start),
+            }
+        )
+    return assets
+
+
+@app.route("/api/ops/assets")
+@owner_required
+def api_ops_assets():
+    """The asset register for a year: every capital purchase made up to that
+    year, with what it costs the year in depreciation, what has been written
+    off so far and what is left on the books at year end."""
+    cur = get_db().cursor()
+    cur.execute(
+        "SELECT DISTINCT EXTRACT(YEAR FROM expense_date)::int AS y FROM office_expenses WHERE expense_type='capital' ORDER BY y DESC"
+    )
+    years, year = _ops_years_and_year([r["y"] for r in cur.fetchall()])
+    rows = []
+    for a in _capital_assets(cur):
+        if a["expense_date"].year > year:
+            continue
+        accumulated = round(sum(v for yy, v in a["schedule"].items() if yy <= year), 2)
+        last_year = max(a["schedule"])
+        rows.append(
+            {
+                "id": a["id"], "expense_date": a["expense_date"].isoformat(), "item": a["item"], "category": a["category"],
+                "cost": a["cost"], "salvage": a["salvage"], "life_months": a["life_months"],
+                "life_is_default": a["life_is_default"], "starts": a["start"].isoformat(),
+                "ends_year": last_year, "dep_year": a["schedule"].get(year, 0.0),
+                "accumulated": accumulated, "book_value": round(a["cost"] - accumulated, 2),
+            }
+        )
+    totals = {
+        "cost": round(sum(r["cost"] for r in rows), 2),
+        "dep_year": round(sum(r["dep_year"] for r in rows), 2),
+        "accumulated": round(sum(r["accumulated"] for r in rows), 2),
+        "book_value": round(sum(r["book_value"] for r in rows), 2),
+        "bought_in_year": round(sum(r["cost"] for r in rows if r["expense_date"].startswith(str(year))), 2),
+    }
+    return jsonify({"year": year, "years": years, "assets": rows, "totals": totals})
+
+
+@app.route("/api/ops/assets/<int:asset_id>", methods=["POST"])
+@superuser_required
+def api_ops_asset_update(asset_id):
+    """Change how long an asset lasts (in years; blank goes back to the
+    category's usual life) or what it is worth at the end."""
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT item, amount FROM office_expenses WHERE id=%s AND expense_type='capital'", (asset_id,))
+    row = cur.fetchone()
+    if row is None:
+        return _ops_error("No such asset.", 404)
+    updates = {}
+    try:
+        if "life_years" in data:
+            raw = data["life_years"]
+            if raw is None or not str(raw).strip():
+                updates["life_months"] = None
+            else:
+                months = round(float(raw) * 12)
+                if not 1 <= months <= 600:
+                    raise ValueError("Life must be between one month and fifty years.")
+                updates["life_months"] = months
+        if "salvage_value" in data:
+            salvage = _ops_num(data["salvage_value"], "Salvage value", blank_ok=True) or 0
+            if salvage < 0 or salvage >= float(row["amount"]):
+                raise ValueError("Salvage value must be less than the cost.")
+            updates["salvage_value"] = salvage
+    except (ValueError, TypeError) as exc:
+        return _ops_error(exc)
+    if not updates:
+        return jsonify({"status": "ok"})
+    sets = ", ".join(f"{f}=%s" for f in updates)
+    cur.execute(f"UPDATE office_expenses SET {sets} WHERE id=%s", (*updates.values(), asset_id))
+    record_audit(cur, "Updated asset depreciation", row["item"], updates)
+    db.commit()
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/ops/master")
@@ -5820,6 +6076,15 @@ def api_ops_master():
         "SELECT EXTRACT(YEAR FROM expense_date)::int AS year, SUM(amount) AS total FROM office_expenses GROUP BY 1"
     )
     asset_opex = {r["year"]: float(r["total"] or 0) for r in cur.fetchall()}
+    cur.execute(
+        """SELECT EXTRACT(YEAR FROM expense_date)::int AS year, SUM(amount) AS total
+           FROM office_expenses WHERE expense_type = 'operating' GROUP BY 1"""
+    )
+    operating_exp = {r["year"]: float(r["total"] or 0) for r in cur.fetchall()}
+    depreciation = {}
+    for a in _capital_assets(cur):
+        for yy, v in a["schedule"].items():
+            depreciation[yy] = round(depreciation.get(yy, 0.0) + v, 2)
 
     def figures(sales, gp, ox):
         return {
@@ -5858,6 +6123,9 @@ def api_ops_master():
                 "opex": round(ox, 2),
                 "opex_asset": round(ass, 2),
                 "net_profit": round(s - cogs - ox - ass, 2),
+                # the same year with the capital items spread over their lives
+                "depreciation": round(depreciation.get(y, 0.0), 2),
+                "net_profit_after_dep": round(s - cogs - ox - operating_exp.get(y, 0.0) - depreciation.get(y, 0.0), 2),
             }
         )
     return jsonify({"months": months, "quarterly": quarterly, "annual": annual})

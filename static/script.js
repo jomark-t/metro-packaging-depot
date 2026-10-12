@@ -580,6 +580,7 @@ function showTab(tab) {
   if (tab === "suppliers") loadSuppliers();
   if (tab === "purchaseOrders") loadPurchaseOrders();
   if (tab === "operatingExpense") loadOperatingExpense();
+  if (tab === "capitalExpense") loadCapitalExpense();
   if (tab === "mypay") {
     loadMyPay();
   }
@@ -4365,6 +4366,67 @@ function closePrintDrawer() {
   document.getElementById("printScrim").classList.add("hidden");
 }
 
+// Merge a duplicate client into another one (superuser only)
+let mergeFrom = null;
+
+async function openMergeClient(client) {
+  mergeFrom = client;
+  await loadPrintClients();
+  document.getElementById("mergeClientTitle").textContent = `Merge ${client.name} into…`;
+  document.getElementById("mergeClientList").innerHTML = printClients
+    .filter((x) => x.id !== client.id)
+    .map((x) => `<option value="${escapeHtml(x.name)}"></option>`)
+    .join("");
+  document.getElementById("mergeClientTarget").value = "";
+  document.getElementById("mergeClientError").classList.add("hidden");
+  const modal = document.getElementById("mergeClientModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  document.getElementById("mergeClientTarget").focus();
+}
+
+function closeMergeClient() {
+  const modal = document.getElementById("mergeClientModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+}
+
+async function submitMergeClient() {
+  const errorEl = document.getElementById("mergeClientError");
+  errorEl.classList.add("hidden");
+  const name = document.getElementById("mergeClientTarget").value.trim().toLowerCase();
+  const target = printClients.find((x) => x.id !== mergeFrom.id && x.name.toLowerCase() === name);
+  if (!target) {
+    errorEl.textContent = "Pick the client to keep from the list.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  const ok = await confirmDialog(
+    `Every order, collection and detail of ${mergeFrom.name} moves to ${target.name}, and ${mergeFrom.name} is deleted. This can't be undone.`,
+    { title: `Merge into ${target.name}?`, confirmLabel: "Merge" }
+  );
+  if (!ok) return;
+  const res = await fetch(`/api/print/clients/${mergeFrom.id}/merge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ into_id: target.id }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    errorEl.textContent = data.message || "Could not merge those.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  closeMergeClient();
+  closePrintDrawer();
+  loadPrintClients();
+  loadPrintClientsPage();
+  refreshAllPrintViews();
+  if (window.loadCollections) window.loadCollections();
+}
+document.getElementById("mergeClientCancel").addEventListener("click", closeMergeClient);
+document.getElementById("mergeClientGo").addEventListener("click", submitMergeClient);
+
 async function openPrintClient(clientId) {
   const res = await fetch(`/api/print/clients/${clientId}`);
   if (!res.ok) {
@@ -4499,10 +4561,20 @@ async function openPrintClient(clientId) {
       </div>
       <p class="text-[11px] text-gray-400">For items outside the cup catalogue — typed in by hand, e.g. a bulk rate or a promo.</p>
     </section>
-    <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>`;
+    <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>
+    ${
+      IS_SUPERUSER
+        ? `<section class="flex flex-col gap-2">${sectionHead("Duplicate?")}
+            <p class="text-xs text-gray-500">Entered twice under slightly different names? Fold this client into the right one - its orders, collections and details move across.</p>
+            <button type="button" id="mergeClientBtn" class="self-start text-xs border border-gray-300 rounded-md px-2.5 py-1 hover:border-brand-blue hover:text-brand-blue transition">Merge into another client&hellip;</button>
+          </section>`
+        : ""
+    }`;
 
   const nameCell = document.querySelector('[data-client-field="name"]');
   if (nameCell) wireEditCell(nameCell);
+  const mergeBtn = document.getElementById("mergeClientBtn");
+  if (mergeBtn) mergeBtn.addEventListener("click", () => openMergeClient(c));
 
   const drawerBody = document.getElementById("printDrawerBody");
   const note = drawerBody.querySelector(".print-logo-note");
@@ -5625,7 +5697,7 @@ async function loadExpenses() {
   const res = await fetch("/api/office/expenses");
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    body.innerHTML = `<tr><td colspan="8" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load expenses.")}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load expenses.")}</td></tr>`;
     return;
   }
   const data = await res.json();
@@ -5641,12 +5713,22 @@ function renderExpenses() {
     : "Money going out.";
 
   if (!officeExpenses.length) {
-    body.innerHTML = `<tr><td colspan="8" class="text-sm text-gray-400 py-6 text-center">No expenses logged yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="text-sm text-gray-400 py-6 text-center">No expenses logged yet.</td></tr>`;
     return;
   }
 
   body.innerHTML = officeExpenses.map(expenseRowHTML).join("");
   body.querySelectorAll(".office-edit").forEach(wireOfficeEditCell);
+  body.querySelectorAll(".expense-type-select").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      try {
+        await postJSON(`/api/office/expenses/${sel.dataset.id}`, { expense_type: sel.value });
+      } catch (err) {
+        alert(err.message);
+      }
+      loadExpenses();
+    });
+  });
   body.querySelectorAll(".office-delete-expense").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!(await confirmDialog("This expense will be removed for good. This can't be undone.", { title: "Delete this expense?" }))) return;
@@ -5672,6 +5754,9 @@ function expenseRowHTML(e) {
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "expense_date", e.expense_date, "date")}</td>
       <td class="px-3 py-2 font-medium text-gray-900">${officeEditSpan("expense", e.id, "item", e.item)}</td>
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "category", e.category)}</td>
+      <td class="px-3 py-2"><select class="expense-type-select text-xs border border-gray-200 rounded-md px-1.5 py-0.5 ${e.expense_type === "capital" ? "bg-amber-50 text-amber-800" : "bg-gray-50 text-gray-600"}" data-id="${e.id}">
+        <option value="operating" ${e.expense_type !== "capital" ? "selected" : ""}>Operating</option>
+        <option value="capital" ${e.expense_type === "capital" ? "selected" : ""}>Capital</option></select></td>
       <td class="px-3 py-2 text-gray-500">${officeEditSpan("expense", e.id, "description", e.description)}</td>
       <td class="px-3 py-2 text-right">${officeEditSpan("expense", e.id, "amount", e.amount.toFixed(2), "number")}</td>
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "paid_by", e.paid_by)}</td>
@@ -5689,6 +5774,7 @@ const EXPENSE_FORM_FIELDS = ["Item", "Date", "Amount", "Category", "PaidBy", "De
 function openExpenseModal() {
   EXPENSE_FORM_FIELDS.forEach((f) => (document.getElementById(`expense${f}`).value = ""));
   document.getElementById("expenseDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("expenseType").value = "operating";
   document.getElementById("expenseError").classList.add("hidden");
   const modal = document.getElementById("expenseModal");
   modal.classList.remove("hidden");
@@ -5716,6 +5802,7 @@ async function saveExpense() {
       expense_date: value("Date"),
       amount: value("Amount"),
       item: value("Item"),
+      expense_type: document.getElementById("expenseType").value,
       description: value("Description"),
       category: value("Category"),
       paid_by: value("PaidBy"),
@@ -7678,20 +7765,25 @@ document.getElementById("poPaySave").addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 // Operating Expense - read-only window onto the Admin expenses list
 // ---------------------------------------------------------------------------
-async function loadOperatingExpense(year) {
-  const body = document.getElementById("opExpBody");
+const EXPENSE_VIEWS = {
+  operating: { body: "opExpBody", year: "opExpYear", subtitle: "opExpSubtitle", empty: "The same list as Admin \u203a Expenses, without the capital items." },
+};
+
+async function loadExpenseView(kind, year) {
+  const ids = EXPENSE_VIEWS[kind];
+  const body = document.getElementById(ids.body);
   let data;
   try {
-    data = await opsApi("/api/ops/operating-expenses" + (year ? `?year=${year}` : ""));
+    data = await opsApi(`/api/ops/operating-expenses?type=${kind}` + (year ? `&year=${year}` : ""));
   } catch (err) {
     body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
-  opsFillYears(document.getElementById("opExpYear"), data.years, data.year);
-  document.getElementById("opExpSubtitle").textContent = data.expenses.length
+  opsFillYears(document.getElementById(ids.year), data.years, data.year);
+  document.getElementById(ids.subtitle).textContent = data.expenses.length
     ? `${printMoney(data.total)} across ${data.expenses.length} expense${data.expenses.length === 1 ? "" : "s"} in ${data.year}.`
-    : "The same list as Admin › Expenses.";
-  const cell = (v) => escapeHtml(v || "") || "—";
+    : ids.empty;
+  const cell = (v) => escapeHtml(v || "") || "\u2014";
   body.innerHTML = data.expenses.length
     ? data.expenses
         .map((x) => `<tr>
@@ -7704,9 +7796,65 @@ async function loadOperatingExpense(year) {
           <td class="px-3 py-1.5 text-gray-500">${cell(x.note)}</td></tr>`)
         .join("") +
       `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="4">Total</td><td class="px-3 py-2">${opsPeso(data.total)}</td><td colspan="2"></td></tr>`
-    : `<tr><td colspan="7" class="text-sm text-gray-400 p-6 text-center">No expenses in ${data.year}.</td></tr>`;
+    : `<tr><td colspan="7" class="text-sm text-gray-400 p-6 text-center">Nothing in ${data.year}.</td></tr>`;
 }
+const loadOperatingExpense = (year) => loadExpenseView("operating", year);
+
+// Capital Expense is an asset register: everything bought up to the chosen
+// year, written off a little each month from the month after it was bought.
+async function loadCapitalExpense(year) {
+  const body = document.getElementById("capExpBody");
+  let data;
+  try {
+    data = await opsApi("/api/ops/assets" + (year ? `?year=${year}` : ""));
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="10" class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</td></tr>`;
+    return;
+  }
+  opsFillYears(document.getElementById("capExpYear"), data.years, data.year);
+  document.getElementById("capDepHead").textContent = `Depreciation ${data.year}`;
+  const t = data.totals;
+  document.getElementById("capExpSubtitle").textContent = data.assets.length
+    ? `Bought in ${data.year}: ${printMoney(t.bought_in_year)} \u00b7 depreciation ${printMoney(t.dep_year)} \u00b7 book value at year end ${printMoney(t.book_value)}`
+    : "Machines, molds, renovation and fixtures.";
+  const lifeYears = (m) => String(Math.round((m / 12) * 100) / 100);
+  body.innerHTML = data.assets.length
+    ? data.assets
+        .map(
+          (a) => `<tr>
+          <td class="px-3 py-1.5 whitespace-nowrap">${opsDateLabel(a.expense_date)}</td>
+          <td class="px-3 py-1.5 font-medium text-gray-900">${escapeHtml(a.item)}</td>
+          <td class="px-3 py-1.5">${escapeHtml(a.category || "") || "\u2014"}</td>
+          <td class="px-3 py-1.5" style="min-width:8.5rem">${opsPeso(a.cost)}</td>
+          <td class="px-3 py-1.5" style="min-width:5rem" title="${a.life_is_default ? "The usual life for this category - type a number to change it" : "Set by hand"}">${
+            OPS_EDIT
+              ? `<input type="text" inputmode="decimal" data-asset="${a.id}" data-f="life_years" value="${lifeYears(a.life_months)}" class="${OPS_IN} text-right ${a.life_is_default ? "text-gray-400" : ""}" />`
+              : `<span class="${a.life_is_default ? "text-gray-400" : ""}">${lifeYears(a.life_months)}</span>`
+          }</td>
+          <td class="px-3 py-1.5" style="min-width:7rem">${opsNum(a.salvage || null, `data-asset="${a.id}" data-f="salvage_value"`, "", true)}</td>
+          <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">${opsDateLabel(a.starts)}</td>
+          <td class="px-3 py-1.5" style="min-width:8.5rem">${a.dep_year ? opsPeso(a.dep_year) : ""}</td>
+          <td class="px-3 py-1.5" style="min-width:8.5rem">${opsPeso(a.accumulated)}</td>
+          <td class="px-3 py-1.5 font-medium" style="min-width:8.5rem">${opsPeso(a.book_value)}</td></tr>`
+        )
+        .join("") +
+      `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="3">Total</td><td class="px-3 py-2">${opsPeso(t.cost)}</td><td colspan="4"></td><td class="px-3 py-2">${opsPeso(t.dep_year)}</td><td class="px-3 py-2">${opsPeso(t.accumulated)}</td><td class="px-3 py-2">${opsPeso(t.book_value)}</td></tr>`
+    : `<tr><td colspan="10" class="text-sm text-gray-400 p-6 text-center">No capital purchases up to ${data.year}.</td></tr>`;
+}
+document.getElementById("capExpBody").addEventListener("change", async (e) => {
+  const input = e.target;
+  if (!input.dataset.asset) return;
+  const f = input.dataset.f;
+  const raw = opsRaw(input.value);
+  try {
+    await opsApi(`/api/ops/assets/${input.dataset.asset}`, "POST", { [f]: raw });
+  } catch (err) {
+    opsToast(err.message);
+  }
+  loadCapitalExpense(Number(document.getElementById("capExpYear").value) || undefined);
+});
 document.getElementById("opExpYear").addEventListener("change", (e) => loadOperatingExpense(Number(e.target.value)));
+document.getElementById("capExpYear").addEventListener("change", (e) => loadCapitalExpense(Number(e.target.value)));
 
 // ---------------------------------------------------------------------------
 // Master Sales - computed roll-ups
@@ -7897,10 +8045,10 @@ function renderMaster() {
   const lifeNet = data.annual.reduce((n, a) => n + a.net_profit, 0);
   const annual = card(
     "Annual Income Statement",
-    "COGS = Sales &minus; Gross Profit. OpEx/Asset is the year's Operating Expense list. Net Profit = Sales &minus; COGS &minus; Monthly OpEx &minus; OpEx/Asset.",
-    th(["Year", "Sales", "Monthly OpEx", "COGS", "OpEx/Asset", "Net Profit"], 1),
-    data.annual.map((a) => `<tr><td class="px-3 py-1 font-medium">${a.year}</td>${money(a.sales)}${money(a.opex)}${money(a.cogs)}${money(a.opex_asset)}${profit(a.net_profit)}</tr>`).join("") +
-      (data.annual.length ? `<tr class="font-semibold border-t-2 border-gray-300"><td class="px-3 py-1.5" colspan="5">Lifetime Net Profit</td>${profit(lifeNet, true)}</tr>` : "")
+    "COGS = Sales &minus; Gross Profit. OpEx/Asset is the year's operating and capital expenses together; Net Profit charges all of it to the year it was spent. Net After Depreciation instead spreads each capital item over its life.",
+    th(["Year", "Sales", "Monthly OpEx", "COGS", "OpEx/Asset", "Net Profit", "Depreciation", "Net After Depreciation"], 1),
+    data.annual.map((a) => `<tr><td class="px-3 py-1 font-medium">${a.year}</td>${money(a.sales)}${money(a.opex)}${money(a.cogs)}${money(a.opex_asset)}${profit(a.net_profit)}${money(a.depreciation)}${profit(a.net_profit_after_dep)}</tr>`).join("") +
+      (data.annual.length ? `<tr class="font-semibold border-t-2 border-gray-300"><td class="px-3 py-1.5" colspan="5">Lifetime Net Profit</td>${profit(lifeNet, true)}${money(data.annual.reduce((n, a) => n + a.depreciation, 0), "", true)}${profit(data.annual.reduce((n, a) => n + a.net_profit_after_dep, 0), true)}</tr>` : "")
   );
 
   body.innerHTML = `
@@ -7936,6 +8084,7 @@ window.loadMonthlyOpex = loadMonthlyOpex;
 window.loadSuppliers = loadSuppliers;
 window.loadPurchaseOrders = loadPurchaseOrders;
 window.loadOperatingExpense = loadOperatingExpense;
+window.loadCapitalExpense = loadCapitalExpense;
 
 } // end has_ops_app guard
 
