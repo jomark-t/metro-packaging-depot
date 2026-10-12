@@ -3796,6 +3796,57 @@ async function fetchAllPrintOrders() {
   return data;
 }
 
+// A name picker for a text field. The browser's own <datalist> popup is drawn
+// by the browser, and inside a modal it can land off screen - this one is part
+// of the page, so it always sits right under the field.
+function attachCombo(input, drop, getNames, allowNew = false) {
+  let active = -1;
+  const options = () => [...drop.querySelectorAll(".combo-opt")];
+  const render = () => {
+    const q = input.value.trim();
+    const ql = q.toLowerCase();
+    const names = getNames().filter((n) => !ql || n.toLowerCase().includes(ql)).sort((a, b) => a.localeCompare(b)).slice(0, 8);
+    const rows = names.map(
+      (n) => `<button type="button" class="combo-opt w-full text-left px-3 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(n)}">${poClientHighlight(n, q)}</button>`
+    );
+    if (allowNew && q && !names.some((n) => n.toLowerCase() === ql)) {
+      rows.push(
+        `<button type="button" class="combo-opt w-full text-left px-3 py-1.5 hover:bg-gray-50 text-brand-blue border-t border-gray-100" data-name="${escapeHtml(q)}">+ New &ldquo;${escapeHtml(q)}&rdquo;</button>`
+      );
+    }
+    drop.innerHTML = rows.length ? rows.join("") : `<p class="px-3 py-2 text-gray-400 italic">No match.</p>`;
+    active = -1;
+    drop.classList.remove("hidden");
+    options().forEach((b) =>
+      b.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        input.value = b.dataset.name;
+        drop.classList.add("hidden");
+      })
+    );
+  };
+  // suggestions appear only once something is typed, never just on focus
+  input.addEventListener("input", () => (input.value.trim() ? render() : drop.classList.add("hidden")));
+  input.addEventListener("blur", () => setTimeout(() => drop.classList.add("hidden"), 120));
+  input.addEventListener("keydown", (e) => {
+    if (drop.classList.contains("hidden")) return;
+    const opts = options();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!opts.length) return;
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length;
+      opts.forEach((o, i) => o.classList.toggle("bg-gray-100", i === active));
+      opts[active].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && active >= 0) {
+      e.preventDefault();
+      input.value = opts[active].dataset.name;
+      drop.classList.add("hidden");
+    } else if (e.key === "Escape") {
+      drop.classList.add("hidden");
+    }
+  });
+}
+
 // An in-page stand-in for window.confirm: native dialogs can be suppressed
 // by the browser (the Claude app's pane returns false without showing
 // anything), which made every delete button look dead.
@@ -4373,10 +4424,6 @@ async function openMergeClient(client) {
   mergeFrom = client;
   await loadPrintClients();
   document.getElementById("mergeClientTitle").textContent = `Merge ${client.name} into…`;
-  document.getElementById("mergeClientList").innerHTML = printClients
-    .filter((x) => x.id !== client.id)
-    .map((x) => `<option value="${escapeHtml(x.name)}"></option>`)
-    .join("");
   document.getElementById("mergeClientTarget").value = "";
   document.getElementById("mergeClientError").classList.add("hidden");
   const modal = document.getElementById("mergeClientModal");
@@ -4424,6 +4471,11 @@ async function submitMergeClient() {
   refreshAllPrintViews();
   if (window.loadCollections) window.loadCollections();
 }
+attachCombo(
+  document.getElementById("mergeClientTarget"),
+  document.getElementById("mergeClientDropdown"),
+  () => printClients.filter((x) => !mergeFrom || x.id !== mergeFrom.id).map((x) => x.name)
+);
 document.getElementById("mergeClientCancel").addEventListener("click", closeMergeClient);
 document.getElementById("mergeClientGo").addEventListener("click", submitMergeClient);
 
@@ -4703,10 +4755,6 @@ async function openPrintClient(clientId) {
 // ---------------------------------------------------------------------------
 
 let poClientActiveIndex = -1;
-// Set right before the form's own opening .focus() call, so that one
-// programmatic focus doesn't pop the dropdown - every focus after it
-// (a click, tabbing back in) still does.
-let poSuppressNextClientFocus = false;
 
 // Ranked by order_count so the clients actually being printed for
 // surface first - on an empty query that's "who orders the most",
@@ -4887,10 +4935,6 @@ async function openPrintOrderForm() {
   const modal = document.getElementById("printOrderModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
-  // focus the field so typing works right away, but the dropdown itself
-  // waits for a deliberate focus (a click, a tab back in) rather than
-  // popping open the moment the form does
-  poSuppressNextClientFocus = true;
   document.getElementById("poClient").focus();
 }
 
@@ -5043,14 +5087,10 @@ if (document.getElementById("printOrderModal")) {
   });
 
   const poClientInput = document.getElementById("poClient");
-  poClientInput.addEventListener("focus", () => {
-    if (poSuppressNextClientFocus) {
-      poSuppressNextClientFocus = false;
-      return;
-    }
-    renderPoClientDropdown();
-  });
-  poClientInput.addEventListener("input", renderPoClientDropdown);
+  // suggestions appear only once something is typed, never just on focus
+  poClientInput.addEventListener("input", () =>
+    poClientInput.value.trim() ? renderPoClientDropdown() : document.getElementById("poClientDropdown").classList.add("hidden")
+  );
   poClientInput.addEventListener("blur", () => {
     // a short delay so a mousedown pick (which preventDefaults) still
     // lands before the list disappears out from under it
@@ -5574,8 +5614,9 @@ document.getElementById("newPoCancel").addEventListener("click", closeNewPoModal
 document.getElementById("newPoSave").addEventListener("click", saveNewPo);
 
 const newPoClientInput = document.getElementById("newPoClient");
-newPoClientInput.addEventListener("focus", renderNewPoClientDropdown);
-newPoClientInput.addEventListener("input", renderNewPoClientDropdown);
+newPoClientInput.addEventListener("input", () =>
+  newPoClientInput.value.trim() ? renderNewPoClientDropdown() : document.getElementById("newPoClientDropdown").classList.add("hidden")
+);
 newPoClientInput.addEventListener("blur", () => {
   setTimeout(() => document.getElementById("newPoClientDropdown").classList.add("hidden"), 120);
 });
@@ -6001,9 +6042,6 @@ function renderDiscounts() {
 
 async function openDiscountModal() {
   await loadPrintClients();
-  document.getElementById("discountClientList").innerHTML = printClients
-    .map((c) => `<option value="${escapeHtml(c.name)}"></option>`)
-    .join("");
   ["discountClient", "discountItem", "discountValue"].forEach((id) => (document.getElementById(id).value = ""));
   document.getElementById("discountError").classList.add("hidden");
   const modal = document.getElementById("discountModal");
@@ -6051,6 +6089,12 @@ async function saveDiscount() {
   loadDiscounts();
 }
 
+attachCombo(
+  document.getElementById("discountClient"),
+  document.getElementById("discountClientDropdown"),
+  () => printClients.map((c) => c.name),
+  true
+);
 document.getElementById("discountAddBtn").addEventListener("click", openDiscountModal);
 document.getElementById("discountCancel").addEventListener("click", closeDiscountModal);
 document.getElementById("discountSave").addEventListener("click", saveDiscount);
@@ -6689,10 +6733,10 @@ async function openSalesSummary() {
   }
 
   const opexKnown = cur.opex > 0;
-  const tile = (label, value, deltas, dark = false) => `
+  const tile = (label, value, deltas, dark = false, valueCls = "") => `
     <div class="${dark ? "bg-brand-blue text-white" : "bg-gray-50 border border-gray-100"} rounded-xl px-4 py-3">
       <p class="text-[11px] uppercase tracking-wide font-mono ${dark ? "text-white/60" : "text-gray-400"}">${label}</p>
-      <p class="font-semibold text-2xl mt-0.5">${value}</p>
+      <p class="font-semibold text-2xl mt-0.5 ${valueCls}">${value}</p>
       <div class="text-xs mt-1 space-y-0.5 ${dark ? "[&_.text-gray-400]:text-white/50" : ""}">${deltas || "&nbsp;"}</div>
     </div>`;
   const deltas = (curV, prevV, yoyV, goodWhenUp = true) => {
@@ -6750,7 +6794,7 @@ async function openSalesSummary() {
         ${tile("Sales", printMoney(cur.sales), deltas(cur.sales, prev.sales, yoy.sales))}
         ${tile("Gross profit", printMoney(cur.gp), deltas(cur.gp, prev.gp, yoy.gp))}
         ${tile("Operating expense", opexKnown ? printMoney(cur.opex) : "&mdash;", opexKnown ? deltas(cur.opex, prev.opex, yoy.opex, false) : `<p class="text-gray-400">Not entered yet</p>`)}
-        ${tile("Net profit", printMoney(cur.net), opexKnown ? deltas(cur.net, prev.net, yoy.net) : `<p class="text-gray-400">Before operating expense</p>`, true)}
+        ${tile("Net profit", printMoney(cur.net), opexKnown ? deltas(cur.net, prev.net, yoy.net) : `<p class="text-gray-400">Before operating expense</p>`, false, cur.net < 0 ? "text-red-600" : "text-green-600")}
       </div>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
         ${stat("Gross margin", pct(grossMargin), "gross profit / sales")}
@@ -7711,18 +7755,24 @@ document.getElementById("poAddBtn").addEventListener("click", () => {
   document.getElementById("poError").classList.add("hidden");
   // most orders are settled when placed, so that's the starting point and the
   // part-payment fields stay out of the way
-  document.getElementById("poPaid").checked = true;
+  document.getElementById("opsPoPaid").checked = true;
   document.getElementById("poPaidFields").classList.add("hidden");
   document.getElementById("poPaidAmount").value = "";
   document.getElementById("poPaidDate").value = "";
   opsOpenModal("poModal");
   document.getElementById("poSupplier").focus();
 });
-document.getElementById("poPaid").addEventListener("change", (e) => {
+attachCombo(
+  document.getElementById("poSupplier"),
+  document.getElementById("poSupplierDropdown"),
+  () => opsSuppliers.map((s) => s.name),
+  true
+);
+document.getElementById("opsPoPaid").addEventListener("change", (e) => {
   document.getElementById("poPaidFields").classList.toggle("hidden", e.target.checked);
 });
-document.getElementById("poCancel").addEventListener("click", () => opsCloseModal("poModal"));
-document.getElementById("poSave").addEventListener("click", async () => {
+document.getElementById("opsPoCancel").addEventListener("click", () => opsCloseModal("poModal"));
+document.getElementById("opsPoSave").addEventListener("click", async () => {
   const errorEl = document.getElementById("poError");
   let created;
   try {
@@ -7732,7 +7782,7 @@ document.getElementById("poSave").addEventListener("click", async () => {
       order_date: document.getElementById("poDateInput").value,
       amount: document.getElementById("poAmountInput").value,
       txn_no: document.getElementById("poTxn").value,
-      paid: document.getElementById("poPaid").checked,
+      paid: document.getElementById("opsPoPaid").checked,
       paid_amount: document.getElementById("poPaidAmount").value,
       paid_date: document.getElementById("poPaidDate").value,
     });

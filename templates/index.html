@@ -1298,11 +1298,13 @@
   <div id="discountModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
     <div class="bg-white rounded-2xl w-full max-w-sm p-5">
       <h3 class="font-display font-semibold text-lg leading-tight mb-3">Add a special price</h3>
-      <label class="text-sm block mb-2">
+      <div class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Client <span class="text-gray-400">(a new name adds the client)</span></span>
-        <input id="discountClient" list="discountClientList" autocomplete="off" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Type a client's name" />
-        <datalist id="discountClientList"></datalist>
-      </label>
+        <div class="relative">
+          <input id="discountClient" autocomplete="off" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="Type a client's name" />
+          <div id="discountClientDropdown" class="hidden absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto text-sm py-1"></div>
+        </div>
+      </div>
       <label class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Item</span>
         <input id="discountItem" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. PET 16oz" />
@@ -1523,11 +1525,14 @@
   <div id="poModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
     <div class="bg-white rounded-2xl w-full max-w-sm p-5">
       <h3 class="font-display font-semibold text-lg leading-tight mb-3">New purchase order</h3>
-      <label class="text-sm block mb-2">
+      <div class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Supplier <span class="text-gray-400">(a new name adds the supplier)</span></span>
-        <input id="poSupplier" list="poSupplierList" autocomplete="off" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+        <div class="relative">
+          <input id="poSupplier" autocomplete="off" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+          <div id="poSupplierDropdown" class="hidden absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto text-sm py-1"></div>
+        </div>
         <datalist id="poSupplierList"></datalist>
-      </label>
+      </div>
       <label class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Description <span class="text-gray-400">(optional)</span></span>
         <input id="poDescription" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. PET U 16" />
@@ -1547,7 +1552,7 @@
         <input id="poTxn" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. 2026-0140" />
       </label>
       <label class="flex items-center gap-2 text-sm mb-2">
-        <input id="poPaid" type="checkbox" checked class="rounded border-gray-300 text-brand-blue" />
+        <input id="opsPoPaid" type="checkbox" checked class="rounded border-gray-300 text-brand-blue" />
         <span>Already paid in full</span>
       </label>
       <div id="poPaidFields" class="hidden grid grid-cols-2 gap-2 mb-2">
@@ -1562,8 +1567,8 @@
       </div>
       <p id="poError" class="text-xs text-red-600 mb-2 hidden"></p>
       <div class="flex justify-end gap-2 mt-3">
-        <button id="poCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
-        <button id="poSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
+        <button id="opsPoCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="opsPoSave" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Save</button>
       </div>
     </div>
   </div>
@@ -1617,8 +1622,10 @@
     <div class="bg-white rounded-2xl w-full max-w-sm p-5">
       <h3 id="mergeClientTitle" class="font-display font-semibold text-lg leading-tight mb-1">Merge into&hellip;</h3>
       <p class="text-xs text-gray-500 mb-3">Choose the client to keep.</p>
-      <input id="mergeClientTarget" list="mergeClientList" autocomplete="off" placeholder="Type a client's name" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm" />
-      <datalist id="mergeClientList"></datalist>
+      <div class="relative">
+        <input id="mergeClientTarget" autocomplete="off" placeholder="Type a client's name" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm" />
+        <div id="mergeClientDropdown" class="hidden absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto text-sm py-1"></div>
+      </div>
       <p id="mergeClientError" class="text-xs text-red-600 mt-2 hidden"></p>
       <div class="flex justify-end gap-2 mt-4">
         <button id="mergeClientCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
