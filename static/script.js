@@ -5394,10 +5394,31 @@ function renderCollectionsDrawerBody(data) {
 
   const poRows = data.pos.length
     ? data.pos
-        .map(
-          (po) => `
+        .map((po) => {
+          const open = poPaymentsOpen.has(po.id) && po.payments.length;
+          const caret = po.payments.length
+            ? `<button type="button" class="po-pay-toggle text-gray-400 hover:text-brand-blue mr-1" data-po="${po.id}" aria-label="${open ? "Hide" : "Show"} payments" title="${po.payments.length} payment${po.payments.length === 1 ? "" : "s"}">${open ? "&#9662;" : "&#9656;"}</button>`
+            : `<span class="inline-block w-3 mr-1"></span>`;
+          const payRows = open
+            ? po.payments
+                .map(
+                  (p) => `
+      <tr class="bg-gray-50" data-pay="${p.id}">
+        <td class="py-1 pl-4 pr-2 text-xs text-gray-500 whitespace-nowrap">&#8627; ${printShortDate(p.paid_date)}</td>
+        <td class="py-1 pr-2 text-right text-xs">${printMoney(p.amount)}</td>
+        <td class="py-1 pr-2 text-xs text-gray-400 text-right">paid</td>
+        <td class="py-1 pr-2 text-xs text-gray-500">${escapeHtml(p.note || "—")}</td>
+        <td class="py-1 text-right whitespace-nowrap">
+          <button type="button" class="pay-edit text-xs text-brand-blue hover:underline" data-pay="${p.id}" data-po="${po.id}">Edit</button>
+          <button type="button" class="pay-delete text-gray-300 hover:text-red-600 ml-2" data-pay="${p.id}" aria-label="Delete payment">&#10005;</button>
+        </td>
+      </tr>`
+                )
+                .join("")
+            : "";
+          return `
       <tr data-po="${po.id}">
-        <td class="py-1.5 pr-2 text-gray-500 whitespace-nowrap">${printShortDate(po.po_date)}</td>
+        <td class="py-1.5 pr-2 text-gray-500 whitespace-nowrap">${caret}${printShortDate(po.po_date)}</td>
         <td class="py-1.5 pr-2 text-right">${printMoney(po.amount)}</td>
         <td class="py-1.5 pr-2 text-right whitespace-nowrap">${poStatusHTML(po)}</td>
         <td class="py-1.5 pr-2 text-gray-500">${escapeHtml(po.remarks || "—")}</td>
@@ -5405,8 +5426,8 @@ function renderCollectionsDrawerBody(data) {
           ${po.balance > 0 ? `<button type="button" class="po-add-payment text-xs text-brand-blue hover:underline" data-po="${po.id}">+ payment</button>` : ""}
           <button type="button" class="po-delete text-gray-300 hover:text-red-600 ml-2" data-po="${po.id}" aria-label="Delete PO">&#10005;</button>
         </td>
-      </tr>`
-        )
+      </tr>${payRows}`;
+        })
         .join("")
     : `<tr><td colspan="5" class="py-3 text-gray-400 text-center">No purchase orders yet.</td></tr>`;
 
@@ -5467,6 +5488,34 @@ function renderCollectionsDrawerBody(data) {
   bodyEl.querySelectorAll(".po-add-payment").forEach((btn) => {
     btn.addEventListener("click", () => openPoPaymentModal(btn.dataset.po, data.client.id));
   });
+  bodyEl.querySelectorAll(".po-pay-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.po);
+      if (poPaymentsOpen.has(id)) poPaymentsOpen.delete(id);
+      else poPaymentsOpen.add(id);
+      renderCollectionsDrawerBody(data);
+    });
+  });
+  bodyEl.querySelectorAll(".pay-edit").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const po = data.pos.find((x) => String(x.id) === btn.dataset.po);
+      const pay = po && po.payments.find((x) => String(x.id) === btn.dataset.pay);
+      if (pay) openPoPaymentModal(po.id, data.client.id, pay);
+    });
+  });
+  bodyEl.querySelectorAll(".pay-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!(await confirmDialog("The payment is removed and the balance goes back up.", { title: "Delete this payment?" }))) return;
+      const res = await fetch(`/api/office/purchase-order-payments/${btn.dataset.pay}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.message || "Could not delete that payment.");
+        return;
+      }
+      await openCollectionsClient(data.client.id);
+      loadCollections();
+    });
+  });
   bodyEl.querySelectorAll(".po-delete").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!(await confirmDialog("Any payments logged against it are deleted too. This can't be undone.", { title: "Delete this purchase order?" }))) return;
@@ -5482,13 +5531,16 @@ function renderCollectionsDrawerBody(data) {
   });
 }
 
-let poPaymentTarget = null; // { poId, clientId } for whichever "+ Payment" was clicked
+let poPaymentTarget = null; // { poId, clientId, paymentId? } for whichever "+ Payment" / Edit was clicked
+const poPaymentsOpen = new Set(); // POs whose payments are showing in the client drawer
 
-function openPoPaymentModal(poId, clientId) {
-  poPaymentTarget = { poId, clientId };
-  document.getElementById("poPaymentAmount").value = "";
-  document.getElementById("poPaymentDate").value = isoDate(new Date());
-  document.getElementById("poPaymentNote").value = "";
+// With `payment`, the same form edits that payment instead of adding one
+function openPoPaymentModal(poId, clientId, payment) {
+  poPaymentTarget = { poId, clientId, paymentId: payment ? payment.id : null };
+  document.getElementById("poPaymentTitle").textContent = payment ? "Edit payment" : "Log a payment";
+  document.getElementById("poPaymentAmount").value = payment ? payment.amount : "";
+  document.getElementById("poPaymentDate").value = payment ? payment.paid_date : isoDate(new Date());
+  document.getElementById("poPaymentNote").value = payment ? payment.note || "" : "";
   document.getElementById("poPaymentError").classList.add("hidden");
   const modal = document.getElementById("poPaymentModal");
   modal.classList.remove("hidden");
@@ -5507,13 +5559,15 @@ async function savePoPayment() {
   if (!poPaymentTarget) return;
   const errorEl = document.getElementById("poPaymentError");
   errorEl.classList.add("hidden");
-  const { poId, clientId } = poPaymentTarget;
+  const { poId, clientId, paymentId } = poPaymentTarget;
   try {
-    await postJSON(`/api/office/purchase-orders/${poId}/payments`, {
+    await postJSON(paymentId ? `/api/office/purchase-order-payments/${paymentId}` : `/api/office/purchase-orders/${poId}/payments`, {
       amount: document.getElementById("poPaymentAmount").value,
       paid_date: document.getElementById("poPaymentDate").value,
       note: document.getElementById("poPaymentNote").value,
     });
+    // a payment just added is worth seeing: open that PO's list
+    if (!paymentId) poPaymentsOpen.add(Number(poId));
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.classList.remove("hidden");
@@ -8026,63 +8080,211 @@ document.getElementById("poPaySave").addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Operating Expense - read-only window onto the Admin expenses list
+// Operating Expense and Capital Expense - windows onto the Admin expenses list.
+// Both are filterable and sortable, newest purchase first until a heading is clicked.
 // ---------------------------------------------------------------------------
-const EXPENSE_VIEWS = {
-  operating: { body: "opExpBody", year: "opExpYear", subtitle: "opExpSubtitle", empty: "The same list as Admin \u203a Expenses, without the capital items." },
-};
+const expSort = { operating: { key: "expense_date", dir: -1 }, capital: { key: "expense_date", dir: -1 } };
+let opExpData = null;
+let capData = null;
 
-async function loadExpenseView(kind, year) {
-  const ids = EXPENSE_VIEWS[kind];
-  const body = document.getElementById(ids.body);
-  let data;
+// one spelling per name, ignoring case ("Printing materials" / "Printing Materials")
+function expUnique(values) {
+  const seen = new Map();
+  values.forEach((v) => {
+    const name = (v || "").trim();
+    if (name && !seen.has(name.toLowerCase())) seen.set(name.toLowerCase(), name);
+  });
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+function expFill(select, allLabel, values) {
+  const keep = select.value;
+  select.innerHTML =
+    `<option value="">${allLabel}</option>` + values.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
+  select.value = values.includes(keep) ? keep : "";
+}
+function expFillMonths(select, isoDates) {
+  const keep = select.value;
+  const months = [...new Set(isoDates.filter(Boolean).map((d) => Number(d.slice(5, 7))))].sort((a, b) => a - b);
+  select.innerHTML =
+    `<option value="">All months</option>` + months.map((m) => `<option value="${m}">${OPS_MONTHS[m - 1]}</option>`).join("");
+  select.value = months.map(String).includes(keep) ? keep : "";
+}
+function expSorted(rows, sort) {
+  const blank = (v) => v === null || v === undefined || v === "";
+  return [...rows].sort((a, b) => {
+    const x = a[sort.key];
+    const y = b[sort.key];
+    if (blank(x) !== blank(y)) return blank(x) ? 1 : -1; // empty cells always last
+    let c = 0;
+    if (!blank(x)) c = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
+    if (c) return c * sort.dir;
+    return (b.expense_date || "").localeCompare(a.expense_date || "") || b.id - a.id;
+  });
+}
+function expHasText(row, fields, q) {
+  return !q || fields.some((f) => (row[f] || "").toLowerCase().includes(q));
+}
+
+// Headings sort when clicked: text A-Z first, dates and amounts largest/newest first
+function wireExpSort(viewId, kind, keys, firstDesc, rerender) {
+  const heads = [...document.querySelectorAll(`#${viewId} thead th`)];
+  heads.forEach((th, i) => {
+    th.dataset.label = th.textContent.trim();
+    if (!keys[i]) return;
+    th.dataset.sort = keys[i];
+    th.classList.add("cursor-pointer", "select-none", "hover:text-gray-700");
+  });
+  document.querySelector(`#${viewId} thead tr`).addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const s = expSort[kind];
+    if (s.key === th.dataset.sort) s.dir *= -1;
+    else {
+      s.key = th.dataset.sort;
+      s.dir = firstDesc.includes(s.key) ? -1 : 1;
+    }
+    rerender();
+  });
+}
+function expArrows(viewId, kind) {
+  const s = expSort[kind];
+  document.querySelectorAll(`#${viewId} thead th[data-sort]`).forEach((th) => {
+    th.textContent = th.dataset.label + (th.dataset.sort === s.key ? (s.dir === 1 ? " \u25B2" : " \u25BC") : "");
+  });
+}
+
+async function loadOperatingExpense(year) {
+  const body = document.getElementById("opExpBody");
   try {
-    data = await opsApi(`/api/ops/operating-expenses?type=${kind}` + (year ? `&year=${year}` : ""));
+    opExpData = await opsApi("/api/ops/operating-expenses?type=operating" + (year ? `&year=${year}` : ""));
   } catch (err) {
     body.innerHTML = `<tr><td colspan="7" class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
-  opsFillYears(document.getElementById(ids.year), data.years, data.year);
-  document.getElementById(ids.subtitle).textContent = data.expenses.length
-    ? `${printMoney(data.total)} across ${data.expenses.length} expense${data.expenses.length === 1 ? "" : "s"} in ${data.year}.`
-    : ids.empty;
+  opsFillYears(document.getElementById("opExpYear"), opExpData.years, opExpData.year);
+  renderOperatingExpense();
+}
+
+function renderOperatingExpense() {
+  const data = opExpData;
+  if (!data) return;
+  const el = (id) => document.getElementById(id);
+  expFill(el("opExpCategory"), "All categories", expUnique(data.expenses.map((x) => x.category)));
+  expFill(el("opExpPaidBy"), "Anyone paid", expUnique(data.expenses.map((x) => x.paid_by)));
+  expFillMonths(el("opExpMonth"), data.expenses.map((x) => x.expense_date));
+  const q = el("opExpSearch").value.trim().toLowerCase();
+  const cat = el("opExpCategory").value.toLowerCase();
+  const paid = el("opExpPaidBy").value.toLowerCase();
+  const mon = el("opExpMonth").value;
+  const active = !!(q || cat || paid || mon);
+  el("opExpClear").classList.toggle("hidden", !active);
+
+  const rows = expSorted(
+    data.expenses.filter(
+      (x) =>
+        (!cat || (x.category || "").toLowerCase() === cat) &&
+        (!paid || (x.paid_by || "").toLowerCase() === paid) &&
+        (!mon || Number(x.expense_date.slice(5, 7)) === Number(mon)) &&
+        expHasText(x, ["item", "description", "note", "category", "paid_by"], q)
+    ),
+    expSort.operating
+  );
+  const total = rows.reduce((n, x) => n + x.amount, 0);
+  const noun = (n) => `expense${n === 1 ? "" : "s"}`;
+  el("opExpSubtitle").textContent = !data.expenses.length
+    ? "The same list as Admin \u203a Expenses, without the capital items."
+    : active
+    ? `${printMoney(total)} across ${rows.length} of ${data.expenses.length} ${noun(data.expenses.length)} in ${data.year}.`
+    : `${printMoney(data.total)} across ${data.expenses.length} ${noun(data.expenses.length)} in ${data.year}.`;
+
   const cell = (v) => escapeHtml(v || "") || "\u2014";
-  body.innerHTML = data.expenses.length
-    ? data.expenses
-        .map((x) => `<tr>
+  const body = el("opExpBody");
+  body.innerHTML = rows.length
+    ? rows
+        .map(
+          (x) => `<tr>
           <td class="px-3 py-1.5 whitespace-nowrap">${opsDateLabel(x.expense_date)}</td>
           <td class="px-3 py-1.5 font-medium text-gray-900">${cell(x.item)}</td>
           <td class="px-3 py-1.5">${cell(x.category)}</td>
           <td class="px-3 py-1.5 text-gray-500">${cell(x.description)}</td>
           <td class="px-3 py-1.5" style="min-width:8.5rem">${opsPeso(x.amount)}</td>
           <td class="px-3 py-1.5">${cell(x.paid_by)}</td>
-          <td class="px-3 py-1.5 text-gray-500">${cell(x.note)}</td></tr>`)
+          <td class="px-3 py-1.5 text-gray-500">${cell(x.note)}</td></tr>`
+        )
         .join("") +
-      `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="4">Total</td><td class="px-3 py-2">${opsPeso(data.total)}</td><td colspan="2"></td></tr>`
-    : `<tr><td colspan="7" class="text-sm text-gray-400 p-6 text-center">Nothing in ${data.year}.</td></tr>`;
+      `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="4">Total${active ? " (filtered)" : ""}</td><td class="px-3 py-2">${opsPeso(total)}</td><td colspan="2"></td></tr>`
+    : `<tr><td colspan="7" class="text-sm text-gray-400 p-6 text-center">${data.expenses.length ? "Nothing matches these filters." : `Nothing in ${data.year}.`}</td></tr>`;
+  expArrows("operatingExpenseView", "operating");
 }
-const loadOperatingExpense = (year) => loadExpenseView("operating", year);
+
+wireExpSort(
+  "operatingExpenseView", "operating",
+  ["expense_date", "item", "category", "description", "amount", "paid_by", "note"],
+  ["expense_date", "amount"],
+  renderOperatingExpense
+);
+["opExpSearch", "opExpCategory", "opExpPaidBy", "opExpMonth"].forEach((id) =>
+  document.getElementById(id).addEventListener("input", renderOperatingExpense)
+);
+document.getElementById("opExpClear").addEventListener("click", () => {
+  ["opExpSearch", "opExpCategory", "opExpPaidBy", "opExpMonth"].forEach((id) => (document.getElementById(id).value = ""));
+  renderOperatingExpense();
+});
 
 // Capital Expense is an asset register: everything bought up to the chosen
 // year, written off a little each month from the month after it was bought.
+// It opens on what was bought in the year; the scope picker widens it to the
+// whole register (older items still being written off).
 async function loadCapitalExpense(year) {
   const body = document.getElementById("capExpBody");
-  let data;
   try {
-    data = await opsApi("/api/ops/assets" + (year ? `?year=${year}` : ""));
+    capData = await opsApi("/api/ops/assets" + (year ? `?year=${year}` : ""));
   } catch (err) {
     body.innerHTML = `<tr><td colspan="10" class="text-sm text-gray-500 p-6 text-center">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
-  opsFillYears(document.getElementById("capExpYear"), data.years, data.year);
-  document.getElementById("capDepHead").textContent = `Depreciation ${data.year}`;
+  opsFillYears(document.getElementById("capExpYear"), capData.years, capData.year);
+  const scope = document.getElementById("capExpScope");
+  const keep = scope.value || "year";
+  scope.innerHTML = `<option value="year">Bought in ${capData.year}</option><option value="all">Everything up to ${capData.year}</option>`;
+  scope.value = keep;
+  const head = document.getElementById("capDepHead");
+  head.dataset.label = `Depreciation ${capData.year}`;
+  renderCapitalExpense();
+}
+
+function renderCapitalExpense() {
+  const data = capData;
+  if (!data) return;
+  const el = (id) => document.getElementById(id);
+  const inScope = data.assets.filter((a) => el("capExpScope").value === "all" || a.expense_date.startsWith(String(data.year)));
+  expFill(el("capExpCategory"), "All categories", expUnique(inScope.map((a) => a.category)));
+  expFillMonths(el("capExpMonth"), inScope.map((a) => a.expense_date));
+  const q = el("capExpSearch").value.trim().toLowerCase();
+  const cat = el("capExpCategory").value.toLowerCase();
+  const mon = el("capExpMonth").value;
+  const active = !!(q || cat || mon);
+  el("capExpClear").classList.toggle("hidden", !active);
+
+  const rows = expSorted(
+    inScope.filter(
+      (a) =>
+        (!cat || (a.category || "").toLowerCase() === cat) &&
+        (!mon || Number(a.expense_date.slice(5, 7)) === Number(mon)) &&
+        expHasText(a, ["item", "category"], q)
+    ),
+    expSort.capital
+  );
+  const sum = (f) => rows.reduce((n, a) => n + (a[f] || 0), 0);
   const t = data.totals;
-  document.getElementById("capExpSubtitle").textContent = data.assets.length
+  el("capExpSubtitle").textContent = data.assets.length
     ? `Bought in ${data.year}: ${printMoney(t.bought_in_year)} \u00b7 depreciation ${printMoney(t.dep_year)} \u00b7 book value at year end ${printMoney(t.book_value)}`
     : "Machines, molds, renovation and fixtures.";
+
   const lifeYears = (m) => String(Math.round((m / 12) * 100) / 100);
-  body.innerHTML = data.assets.length
-    ? data.assets
+  const body = el("capExpBody");
+  body.innerHTML = rows.length
+    ? rows
         .map(
           (a) => `<tr>
           <td class="px-3 py-1.5 whitespace-nowrap">${opsDateLabel(a.expense_date)}</td>
@@ -8101,9 +8303,26 @@ async function loadCapitalExpense(year) {
           <td class="px-3 py-1.5 font-medium" style="min-width:8.5rem">${opsPeso(a.book_value)}</td></tr>`
         )
         .join("") +
-      `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="3">Total</td><td class="px-3 py-2">${opsPeso(t.cost)}</td><td colspan="4"></td><td class="px-3 py-2">${opsPeso(t.dep_year)}</td><td class="px-3 py-2">${opsPeso(t.accumulated)}</td><td class="px-3 py-2">${opsPeso(t.book_value)}</td></tr>`
-    : `<tr><td colspan="10" class="text-sm text-gray-400 p-6 text-center">No capital purchases up to ${data.year}.</td></tr>`;
+      `<tr class="font-semibold bg-gray-50"><td class="px-3 py-2" colspan="3">Total${active || el("capExpScope").value === "year" ? ` (${rows.length} item${rows.length === 1 ? "" : "s"})` : ""}</td><td class="px-3 py-2">${opsPeso(sum("cost"))}</td><td colspan="3"></td><td class="px-3 py-2">${opsPeso(sum("dep_year"))}</td><td class="px-3 py-2">${opsPeso(sum("accumulated"))}</td><td class="px-3 py-2">${opsPeso(sum("book_value"))}</td></tr>`
+    : `<tr><td colspan="10" class="text-sm text-gray-400 p-6 text-center">${
+        inScope.length ? "Nothing matches these filters." : el("capExpScope").value === "all" ? `No capital purchases up to ${data.year}.` : `No capital purchases in ${data.year}.`
+      }</td></tr>`;
+  expArrows("capitalExpenseView", "capital");
 }
+
+wireExpSort(
+  "capitalExpenseView", "capital",
+  ["expense_date", "item", "category", "cost", "life_months", "salvage", "starts", "dep_year", "accumulated", "book_value"],
+  ["expense_date", "cost", "life_months", "salvage", "starts", "dep_year", "accumulated", "book_value"],
+  renderCapitalExpense
+);
+["capExpScope", "capExpSearch", "capExpCategory", "capExpMonth"].forEach((id) =>
+  document.getElementById(id).addEventListener("input", renderCapitalExpense)
+);
+document.getElementById("capExpClear").addEventListener("click", () => {
+  ["capExpSearch", "capExpCategory", "capExpMonth"].forEach((id) => (document.getElementById(id).value = ""));
+  renderCapitalExpense();
+});
 document.getElementById("capExpBody").addEventListener("change", async (e) => {
   const input = e.target;
   if (!input.dataset.asset) return;

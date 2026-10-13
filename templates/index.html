@@ -228,12 +228,13 @@
      order sheet keeps its own) */
   table:not(.print-lines) th { font-size: 12px !important; letter-spacing: .04em; }
   /* The rest of Operations reads as tight as Master Sales */
-  #poBody table, #suppliersView table, #operatingExpenseView table, #opexBody table, #expensesView table { font-size: 13px; }
-  #poBody td, #suppliersView td, #operatingExpenseView td, #opexBody td, #expensesView td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; }
-  #poBody th, #suppliersView th, #operatingExpenseView th, #opexBody th, #expensesView th { padding-top: 6px !important; padding-bottom: 6px !important; }
-  #poBody input, #suppliersView input, #opexBody input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
+  #poBody table, #suppliersView table, #operatingExpenseView table, #opexBody table, #expensesView table, #capitalExpenseView table { font-size: 13px; }
+  #poBody td, #suppliersView td, #operatingExpenseView td, #opexBody td, #expensesView td, #capitalExpenseView td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; }
+  #poBody th, #suppliersView th, #operatingExpenseView th, #opexBody th, #expensesView th, #capitalExpenseView th { padding-top: 6px !important; padding-bottom: 6px !important; }
+  #poBody input, #suppliersView input, #opexBody input, #capitalExpenseView td input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
   #poBody input[type="date"] { width: 7.5rem; }
   #expensesView td input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
+  #capitalExpenseView td, #capitalExpenseView th { white-space: nowrap; }
   #expensesView .print-edit { padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; line-height: 18px; }
   #expensesView .expense-type-select { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 12px; line-height: 18px; }
   /* Master Sales reads tight, like the sheet it came from */
@@ -1152,7 +1153,7 @@
 
   <div id="poPaymentModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
     <div class="bg-white rounded-2xl w-full max-w-xs p-5">
-      <h3 class="font-display font-semibold text-lg leading-tight mb-3">Log a payment</h3>
+      <h3 id="poPaymentTitle" class="font-display font-semibold text-lg leading-tight mb-3">Log a payment</h3>
       <div class="grid grid-cols-2 gap-2 mb-3">
         <label class="text-sm">
           <span class="text-xs text-gray-500 block mb-1">Amount</span>
@@ -1461,6 +1462,13 @@
       </div>
       <select id="opExpYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
     </div>
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <input id="opExpSearch" type="search" placeholder="Search item, description, note" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white w-64" />
+      <select id="opExpCategory" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white" aria-label="Category"></select>
+      <select id="opExpPaidBy" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white" aria-label="Paid by"></select>
+      <select id="opExpMonth" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white" aria-label="Month"></select>
+      <button id="opExpClear" type="button" class="hidden text-sm text-brand-blue hover:underline">Clear filters</button>
+    </div>
     <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
       <table class="w-full text-sm">
         <thead>
@@ -1487,6 +1495,13 @@
         <p id="capExpSubtitle" class="text-sm text-gray-500">Machines, molds, renovation and fixtures.</p>
       </div>
       <select id="capExpYear" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm"></select>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <select id="capExpScope" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white" aria-label="Which items"></select>
+      <input id="capExpSearch" type="search" placeholder="Search item" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white w-56" />
+      <select id="capExpCategory" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white" aria-label="Category"></select>
+      <select id="capExpMonth" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white" aria-label="Month bought"></select>
+      <button id="capExpClear" type="button" class="hidden text-sm text-brand-blue hover:underline">Clear filters</button>
     </div>
     <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
       <table class="w-full text-sm">

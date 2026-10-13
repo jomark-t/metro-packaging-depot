@@ -4364,6 +4364,21 @@ def _po_row(cur, po_id):
     po["amount"] = float(po["amount"] or 0)
     po["collected"] = float(po["collected"] or 0)
     po["balance"] = round(po["amount"] - po["collected"], 2)
+    cur.execute(
+        """SELECT id, paid_date, amount, note, created_by FROM purchase_order_payments
+           WHERE purchase_order_id=%s ORDER BY paid_date, id""",
+        (po_id,),
+    )
+    po["payments"] = [
+        {
+            "id": p["id"],
+            "paid_date": p["paid_date"].isoformat(),
+            "amount": float(p["amount"]),
+            "note": p["note"],
+            "created_by": p["created_by"],
+        }
+        for p in cur.fetchall()
+    ]
     return po
 
 
@@ -4592,6 +4607,56 @@ def api_purchase_order_payment_create(po_id):
     record_audit(cur, "Logged a PO payment", po["client_name"], {"amount": amount, "paid_date": paid_date})
     db.commit()
     return jsonify({"status": "ok", "id": payment_id})
+
+
+@app.route("/api/office/purchase-order-payments/<int:payment_id>", methods=["POST"])
+@login_required
+def api_purchase_order_payment_update(payment_id):
+    """Correct a payment that was keyed in wrong: its amount, date or note."""
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT p.amount, p.paid_date, p.note, c.name AS client_name
+           FROM purchase_order_payments p
+           JOIN purchase_orders po ON po.id = p.purchase_order_id
+           JOIN print_clients c ON c.id = po.client_id
+           WHERE p.id=%s""",
+        (payment_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such payment"}), 404
+
+    updates = {}
+    if "amount" in data:
+        try:
+            amount = round(float(data["amount"]), 2)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Enter an amount"}), 400
+        if amount <= 0:
+            return jsonify({"status": "error", "message": "Amount must be more than zero"}), 400
+        updates["amount"] = amount
+    if "paid_date" in data:
+        paid_date = (data["paid_date"] or "").strip()
+        try:
+            date.fromisoformat(paid_date)
+        except ValueError:
+            return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+        updates["paid_date"] = paid_date
+    if "note" in data:
+        updates["note"] = (data["note"] or "").strip() or None
+    if not updates:
+        return jsonify({"status": "ok"})
+
+    old = {"amount": float(row["amount"]), "paid_date": row["paid_date"].isoformat(), "note": row["note"]}
+    changes = {k: {"from": old[k], "to": v} for k, v in updates.items() if old[k] != v}
+    if changes:
+        sets = ", ".join(f"{f}=%s" for f in updates)
+        cur.execute(f"UPDATE purchase_order_payments SET {sets} WHERE id=%s", (*updates.values(), payment_id))
+        record_audit(cur, "Edited a PO payment", row["client_name"], changes)
+        db.commit()
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/office/purchase-order-payments/<int:payment_id>", methods=["DELETE"])
