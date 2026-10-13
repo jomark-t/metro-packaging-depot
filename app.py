@@ -5417,7 +5417,12 @@ def api_ops_monthly_opex():
     cur.execute("SELECT * FROM ops_electric_readings WHERE year=%s", (year,))
     for r in cur.fetchall():
         months[r["month"]].update(_ops_money_row(r, OPS_METER_FIELDS))
-    return jsonify({"year": year, "years": years, "months": list(months.values())})
+    # January has no month before it on this page, so it starts from where
+    # last December's meter ended
+    cur.execute("SELECT meter_after FROM ops_electric_readings WHERE year=%s AND month=12", (year - 1,))
+    prev = cur.fetchone()
+    carry_after = float(prev["meter_after"]) if prev and prev["meter_after"] is not None else None
+    return jsonify({"year": year, "years": years, "months": list(months.values()), "carry_after": carry_after})
 
 
 @app.route("/api/ops/monthly-opex", methods=["POST"])
@@ -5502,7 +5507,9 @@ def api_ops_monthly_opex_bulk():
 def api_ops_electric_set():
     """Sub-meter readings. Once before, after and rate are all in, the
     month's Electric figure is set to (after - before) x rate - the same
-    sum the sheet does - and can still be overtyped afterwards."""
+    sum the sheet does - and can still be overtyped afterwards. A month with
+    no "before" of its own starts from the month before's "after" (December's
+    for January), so the readings run on from year to year."""
     data = request.get_json(force=True)
     field = data.get("field")
     try:
@@ -5521,9 +5528,17 @@ def api_ops_electric_set():
     )
     cur.execute("SELECT * FROM ops_electric_readings WHERE year=%s AND month=%s", (year, month))
     r = cur.fetchone()
+    before = r["meter_before"]
+    if before is None:
+        prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+        cur.execute(
+            "SELECT meter_after FROM ops_electric_readings WHERE year=%s AND month=%s", (prev_year, prev_month)
+        )
+        prev = cur.fetchone()
+        before = prev["meter_after"] if prev else None
     electric = None
-    if r["meter_before"] is not None and r["meter_after"] is not None and r["rate"] is not None:
-        electric = round((float(r["meter_after"]) - float(r["meter_before"])) * float(r["rate"]), 2)
+    if before is not None and r["meter_after"] is not None and r["rate"] is not None:
+        electric = round((float(r["meter_after"]) - float(before)) * float(r["rate"]), 2)
         cur.execute(
             """INSERT INTO ops_monthly_opex (year, month, electric) VALUES (%s,%s,%s)
                ON CONFLICT (year, month) DO UPDATE SET electric=EXCLUDED.electric, updated_at=NOW()""",

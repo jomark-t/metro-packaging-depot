@@ -228,11 +228,14 @@
      order sheet keeps its own) */
   table:not(.print-lines) th { font-size: 12px !important; letter-spacing: .04em; }
   /* The rest of Operations reads as tight as Master Sales */
-  #poBody table, #suppliersView table, #operatingExpenseView table, #opexBody table { font-size: 13px; }
-  #poBody td, #suppliersView td, #operatingExpenseView td, #opexBody td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; }
-  #poBody th, #suppliersView th, #operatingExpenseView th, #opexBody th { padding-top: 6px !important; padding-bottom: 6px !important; }
+  #poBody table, #suppliersView table, #operatingExpenseView table, #opexBody table, #expensesView table { font-size: 13px; }
+  #poBody td, #suppliersView td, #operatingExpenseView td, #opexBody td, #expensesView td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; }
+  #poBody th, #suppliersView th, #operatingExpenseView th, #opexBody th, #expensesView th { padding-top: 6px !important; padding-bottom: 6px !important; }
   #poBody input, #suppliersView input, #opexBody input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
   #poBody input[type="date"] { width: 7.5rem; }
+  #expensesView td input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
+  #expensesView .print-edit { padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; line-height: 18px; }
+  #expensesView .expense-type-select { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 12px; line-height: 18px; }
   /* Master Sales reads tight, like the sheet it came from */
   #masterSalesBody table { font-size: 13px; }
   #masterSalesBody td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; white-space: nowrap; }
@@ -1178,7 +1181,10 @@
         <h2 class="font-display font-semibold text-xl leading-tight">Expenses</h2>
         <p id="expensesSubtitle" class="text-sm text-gray-500">Money going out.</p>
       </div>
-      <button id="expenseAddBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ Add expense</button>
+      <div class="flex items-center gap-2">
+        <select id="expensesYear" class="border border-gray-300 rounded-lg px-2 py-2 text-sm bg-white" aria-label="Year"></select>
+        <button id="expenseAddBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ Add expense</button>
+      </div>
     </div>
     <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
       <table class="w-full text-sm">
@@ -1239,19 +1245,23 @@
         </label>
         <label class="text-sm">
           <span class="text-xs text-gray-500 block mb-1">Amount</span>
-          <input id="expenseAmount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+          <div class="relative">
+            <span class="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400">&#8369;</span>
+            <input id="expenseAmount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded-lg pl-6 pr-2 py-1.5" />
+          </div>
         </label>
       </div>
       <div class="grid grid-cols-2 gap-2 mb-2">
         <label class="text-sm">
           <span class="text-xs text-gray-500 block mb-1">Category</span>
-          <input id="expenseCategory" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
+          <select id="expenseCategory" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 bg-white"></select>
         </label>
         <label class="text-sm">
           <span class="text-xs text-gray-500 block mb-1">Paid by</span>
           <input id="expensePaidBy" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
         </label>
       </div>
+      <input id="expenseCategoryNew" type="text" placeholder="Name the new category" class="hidden w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm mb-2" />
       <label class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Type</span>
         <select id="expenseType" class="w-full border border-gray-300 rounded-lg px-2 py-1.5">

@@ -4951,7 +4951,7 @@ async function openPrintOrderForm() {
   await loadPrintClients(); // fresh, in case one was added since page load
   document.getElementById("poClient").value = "";
   document.getElementById("poClientDropdown").classList.add("hidden");
-  document.getElementById("poDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("poDate").value = isoDate(new Date());
   document.getElementById("poDue").value = "";
   document.getElementById("poRemarks").value = "";
   ["poRush", "poFrame", "poPaid"].forEach((id) => (document.getElementById(id).checked = false));
@@ -5429,7 +5429,7 @@ function renderCollectionsDrawerBody(data) {
     <div>
       <h4 class="text-xs uppercase tracking-wide text-gray-400 font-mono mb-2">Add a PO</h4>
       <form id="drawerPoForm" class="flex flex-wrap gap-2 items-start">
-        <input name="po_date" type="date" value="${new Date().toISOString().slice(0, 10)}" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-36" />
+        <input name="po_date" type="date" value="${isoDate(new Date())}" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-36" />
         <input name="amount" type="number" step="0.01" min="0.01" placeholder="Amount" required class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-28" />
         <input name="remarks" type="text" placeholder="Remarks (optional)" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm flex-1 min-w-[8rem]" />
         <button type="submit" class="bg-brand-green text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:opacity-90 transition">Add</button>
@@ -5487,7 +5487,7 @@ let poPaymentTarget = null; // { poId, clientId } for whichever "+ Payment" was 
 function openPoPaymentModal(poId, clientId) {
   poPaymentTarget = { poId, clientId };
   document.getElementById("poPaymentAmount").value = "";
-  document.getElementById("poPaymentDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("poPaymentDate").value = isoDate(new Date());
   document.getElementById("poPaymentNote").value = "";
   document.getElementById("poPaymentError").classList.add("hidden");
   const modal = document.getElementById("poPaymentModal");
@@ -5593,7 +5593,7 @@ function moveNewPoClientActive(delta) {
 async function openNewPoModal() {
   await loadPrintClients();
   document.getElementById("newPoClient").value = "";
-  document.getElementById("newPoDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("newPoDate").value = isoDate(new Date());
   document.getElementById("newPoAmount").value = "";
   document.getElementById("newPoRemarks").value = "";
   document.getElementById("newPoError").classList.add("hidden");
@@ -5698,7 +5698,8 @@ function beginOfficeCellEdit(cell) {
   if (cell.querySelector("input")) return;
   const type = cell.dataset.type || "text";
   const shown = cell.textContent;
-  const original = shown.trim() === "—" ? "" : shown.trim();
+  // a spelled-out date or a peso amount is only how the value looks; edit the real one
+  const original = cell.dataset.value !== undefined ? cell.dataset.value : shown.trim() === "—" ? "" : shown.trim();
 
   const input = document.createElement("input");
   input.className = "print-cell-input" + (type === "number" ? " text-right" : "");
@@ -5772,6 +5773,40 @@ async function saveOfficeCell(cell, raw) {
 
 // Expenses - money going out. A flat list, inline-edited, newest first.
 let officeExpenses = [];
+let expensesYear = null;
+
+// the years that have expenses, plus this one (and next, from December) so a
+// new year is ready the moment it starts
+function expenseYears() {
+  const years = new Set(officeExpenses.map((e) => Number((e.expense_date || "").slice(0, 4))).filter(Boolean));
+  const now = new Date();
+  years.add(now.getFullYear());
+  if (now.getMonth() === 11) years.add(now.getFullYear() + 1);
+  return [...years].sort((a, b) => b - a);
+}
+
+// "October 12" - the year is the dropdown above the table
+function expenseDateLabel(iso) {
+  if (!iso) return "";
+  return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+}
+
+// every category already in use, one spelling each (the most common one),
+// so the dropdown doesn't offer "Printing materials" and "Printing Materials"
+function expenseCategories() {
+  const counts = new Map();
+  officeExpenses.forEach((e) => {
+    const name = (e.category || "").trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    const spellings = counts.get(key) || new Map();
+    spellings.set(name, (spellings.get(name) || 0) + 1);
+    counts.set(key, spellings);
+  });
+  return [...counts.values()]
+    .map((spellings) => [...spellings.entries()].sort((a, b) => b[1] - a[1])[0][0])
+    .sort((a, b) => a.localeCompare(b));
+}
 
 async function loadExpenses() {
   const body = document.getElementById("expensesBody");
@@ -5788,17 +5823,23 @@ async function loadExpenses() {
 
 function renderExpenses() {
   const body = document.getElementById("expensesBody");
-  const total = officeExpenses.reduce((n, e) => n + e.amount, 0);
-  document.getElementById("expensesSubtitle").textContent = officeExpenses.length
-    ? `${printMoney(total)} across ${officeExpenses.length} expense${officeExpenses.length === 1 ? "" : "s"}`
+  const years = expenseYears();
+  if (expensesYear === null || !years.includes(expensesYear)) expensesYear = new Date().getFullYear();
+  const yearSelect = document.getElementById("expensesYear");
+  yearSelect.innerHTML = years.map((y) => `<option value="${y}" ${y === expensesYear ? "selected" : ""}>${y}</option>`).join("");
+
+  const shown = officeExpenses.filter((e) => (e.expense_date || "").startsWith(String(expensesYear)));
+  const total = shown.reduce((n, e) => n + e.amount, 0);
+  document.getElementById("expensesSubtitle").textContent = shown.length
+    ? `${printMoney(total)} across ${shown.length} expense${shown.length === 1 ? "" : "s"} in ${expensesYear}`
     : "Money going out.";
 
-  if (!officeExpenses.length) {
-    body.innerHTML = `<tr><td colspan="9" class="text-sm text-gray-400 py-6 text-center">No expenses logged yet.</td></tr>`;
+  if (!shown.length) {
+    body.innerHTML = `<tr><td colspan="9" class="text-sm text-gray-400 py-6 text-center">No expenses logged in ${expensesYear}.</td></tr>`;
     return;
   }
 
-  body.innerHTML = officeExpenses.map(expenseRowHTML).join("");
+  body.innerHTML = shown.map(expenseRowHTML).join("");
   body.querySelectorAll(".office-edit").forEach(wireOfficeEditCell);
   body.querySelectorAll(".expense-type-select").forEach((sel) => {
     sel.addEventListener("change", async () => {
@@ -5824,22 +5865,25 @@ function renderExpenses() {
   });
 }
 
-function officeEditSpan(record, id, field, value, type, extraClass) {
-  const display = value === null || value === undefined || value === "" ? "—" : value;
-  return `<span class="print-edit office-edit${extraClass ? " " + extraClass : ""}" data-record="${record}" data-id="${id}" data-field="${field}"${type ? ` data-type="${type}"` : ""} tabindex="0" role="button">${escapeHtml(String(display))}</span>`;
+// `shown` is an optional nicer text for the cell ("October 12", "₱1,200.00");
+// the real value rides along in data-value so editing starts from that.
+function officeEditSpan(record, id, field, value, type, extraClass, shown) {
+  const display = shown || (value === null || value === undefined || value === "" ? "—" : value);
+  const raw = shown ? ` data-value="${escapeHtml(String(value ?? ""))}"` : "";
+  return `<span class="print-edit office-edit${extraClass ? " " + extraClass : ""}" data-record="${record}" data-id="${id}" data-field="${field}"${type ? ` data-type="${type}"` : ""}${raw} tabindex="0" role="button">${escapeHtml(String(display))}</span>`;
 }
 
 function expenseRowHTML(e) {
   return `
     <tr data-id="${e.id}">
-      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "expense_date", e.expense_date, "date")}</td>
+      <td class="px-3 py-2">${officeEditSpan("expense", e.id, "expense_date", e.expense_date, "date", "", expenseDateLabel(e.expense_date))}</td>
       <td class="px-3 py-2 font-medium text-gray-900">${officeEditSpan("expense", e.id, "item", e.item)}</td>
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "category", e.category)}</td>
       <td class="px-3 py-2"><select class="expense-type-select text-xs border border-gray-200 rounded-md px-1.5 py-0.5 ${e.expense_type === "capital" ? "bg-amber-50 text-amber-800" : "bg-gray-50 text-gray-600"}" data-id="${e.id}">
         <option value="operating" ${e.expense_type !== "capital" ? "selected" : ""}>Operating</option>
         <option value="capital" ${e.expense_type === "capital" ? "selected" : ""}>Capital</option></select></td>
       <td class="px-3 py-2 text-gray-500">${officeEditSpan("expense", e.id, "description", e.description)}</td>
-      <td class="px-3 py-2 text-right">${officeEditSpan("expense", e.id, "amount", e.amount.toFixed(2), "number")}</td>
+      <td class="px-3 py-2 text-right">${officeEditSpan("expense", e.id, "amount", e.amount.toFixed(2), "number", "", printMoney(e.amount))}</td>
       <td class="px-3 py-2">${officeEditSpan("expense", e.id, "paid_by", e.paid_by)}</td>
       <td class="px-3 py-2 text-gray-500">${officeEditSpan("expense", e.id, "note", e.note)}</td>
       <td class="px-3 py-2 text-right">${
@@ -5850,11 +5894,26 @@ function expenseRowHTML(e) {
     </tr>`;
 }
 
-const EXPENSE_FORM_FIELDS = ["Item", "Date", "Amount", "Category", "PaidBy", "Description", "Note"];
+const EXPENSE_FORM_FIELDS = ["Item", "Date", "Amount", "Description", "Note"];
+const EXPENSE_NEW_CATEGORY = "__new__";
+
+function fillExpenseCategories() {
+  const select = document.getElementById("expenseCategory");
+  select.innerHTML =
+    `<option value="">Choose&hellip;</option>` +
+    expenseCategories().map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("") +
+    `<option value="${EXPENSE_NEW_CATEGORY}">+ New category&hellip;</option>`;
+  select.value = "";
+  document.getElementById("expenseCategoryNew").classList.add("hidden");
+  document.getElementById("expenseCategoryNew").value = "";
+}
 
 function openExpenseModal() {
   EXPENSE_FORM_FIELDS.forEach((f) => (document.getElementById(`expense${f}`).value = ""));
-  document.getElementById("expenseDate").value = new Date().toISOString().slice(0, 10);
+  fillExpenseCategories();
+  // everything so far is paid from the company; change it when someone else paid
+  document.getElementById("expensePaidBy").value = "Company";
+  document.getElementById("expenseDate").value = isoDate(new Date());
   document.getElementById("expenseType").value = "operating";
   document.getElementById("expenseError").classList.add("hidden");
   const modal = document.getElementById("expenseModal");
@@ -5873,7 +5932,9 @@ async function saveExpense() {
   const errorEl = document.getElementById("expenseError");
   errorEl.classList.add("hidden");
   const value = (f) => document.getElementById(`expense${f}`).value;
-  if (!value("Item").trim() || !value("Category").trim() || !value("PaidBy").trim() || !(Number(value("Amount")) > 0)) {
+  const category =
+    value("Category") === EXPENSE_NEW_CATEGORY ? value("CategoryNew").trim() : value("Category");
+  if (!value("Item").trim() || !category || !value("PaidBy").trim() || !(Number(value("Amount")) > 0)) {
     errorEl.textContent = "Item, amount, category and paid by are all needed.";
     errorEl.classList.remove("hidden");
     return;
@@ -5885,7 +5946,7 @@ async function saveExpense() {
       item: value("Item"),
       expense_type: document.getElementById("expenseType").value,
       description: value("Description"),
-      category: value("Category"),
+      category,
       paid_by: value("PaidBy"),
       note: value("Note"),
     });
@@ -5899,6 +5960,15 @@ async function saveExpense() {
 }
 
 document.getElementById("expenseAddBtn").addEventListener("click", openExpenseModal);
+document.getElementById("expenseCategory").addEventListener("change", (e) => {
+  const input = document.getElementById("expenseCategoryNew");
+  input.classList.toggle("hidden", e.target.value !== EXPENSE_NEW_CATEGORY);
+  if (e.target.value === EXPENSE_NEW_CATEGORY) input.focus();
+});
+document.getElementById("expensesYear").addEventListener("change", (e) => {
+  expensesYear = Number(e.target.value);
+  renderExpenses();
+});
 document.getElementById("expenseCancel").addEventListener("click", closeExpenseModal);
 document.getElementById("expenseSave").addEventListener("click", saveExpense);
 
@@ -7053,7 +7123,7 @@ function renderOpex() {
             <td class="px-3 py-1 text-right" data-amount="${r.month}"></td></tr>`).join("")}
         </tbody>
       </table>
-      <p class="text-[11px] text-gray-400 px-3 py-2 border-t border-gray-100">Once before, after and rate are in, that month's Electric is set to consume &times; rate.</p>
+      <p class="text-[11px] text-gray-400 px-3 py-2 border-t border-gray-100">Once after and rate are in, that month's Electric is set to consume &times; rate. A blank &ldquo;before&rdquo; starts from last month's &ldquo;after&rdquo; (January's from last December's).</p>
     </div>`;
   document.getElementById("opexBody").innerHTML = `<div class="w-full min-w-0">${grid}</div>
     <div class="w-full max-w-3xl">
@@ -7071,14 +7141,17 @@ function opexRecompute() {
   rows.forEach((r) => {
     const t = document.querySelector(`[data-row-total="${r.month}"]`);
     if (t) t.textContent = opexRowTotal(r) ? "₱ " + opsFmt(opexRowTotal(r)) : "";
-    const consume = r.meter_before != null && r.meter_after != null ? r.meter_after - r.meter_before : null;
+    // a month with no "before" of its own starts where the month before ended -
+    // January's is last December's, so the readings carry on from year to year
+    const prevAfter = r.month > 1 ? rows[r.month - 2].meter_after : opsOpex.carry_after;
+    const start = r.meter_before != null ? r.meter_before : prevAfter;
+    const consume = start != null && r.meter_after != null ? r.meter_after - start : null;
     const c = document.querySelector(`[data-consume="${r.month}"]`);
     if (c) c.textContent = consume === null ? "" : opsFmt(consume).replace(/\.00$/, "");
     const a = document.querySelector(`[data-amount="${r.month}"]`);
     if (a) a.textContent = consume !== null && r.rate != null && consume * r.rate ? "₱ " + opsFmt(consume * r.rate) : "";
-    const prev = rows[r.month - 2];
     const before = document.querySelector(`input[data-m="${r.month}"][data-meter="meter_before"]`);
-    if (before) before.placeholder = prev && prev.meter_after != null ? opsFmt(prev.meter_after) : "";
+    if (before) before.placeholder = prevAfter != null ? opsFmt(prevAfter) : "";
   });
   OPEX_COLS.forEach(([f]) => {
     const el = document.querySelector(`[data-col-total="${f}"]`);
@@ -7274,7 +7347,7 @@ function openSupplierPay(s) {
   supplierPayTarget = s.id;
   document.getElementById("supplierPayTitle").textContent = `Pay ${s.name}`;
   document.getElementById("supplierPayOwed").textContent = `${printMoney(s.balance)} outstanding. A payment is applied to the oldest unpaid purchase orders first.`;
-  document.getElementById("supplierPayDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("supplierPayDate").value = isoDate(new Date());
   document.getElementById("supplierPayAmount").value = "";
   document.getElementById("supplierPayError").classList.add("hidden");
   opsOpenModal("supplierPayModal");
@@ -7842,7 +7915,7 @@ poBodyEl.addEventListener("click", async (e) => {
     poPayTarget = Number(add.dataset.po);
     const p = opsPO.pos.find((x) => x.id === poPayTarget);
     document.getElementById("poPayTitle").textContent = `Log a payment - ${p.txn_no}`;
-    document.getElementById("poPayDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("poPayDate").value = isoDate(new Date());
     document.getElementById("poPayAmount").value = p.balance > 0 ? p.balance : "";
     document.getElementById("poPayError").classList.add("hidden");
     opsOpenModal("poPayModal");
@@ -7891,7 +7964,7 @@ document.getElementById("poClearFilters").addEventListener("click", () => {
 document.getElementById("poAddBtn").addEventListener("click", () => {
   document.getElementById("poTxn").placeholder = `e.g. ${new Date().getFullYear()}-0001`;
   ["poSupplier", "poDescription", "poAmountInput", "poTxn"].forEach((id) => (document.getElementById(id).value = ""));
-  document.getElementById("poDateInput").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("poDateInput").value = isoDate(new Date());
   document.getElementById("poError").classList.add("hidden");
   // most orders are settled when placed, so that's the starting point and the
   // part-payment fields stay out of the way
