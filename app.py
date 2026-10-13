@@ -114,8 +114,26 @@ OT_HOURLY_RATE = 50
 PAID_HOURS_PER_DAY = 8
 
 # Only cups printed above this daily quota count toward the bonus - e.g.
-# a 3500-cup day only has 2500 bonus-qualified cups.
+# a 3500-cup day only has 2500 bonus-qualified cups. This is the quota from
+# the beginning; a raise is recorded in cup_quota_changes with the date it
+# starts, and cup_quota_on() picks the one in force for each day.
 DAILY_CUP_QUOTA = 1000
+
+
+def fetch_cup_quota_changes(cur):
+    """[(effective_from ISO, quota)], oldest first."""
+    cur.execute("SELECT effective_from, quota FROM cup_quota_changes ORDER BY effective_from")
+    return [(r["effective_from"].isoformat(), r["quota"]) for r in cur.fetchall()]
+
+
+def cup_quota_on(changes, day_iso):
+    """The daily quota in force on a day: the latest change that has started."""
+    quota = DAILY_CUP_QUOTA
+    for effective_from, q in changes:
+        if effective_from > day_iso:
+            break
+        quota = q
+    return quota
 
 # Fraction of a full day's rate a shift counts for in payroll. Half Day
 # is the generator's standing Friday shift for a part-timer, and is also
@@ -356,6 +374,16 @@ def init_db():
         """CREATE TABLE IF NOT EXISTS cup_counts (
             date TEXT PRIMARY KEY,
             quantity INTEGER NOT NULL DEFAULT 0
+        )"""
+    )
+    # changes to the daily cup quota, each from a date onward - so raising it
+    # never rewrites the bonus of a cutoff that was already worked out
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS cup_quota_changes (
+            effective_from DATE PRIMARY KEY,
+            quota INTEGER NOT NULL CHECK (quota >= 0),
+            set_by TEXT,
+            set_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
     # per-staff, per-payday manual payroll inputs (OT hours + benefit
@@ -879,6 +907,36 @@ def fetch_roster(cur, include_archived=False):
     rank = {c: i for i, c in enumerate(CATEGORY_ORDER)}
     # an unknown category sorts after the known ones rather than crashing
     return sorted(rows, key=lambda r: (rank.get(r["category"], len(rank)), r["id"]))
+
+
+SCHEDULE_GROUP_LABELS = {"sales": "Sales", "printing": "Printing"}
+
+
+def schedule_group(row):
+    """Which side of the shop someone works on, for the schedule's columns:
+    the printing side is the machine operators - by category, or by role for
+    someone (James) who is on the sales roster but runs the machines."""
+    role = (row.get("role") or "").lower()
+    return "printing" if row.get("category") == "machine" or "machine operator" in role else "sales"
+
+
+def group_for_schedule(rows):
+    """The schedule and its PDF: sales side first, then printing, each person
+    keeping their usual order within it. Only the columns are regrouped -
+    the roster order the generator and payroll use is left alone."""
+    tagged = [{**r, "group": schedule_group(r)} for r in rows]
+    return sorted(tagged, key=lambda r: r["group"] == "printing")  # stable
+
+
+def schedule_group_runs(rows):
+    """[(group, label, how many columns)] for the header band above the names."""
+    runs = []
+    for r in rows:
+        if runs and runs[-1][0] == r["group"]:
+            runs[-1][2] += 1
+        else:
+            runs.append([r["group"], SCHEDULE_GROUP_LABELS[r["group"]], 1])
+    return runs
 
 
 def roster(include_archived=False):
@@ -1680,6 +1738,7 @@ def compute_payroll(db, start, end, pay_date):
         (start.isoformat(), end.isoformat()),
     )
     cup_counts = {r["date"]: r["quantity"] for r in cur.fetchall()}
+    quota_changes = fetch_cup_quota_changes(cur)
 
     cur.execute(
         "SELECT staff_id, ot_hours, undertime_hours, sss, pagibig, philhealth, hmo, "
@@ -1715,7 +1774,7 @@ def compute_payroll(db, start, end, pay_date):
             absence_deduction = 0
 
         bonus = sum(
-            max(0, cup_counts.get(d_iso, 0) - DAILY_CUP_QUOTA) * CUP_BONUS_RATE[label]
+            max(0, cup_counts.get(d_iso, 0) - cup_quota_on(quota_changes, d_iso)) * CUP_BONUS_RATE[label]
             for d_iso, label in cup_shifts[sid]
         )
 
@@ -1805,6 +1864,7 @@ def compute_payroll(db, start, end, pay_date):
             {
                 "date": d_iso,
                 "quantity": cup_counts.get(d_iso, 0),
+                "quota": cup_quota_on(quota_changes, d_iso),
                 "weekday_short": d.strftime("%a"),
                 "is_weekend": d.weekday() >= 5,
             }
@@ -1819,7 +1879,11 @@ def compute_payroll(db, start, end, pay_date):
         "cup_counts": cup_rows,
         "ot_rate": OT_HOURLY_RATE,
         "cup_bonus_rate": CUP_BONUS_RATE,
-        "cup_daily_quota": DAILY_CUP_QUOTA,
+        "cup_daily_quota": cup_quota_on(quota_changes, end.isoformat()),
+        "cup_quota": {
+            "baseline": DAILY_CUP_QUOTA,
+            "changes": [{"effective_from": d, "quota": q} for d, q in quota_changes],
+        },
     }
 
 
@@ -6975,7 +7039,7 @@ def api_schedule():
     year = int(request.args.get("year"))
     month = int(request.args.get("month"))
     db = get_db()
-    month_roster = roster_for_month(db, year, month)
+    month_roster = group_for_schedule(roster_for_month(db, year, month))
     names = [s["name"] for s in month_roster]
     days = fetch_schedule_days(db, year, month, names)
     staff_counts = compute_staff_counts(days, names)
@@ -7018,6 +7082,55 @@ def api_payroll():
     start, end, pay_date = payroll_period_range(year, month, payday)
     db = get_db()
     return jsonify(compute_payroll(db, start, end, pay_date))
+
+
+@app.route("/api/payroll/cup-quota", methods=["POST"])
+@superuser_required
+def api_payroll_cup_quota_set():
+    """Set the daily cup quota from a date onward. Days before that date keep
+    the quota they had, so a bonus already paid doesn't change."""
+    data = request.get_json(force=True)
+    try:
+        quota = int(str(data.get("quota")).strip().replace(",", ""))
+        if not 0 <= quota <= 1_000_000:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Quota needs to be a whole number of cups."}), 400
+    effective_from = (data.get("effective_from") or "").strip()
+    try:
+        date.fromisoformat(effective_from)
+    except ValueError:
+        return jsonify({"status": "error", "message": "Pick the date the new quota starts."}), 400
+    db = get_db()
+    cur = db.cursor()
+    before = cup_quota_on(fetch_cup_quota_changes(cur), effective_from)
+    cur.execute(
+        """INSERT INTO cup_quota_changes (effective_from, quota, set_by) VALUES (%s,%s,%s)
+           ON CONFLICT (effective_from) DO UPDATE SET quota=EXCLUDED.quota, set_by=EXCLUDED.set_by, set_at=NOW()""",
+        (effective_from, quota, session.get("display_name") or "Unknown"),
+    )
+    record_audit(cur, "Set cup quota", f"from {effective_from}", {"quota": {"from": before, "to": quota}})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/payroll/cup-quota/<effective_from>", methods=["DELETE"])
+@superuser_required
+def api_payroll_cup_quota_delete(effective_from):
+    """Take a quota change back out, so those days use the quota before it."""
+    try:
+        date.fromisoformat(effective_from)
+    except ValueError:
+        return jsonify({"status": "error", "message": "That is not a date."}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("DELETE FROM cup_quota_changes WHERE effective_from=%s RETURNING quota", (effective_from,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such quota change."}), 404
+    record_audit(cur, "Removed a cup quota change", f"from {effective_from}", {"quota": row["quota"]})
+    db.commit()
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/payroll/mine")
@@ -7305,7 +7418,7 @@ def api_schedule_pdf():
     year = int(request.args.get("year"))
     month = int(request.args.get("month"))
     db = get_db()
-    month_roster = roster_for_month(db, year, month)
+    month_roster = group_for_schedule(roster_for_month(db, year, month))
     days = fetch_schedule_days(db, year, month, [s["name"] for s in month_roster])
 
     month_name = date(year, month, 1).strftime("%B %Y")
@@ -7316,6 +7429,7 @@ def api_schedule_pdf():
         business_name=BUSINESS_NAME,
         month_name=month_name,
         staff=month_roster,
+        staff_groups=schedule_group_runs(month_roster),
         day_chunks=day_chunks,
         chip_classes=CHIP_CLASSES,
     )

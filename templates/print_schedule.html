@@ -71,9 +71,16 @@
     <table class="w-full border-collapse">
       <thead>
         <tr class="bg-brand-blue text-white">
+          <th></th>
+          {% for g in staff_groups %}
+          <th colspan="{{ g[2] }}" class="text-center text-xs font-mono uppercase tracking-widest font-semibold px-3.5 py-1.5 bg-white/10{{ ' border-l border-white/30' if not loop.first else '' }}">{{ g[1] }}</th>
+          {% endfor %}
+          <th></th>
+        </tr>
+        <tr class="bg-brand-blue text-white">
           <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">Date</th>
           {% for s in staff %}
-          <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">{{ s.name }}</th>
+          <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5{{ ' border-l border-white/30' if loop.index0 > 0 and s.group != staff[loop.index0 - 1].group else '' }}">{{ s.name }}</th>
           {% endfor %}
           <th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">Off Today</th>
         </tr>
@@ -86,7 +93,7 @@
             <span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">{{ day.weekday_short }}</span>
           </td>
           {% for s in staff %}
-          <td class="px-3.5 py-2.5 align-top">
+          <td class="px-3.5 py-2.5 align-top{{ ' border-l border-gray-200' if loop.index0 > 0 and s.group != staff[loop.index0 - 1].group else '' }}">
             {% set entry = day.entries_by_name.get(s.name) %}
             {% if entry %}
             <span class="inline-flex flex-col items-start gap-0.5 rounded-md px-2.5 py-1.5 text-xs leading-tight {{ chip_classes.get(entry.shift_label, 'bg-gray-50 text-black border-l-2 border-gray-300') }}">

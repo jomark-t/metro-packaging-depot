@@ -228,9 +228,9 @@
      order sheet keeps its own) */
   table:not(.print-lines) th { font-size: 12px !important; letter-spacing: .04em; }
   /* The rest of Operations reads as tight as Master Sales */
-  #poBody table, #suppliersView table, #operatingExpenseView table, #opexBody table, #expensesView table, #capitalExpenseView table { font-size: 13px; }
-  #poBody td, #suppliersView td, #operatingExpenseView td, #opexBody td, #expensesView td, #capitalExpenseView td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; }
-  #poBody th, #suppliersView th, #operatingExpenseView th, #opexBody th, #expensesView th, #capitalExpenseView th { padding-top: 6px !important; padding-bottom: 6px !important; }
+  #poBody table, #suppliersView table, #operatingExpenseView table, #opexBody table, #expensesView table, #capitalExpenseView table, #collectionsView table { font-size: 13px; }
+  #poBody td, #suppliersView td, #operatingExpenseView td, #opexBody td, #expensesView td, #capitalExpenseView td, #collectionsView td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; }
+  #poBody th, #suppliersView th, #operatingExpenseView th, #opexBody th, #expensesView th, #capitalExpenseView th, #collectionsView th { padding-top: 6px !important; padding-bottom: 6px !important; }
   #poBody input, #suppliersView input, #opexBody input, #capitalExpenseView td input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
   #poBody input[type="date"] { width: 7.5rem; }
   #expensesView td input { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 13px !important; line-height: 18px; }
@@ -602,6 +602,7 @@
     <div class="bg-white border border-gray-200 rounded-xl overflow-auto shadow-sm">
       <table id="scheduleTable" class="w-full min-w-[900px] border-collapse">
         <thead>
+          <tr id="tableGroupRow" class="bg-brand-blue text-white"></tr>
           <tr id="tableHeadRow" class="bg-brand-blue text-white"></tr>
         </thead>
         <tbody id="tableBody" class="divide-y divide-gray-100"></tbody>
@@ -1204,6 +1205,22 @@
         </thead>
         <tbody id="expensesBody" class="divide-y divide-gray-100"></tbody>
       </table>
+    </div>
+    <div id="expensesPager" class="hidden flex flex-wrap items-center justify-between gap-3 mt-3 text-sm text-gray-600">
+      <span id="expensesPagerInfo"></span>
+      <div class="flex items-center gap-2">
+        <label class="flex items-center gap-1.5">Rows
+          <select id="expensesPageSize" class="border border-gray-300 rounded-lg px-2 py-1 text-sm bg-white">
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="0">All</option>
+          </select>
+        </label>
+        <button id="expensesPrev" type="button" class="border border-gray-300 bg-white rounded-lg px-3 py-1 hover:border-brand-blue hover:text-brand-blue disabled:opacity-40 disabled:hover:border-gray-300 disabled:hover:text-gray-600 transition">&lsaquo; Prev</button>
+        <span id="expensesPageLabel" class="whitespace-nowrap"></span>
+        <button id="expensesNext" type="button" class="border border-gray-300 bg-white rounded-lg px-3 py-1 hover:border-brand-blue hover:text-brand-blue disabled:opacity-40 disabled:hover:border-gray-300 disabled:hover:text-gray-600 transition">Next &rsaquo;</button>
+      </div>
     </div>
   </div>
 
@@ -1892,6 +1909,15 @@
 
     <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-6">
       <h2 class="font-display font-semibold text-base mb-1">Printed cup counts</h2>
+      <div id="cupQuotaEditor" class="hidden flex flex-wrap items-center gap-2 text-sm mb-2">
+        <span class="font-medium">Daily quota</span>
+        <input id="cupQuotaInput" type="number" min="0" step="50" class="w-24 border border-gray-300 rounded-md px-2 py-1" />
+        <span class="text-gray-500">cups, starting</span>
+        <input id="cupQuotaFrom" type="date" class="border border-gray-300 rounded-md px-2 py-1" />
+        <button id="cupQuotaSave" type="button" class="bg-brand-green text-white text-sm font-semibold rounded-md px-3 py-1 hover:opacity-90 transition">Set quota</button>
+        <span id="cupQuotaStatus" class="text-xs text-gray-500"></span>
+      </div>
+      <p id="cupQuotaHistory" class="text-xs text-gray-500 mb-2"></p>
       <p id="cupCountsHint" class="text-xs text-gray-500 mb-3">
         Store-wide printed-cup total for every day in this cutoff,
         including weekends. The Printer earns ₱0.15/cup and the Checker

@@ -320,10 +320,37 @@ function renderSummary(staff, counts) {
   });
 }
 
+const SCHEDULE_GROUP_LABELS = { sales: "Sales", printing: "Printing" };
+
 function renderTable(days, staff) {
+  // the first column of each group after the first gets a divider, so the
+  // two sides of the shop read as two blocks
+  const startsGroup = (i) => i > 0 && staff[i].group !== staff[i - 1].group;
+  const groupRow = document.getElementById("tableGroupRow");
+  if (groupRow) {
+    const runs = [];
+    staff.forEach((s) => {
+      if (runs.length && runs[runs.length - 1].group === s.group) runs[runs.length - 1].count += 1;
+      else runs.push({ group: s.group, count: 1 });
+    });
+    groupRow.innerHTML =
+      `<th></th>` +
+      runs
+        .map(
+          (r, i) =>
+            `<th colspan="${r.count}" class="text-center text-xs font-mono uppercase tracking-widest font-semibold px-3.5 py-1.5 bg-white/10${i ? " border-l border-white/30" : ""}">${SCHEDULE_GROUP_LABELS[r.group] || ""}</th>`
+        )
+        .join("") +
+      `<th></th>`;
+  }
   tableHeadRow.innerHTML =
     `<th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5 min-w-[70px]">Date</th>` +
-    staff.map((s) => `<th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">${s.name}</th>`).join("") +
+    staff
+      .map(
+        (s, i) =>
+          `<th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5${startsGroup(i) ? " border-l border-white/30" : ""}">${s.name}</th>`
+      )
+      .join("") +
     `<th class="text-left text-sm font-mono uppercase tracking-wide font-medium px-3.5 py-2.5">Off Today</th>`;
 
   tableBody.innerHTML = "";
@@ -338,13 +365,14 @@ function renderTable(days, staff) {
     dateTd.innerHTML = `<span class="font-medium text-[15px]">${day.day_num}</span><span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">${day.weekday_short}</span>`;
     tr.appendChild(dateTd);
 
-    staff.forEach((s) => {
+    staff.forEach((s, i) => {
       const td = document.createElement("td");
       // only managers can reassign shifts, so only they get the clickable
       // affordance - everyone else sees a plain read-only cell
-      td.className = IS_MANAGER
-        ? "px-3.5 py-2.5 align-top cursor-pointer hover:bg-blue-50/40 transition schedule-cell"
-        : "px-3.5 py-2.5 align-top";
+      td.className =
+        (IS_MANAGER
+          ? "px-3.5 py-2.5 align-top cursor-pointer hover:bg-blue-50/40 transition schedule-cell"
+          : "px-3.5 py-2.5 align-top") + (startsGroup(i) ? " border-l border-gray-200" : "");
       td.dataset.name = s.name;
       td.dataset.date = day.date;
       td.dataset.category = s.category;
@@ -1729,9 +1757,10 @@ async function loadPayroll() {
   const checkerRate = (data.cup_bonus_rate?.Checker ?? 0.10).toFixed(2);
   cupCountsHint.textContent =
     `Store-wide printed-cup total for every day in this cutoff, including weekends. ` +
-    `The first ${quota.toLocaleString()} cups/day don't qualify for a bonus - only cups above that earn the Printer ` +
+    `Cups up to the daily quota (${quota.toLocaleString()} for this cutoff) don't qualify for a bonus - only cups above it earn the Printer ` +
     `₱${printerRate}/cup and the Checker ₱${checkerRate}/cup, based on whoever held each role that day.`;
 
+  renderCupQuota(data);
   renderCupCounts(data.cup_counts);
   renderPayrollTable(data.staff);
   refreshCreditedState();
@@ -1796,6 +1825,88 @@ async function markPayrollCredited() {
   }
 }
 payrollCreditedBtn.addEventListener("click", markPayrollCredited);
+
+// The daily quota can be raised from a date onward; earlier days keep the quota
+// they had, so a cutoff that was already paid never changes.
+const cupQuotaEditor = document.getElementById("cupQuotaEditor");
+const cupQuotaInput = document.getElementById("cupQuotaInput");
+const cupQuotaFrom = document.getElementById("cupQuotaFrom");
+const cupQuotaStatus = document.getElementById("cupQuotaStatus");
+const cupQuotaHistory = document.getElementById("cupQuotaHistory");
+
+function renderCupQuota(data) {
+  const q = data.cup_quota || { baseline: data.cup_daily_quota, changes: [] };
+  const dateLabel = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const steps = [`<b>${q.baseline.toLocaleString()}</b> from the start`].concat(
+    q.changes.map(
+      (c) =>
+        `<b>${c.quota.toLocaleString()}</b> from ${dateLabel(c.effective_from)}` +
+        (IS_SUPERUSER
+          ? ` <button type="button" class="cup-quota-remove text-gray-400 hover:text-red-600" data-from="${c.effective_from}" title="Remove this change" aria-label="Remove this change">&times;</button>`
+          : "")
+    )
+  );
+  cupQuotaHistory.innerHTML = `Quota: ${steps.join(" &rarr; ")}`;
+  cupQuotaHistory.querySelectorAll(".cup-quota-remove").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const ok = await confirmDialog("Those days go back to the quota before it, and the bonus on any cutoff they fall in is worked out again.", {
+        title: "Remove this quota change?",
+        confirmLabel: "Remove",
+      });
+      if (!ok) return;
+      const res = await fetch(`/api/payroll/cup-quota/${btn.dataset.from}`, { method: "DELETE" });
+      if (!res.ok) {
+        cupQuotaStatus.textContent = (await res.json().catch(() => ({}))).message || "Could not remove it.";
+        return;
+      }
+      loadPayroll();
+    })
+  );
+  if (!IS_SUPERUSER) return;
+  cupQuotaEditor.classList.remove("hidden");
+  // keep what's being typed across a reload of the cutoff
+  if (document.activeElement !== cupQuotaInput) cupQuotaInput.value = data.cup_daily_quota;
+  if (!cupQuotaFrom.value) cupQuotaFrom.value = isoDate(new Date());
+}
+
+if (document.getElementById("cupQuotaSave")) {
+  document.getElementById("cupQuotaSave").addEventListener("click", async () => {
+    const btn = document.getElementById("cupQuotaSave");
+    cupQuotaStatus.textContent = "";
+    const quota = Number(cupQuotaInput.value);
+    if (!Number.isInteger(quota) || quota < 0 || cupQuotaInput.value === "") {
+      cupQuotaStatus.textContent = "Enter the quota as a whole number of cups.";
+      return;
+    }
+    if (!cupQuotaFrom.value) {
+      cupQuotaStatus.textContent = "Pick the date it starts.";
+      return;
+    }
+    const ok = await confirmDialog(
+      `From ${new Date(`${cupQuotaFrom.value}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })} the bonus only counts cups above ${quota.toLocaleString()} a day. Days before that keep their old quota.`,
+      { title: "Change the daily quota?", confirmLabel: "Set quota" }
+    );
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/payroll/cup-quota", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quota, effective_from: cupQuotaFrom.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        cupQuotaStatus.textContent = data.message || "Could not set the quota.";
+        return;
+      }
+      cupQuotaStatus.textContent = "Saved.";
+      setTimeout(() => (cupQuotaStatus.textContent = ""), 2500);
+      loadPayroll();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
 
 function renderCupCounts(cupRows) {
   if (!cupRows || cupRows.length === 0) {
@@ -5828,6 +5939,14 @@ async function saveOfficeCell(cell, raw) {
 // Expenses - money going out. A flat list, inline-edited, newest first.
 let officeExpenses = [];
 let expensesYear = null;
+let expensesPage = 1;
+let expensesPageSize = 25; // 0 = show all
+try {
+  const saved = Number(localStorage.getItem("mpd.expensesPageSize"));
+  if ([0, 25, 50, 100].includes(saved) && localStorage.getItem("mpd.expensesPageSize") !== null) expensesPageSize = saved;
+} catch (e) {
+  // storage blocked - the default page size it is
+}
 
 // the years that have expenses, plus this one (and next, from December) so a
 // new year is ready the moment it starts
@@ -5888,12 +6007,29 @@ function renderExpenses() {
     ? `${printMoney(total)} across ${shown.length} expense${shown.length === 1 ? "" : "s"} in ${expensesYear}`
     : "Money going out.";
 
+  const pager = document.getElementById("expensesPager");
   if (!shown.length) {
+    pager.classList.add("hidden");
     body.innerHTML = `<tr><td colspan="9" class="text-sm text-gray-400 py-6 text-center">No expenses logged in ${expensesYear}.</td></tr>`;
     return;
   }
 
-  body.innerHTML = shown.map(expenseRowHTML).join("");
+  // a page at a time, or everything when the size is "All"
+  const pages = expensesPageSize ? Math.ceil(shown.length / expensesPageSize) : 1;
+  expensesPage = Math.min(Math.max(expensesPage, 1), pages);
+  const start = expensesPageSize ? (expensesPage - 1) * expensesPageSize : 0;
+  const pageRows = expensesPageSize ? shown.slice(start, start + expensesPageSize) : shown;
+  pager.classList.remove("hidden");
+  document.getElementById("expensesPageSize").value = String(expensesPageSize);
+  document.getElementById("expensesPagerInfo").textContent =
+    pages > 1 ? `Showing ${start + 1}\u2013${start + pageRows.length} of ${shown.length}` : `Showing all ${shown.length}`;
+  document.getElementById("expensesPageLabel").textContent = pages > 1 ? `Page ${expensesPage} of ${pages}` : "";
+  document.getElementById("expensesPrev").disabled = expensesPage <= 1;
+  document.getElementById("expensesNext").disabled = expensesPage >= pages;
+  document.getElementById("expensesPrev").classList.toggle("invisible", pages <= 1);
+  document.getElementById("expensesNext").classList.toggle("invisible", pages <= 1);
+
+  body.innerHTML = pageRows.map(expenseRowHTML).join("");
   body.querySelectorAll(".office-edit").forEach(wireOfficeEditCell);
   body.querySelectorAll(".expense-type-select").forEach((sel) => {
     sel.addEventListener("change", async () => {
@@ -6021,6 +6157,25 @@ document.getElementById("expenseCategory").addEventListener("change", (e) => {
 });
 document.getElementById("expensesYear").addEventListener("change", (e) => {
   expensesYear = Number(e.target.value);
+  expensesPage = 1;
+  renderExpenses();
+});
+document.getElementById("expensesPageSize").addEventListener("change", (e) => {
+  expensesPageSize = Number(e.target.value);
+  expensesPage = 1;
+  try {
+    localStorage.setItem("mpd.expensesPageSize", String(expensesPageSize));
+  } catch (err) {
+    // not remembered, still applied
+  }
+  renderExpenses();
+});
+document.getElementById("expensesPrev").addEventListener("click", () => {
+  expensesPage -= 1;
+  renderExpenses();
+});
+document.getElementById("expensesNext").addEventListener("click", () => {
+  expensesPage += 1;
   renderExpenses();
 });
 document.getElementById("expenseCancel").addEventListener("click", closeExpenseModal);
