@@ -1701,6 +1701,20 @@ def _undertime_hourly_rate(staff_row):
     return (staff_row.get("daily_rate") or 0) / PAID_HOURS_PER_DAY
 
 
+def payroll_order(row):
+    """The payroll list and the payslips: the manager first, then the staff,
+    then the machine operators last; within each group the same order as the
+    schedule (category, then roster order)."""
+    if row["category"] == "manager":
+        rank = 0
+    elif schedule_group(row) == "printing":
+        rank = 2
+    else:
+        rank = 1
+    category_rank = CATEGORY_ORDER.index(row["category"]) if row["category"] in CATEGORY_ORDER else len(CATEGORY_ORDER)
+    return (rank, category_rank, row["id"])
+
+
 def compute_payroll(db, start, end, pay_date):
     """Days worked and cup-bonus come from the generated schedule + saved
     cup counts; OT hours and benefit deductions are manually entered per
@@ -1711,7 +1725,7 @@ def compute_payroll(db, start, end, pay_date):
                   default_sss, default_pagibig, default_philhealth, default_hmo
            FROM staff WHERE active"""
     )
-    staff_rows = [dict(r) for r in cur.fetchall()]
+    staff_rows = sorted((dict(r) for r in cur.fetchall()), key=payroll_order)
 
     cur.execute(
         "SELECT staff_id, date, shift_label FROM schedule WHERE date BETWEEN %s AND %s",
@@ -7082,6 +7096,24 @@ def api_payroll():
     start, end, pay_date = payroll_period_range(year, month, payday)
     db = get_db()
     return jsonify(compute_payroll(db, start, end, pay_date))
+
+
+@app.route("/api/payroll/bank/<name>")
+@payroll_view_required
+def api_payroll_bank(name):
+    """One person's bank details, for the button beside their name on the
+    payroll table. Fetched on click rather than carried in the payroll
+    payload, so the details only travel when someone asks for them."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT name, full_name, bank_name, bank_account_name, bank_account_number
+           FROM staff WHERE name=%s""",
+        (name,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "Unknown staff member"}), 404
+    return jsonify(dict(row))
 
 
 @app.route("/api/payroll/cup-quota", methods=["POST"])

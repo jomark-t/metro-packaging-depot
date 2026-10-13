@@ -237,6 +237,12 @@
   #capitalExpenseView td, #capitalExpenseView th { white-space: nowrap; }
   #expensesView .print-edit { padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; line-height: 18px; }
   #expensesView .expense-type-select { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 12px; line-height: 18px; }
+  /* Payroll: smaller type throughout, so the wide table reads without so much scrolling */
+  #payrollView table { font-size: 13px; }
+  #payrollView td { padding-top: 6px !important; padding-bottom: 6px !important; }
+  #payrollView td input { font-size: 13px !important; padding-top: 2px !important; padding-bottom: 2px !important; }
+  #payrollView th { padding-top: 8px !important; padding-bottom: 8px !important; }
+  #payrollTotalNet { font-size: 1.25rem; }
   /* Master Sales reads tight, like the sheet it came from */
   #masterSalesBody table { font-size: 13px; }
   #masterSalesBody td { padding-top: 2px !important; padding-bottom: 2px !important; line-height: 20px; white-space: nowrap; }
@@ -1902,6 +1908,16 @@
       </div>
     </div>
     <div id="activityList" class="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100 mb-10"></div>
+  </div>
+
+  <div id="bankModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5">
+      <h3 id="bankModalTitle" class="font-display font-semibold text-lg leading-tight mb-3">Bank details</h3>
+      <div id="bankModalBody" class="text-sm"></div>
+      <div class="flex justify-end mt-4">
+        <button id="bankModalClose" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Close</button>
+      </div>
+    </div>
   </div>
 
   <div id="payrollView" style="display:none">

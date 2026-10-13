@@ -2084,6 +2084,80 @@ function renderPayrollFooter() {
   `;
 }
 
+// The bank button beside a name: shows where to send that person's pay, with a
+// copy button for each line.
+const bankModal = document.getElementById("bankModal");
+
+function closeBankModal() {
+  bankModal.classList.add("hidden");
+  bankModal.classList.remove("flex");
+}
+
+async function openBankModal(name) {
+  const title = document.getElementById("bankModalTitle");
+  const body = document.getElementById("bankModalBody");
+  title.textContent = "Bank details";
+  body.innerHTML = `<p class="text-gray-400">Loading&hellip;</p>`;
+  bankModal.classList.remove("hidden");
+  bankModal.classList.add("flex");
+  const res = await fetch(`/api/payroll/bank/${encodeURIComponent(name)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    body.innerHTML = `<p class="text-red-600">${escapeHtml(data.message || "Could not load the bank details.")}</p>`;
+    return;
+  }
+  title.textContent = `Bank details - ${data.full_name || data.name}`;
+  const lines = [
+    ["Bank", data.bank_name],
+    ["Account name", data.bank_account_name],
+    ["Account number", data.bank_account_number],
+  ];
+  if (!lines.some(([, v]) => v)) {
+    body.innerHTML = `<p class="text-gray-500">No bank details on file. Add them on the Employees tab.</p>`;
+    return;
+  }
+  body.innerHTML = lines
+    .map(
+      ([label, value]) => `
+      <div class="flex items-center justify-between gap-3 py-2 border-b border-gray-100 last:border-0">
+        <div class="min-w-0">
+          <p class="text-[11px] uppercase tracking-wide text-gray-400 font-mono">${label}</p>
+          <p class="${label === "Account number" ? "font-mono text-base" : ""} font-medium break-all">${value ? escapeHtml(value) : '<span class="text-gray-300 font-normal">Not set</span>'}</p>
+        </div>
+        ${value ? `<button type="button" class="bank-copy shrink-0 text-xs text-brand-blue border border-gray-200 hover:border-brand-blue rounded-md px-2 py-1 transition" data-value="${escapeHtml(value)}">Copy</button>` : ""}
+      </div>`
+    )
+    .join("");
+  body.querySelectorAll(".bank-copy").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.value);
+        btn.textContent = "Copied";
+      } catch (err) {
+        btn.textContent = "Press Ctrl+C";
+        const range = document.createRange();
+        range.selectNodeContents(btn.closest("div.flex").querySelector("p.font-medium"));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      setTimeout(() => (btn.textContent = "Copy"), 1800);
+    })
+  );
+}
+
+document.getElementById("payrollBody").addEventListener("click", (e) => {
+  const btn = e.target.closest(".bank-btn");
+  if (btn) openBankModal(btn.dataset.name);
+});
+document.getElementById("bankModalClose").addEventListener("click", closeBankModal);
+bankModal.addEventListener("click", (e) => {
+  if (e.target === bankModal) closeBankModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !bankModal.classList.contains("hidden")) closeBankModal();
+});
+
 function renderPayrollTable(staffList) {
   const headers = [
     "Name", "Net Pay", "Role", "Days", "Base Pay", "Cup Bonus", "Bonus",
@@ -2106,7 +2180,11 @@ function renderPayrollTable(staffList) {
 
     const nameTd = document.createElement("td");
     nameTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
-    nameTd.innerHTML = `<span class="font-medium">${p.full_name}</span>`;
+    nameTd.innerHTML =
+      `<div class="flex items-center justify-between gap-3">` +
+      `<span class="font-medium">${p.full_name}</span>` +
+      `<button type="button" class="bank-btn shrink-0 text-gray-400 hover:text-brand-blue border border-gray-200 hover:border-brand-blue rounded px-1 py-0.5 transition" data-name="${escapeHtml(p.name)}" title="Bank details" aria-label="Bank details for ${escapeHtml(p.full_name)}">` +
+      `<svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5 inline-block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V10"/><path d="M19 21V10"/><path d="M9 21V10"/><path d="M15 21V10"/><path d="M12 3 3 8h18z"/></svg></button></div>`;
     tr.appendChild(nameTd);
 
     // Net Pay lives right after the name - the one figure worth seeing
