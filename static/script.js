@@ -375,7 +375,8 @@ function renderTable(days, staff) {
           : "px-3.5 py-2.5 align-top") + (startsGroup(i) ? " border-l border-gray-200" : "");
       td.dataset.name = s.name;
       td.dataset.date = day.date;
-      td.dataset.category = s.category;
+      // a machine operator gets Printer / Checker even if filed under another category
+      td.dataset.category = s.group === "printing" ? "machine" : s.category;
       const entry = day.entries.find((e) => e.name === s.name) || null;
       td.dataset.label = entry ? entry.shift_label : "Off";
       td.dataset.timeRange = entry ? entry.time_range : "";
@@ -2939,14 +2940,23 @@ async function restoreEmployee(card, name) {
 // --- Add employee ----------------------------------------------------------
 const addEmployeeBtn = document.getElementById("addEmployeeBtn");
 const addEmployeeForm = document.getElementById("addEmployeeForm");
-const newStaffCategory = document.getElementById("newStaffCategory");
+const newStaffPosition = document.getElementById("newStaffPosition");
 const newStaffStatus = document.getElementById("newStaffStatus");
 const saveNewStaffBtn = document.getElementById("saveNewStaffBtn");
+
+// One choice sets both the scheduling category and the job title, so the two
+// can't disagree (a "Machine Operator" filed as sales staff never got Printer
+// or Checker shifts).
+const STAFF_POSITIONS = [
+  { label: "Sales Staff", category: "sales", role: "Sales Staff" },
+  { label: "Sales Staff (part-time)", category: "sales_pt", role: "Sales Staff" },
+  { label: "Machine Operator", category: "machine", role: "Machine Operator" },
+  { label: "Branch Manager", category: "manager", role: "Branch Manager" },
+];
 
 const NEW_STAFF_INPUTS = {
   name: "newStaffName",
   full_name: "newStaffFullName",
-  role: "newStaffRole",
   employment: "newStaffEmployment",
   daily_rate: "newStaffDailyRate",
   monthly_salary: "newStaffMonthlySalary",
@@ -2959,10 +2969,8 @@ if (addEmployeeBtn) {
     const opening = addEmployeeForm.style.display === "none";
     addEmployeeForm.style.display = opening ? "block" : "none";
     if (!opening) return;
-    newStaffCategory.innerHTML = employeeCategories
-      .map((c) => `<option value="${escapeHtml(c.value)}">${escapeHtml(c.label)}</option>`)
-      .join("");
-    newStaffCategory.value = "sales"; // the usual hire
+    newStaffPosition.innerHTML = STAFF_POSITIONS.map((p, i) => `<option value="${i}">${escapeHtml(p.label)}</option>`).join("");
+    newStaffPosition.value = "0"; // the usual hire
     document.getElementById("newStaffName").focus();
   });
 
@@ -2972,7 +2980,8 @@ if (addEmployeeBtn) {
   });
 
   saveNewStaffBtn.addEventListener("click", async () => {
-    const payload = { category: newStaffCategory.value };
+    const position = STAFF_POSITIONS[Number(newStaffPosition.value)];
+    const payload = { category: position.category, role: position.role };
     Object.entries(NEW_STAFF_INPUTS).forEach(([field, id]) => {
       payload[field] = document.getElementById(id).value;
     });

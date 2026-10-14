@@ -2011,18 +2011,17 @@
       <h2 class="font-display font-semibold text-base mb-1">Add employee</h2>
       <p class="text-xs text-gray-500 mb-4">
         The short name is the schedule column header — keep it brief and
-        unique. Category decides how they're scheduled, so pick it carefully:
-        it's the one field you can't change afterwards.
+        unique. Position decides how they're scheduled (a Machine Operator gets
+        Printer and Checker shifts), so pick it carefully: it can't be changed
+        afterwards.
       </p>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
         <label class="block"><span class="text-gray-500">Short name *</span>
           <input id="newStaffName" maxlength="20" placeholder="e.g. Ana" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
         <label class="block"><span class="text-gray-500">Full name *</span>
           <input id="newStaffFullName" placeholder="e.g. Ana Reyes" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
-        <label class="block"><span class="text-gray-500">Category *</span>
-          <select id="newStaffCategory" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select></label>
-        <label class="block"><span class="text-gray-500">Job title</span>
-          <input id="newStaffRole" placeholder="defaults to the category" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Position *</span>
+          <select id="newStaffPosition" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select></label>
         <label class="block"><span class="text-gray-500">Employment</span>
           <input id="newStaffEmployment" value="Permanent" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
         <label class="block"><span class="text-gray-500">Daily rate (₱)</span>

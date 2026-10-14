@@ -7018,7 +7018,9 @@ def api_update_entry():
     except (TypeError, ValueError):
         return jsonify({"status": "error", "message": "Invalid date"}), 400
 
-    category = staff_by_name[name]["category"]
+    # the printing side gets the machine shifts whatever category they were
+    # filed under (someone entered as sales staff with a Machine Operator title)
+    category = "machine" if schedule_group(staff_by_name[name]) == "printing" else staff_by_name[name]["category"]
     valid_labels = EDITABLE_OPTIONS.get(category, ["Off"])
     if label not in valid_labels:
         return jsonify({"status": "error", "message": f"'{label}' isn't valid for {name}"}), 400
