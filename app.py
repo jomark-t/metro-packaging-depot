@@ -258,6 +258,8 @@ def init_db():
     # regular staff account can open, not for restricting managers.
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_access_payroll_app BOOLEAN NOT NULL DEFAULT TRUE")
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_access_cup_printing_app BOOLEAN NOT NULL DEFAULT TRUE")
+    # machine operators open Cup Printing to look only; this lets one of them edit it too
+    cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_edit_cup_printing BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_access_admin_app BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute(
         """CREATE TABLE IF NOT EXISTS schedule (
@@ -2138,6 +2140,32 @@ def _guard_view_only():
     return jsonify({"status": "error", "message": "This account is view-only."}), 403
 
 
+def cup_printing_read_only():
+    """A machine operator sees Cup Printing but can't change it, unless the
+    superuser has switched editing on for them. Everyone else on staff keeps
+    the full access they have always had."""
+    staff_name = session.get("staff_name")
+    if not staff_name or session.get("is_superuser"):
+        return False
+    cur = get_db().cursor()
+    cur.execute("SELECT role, category, can_edit_cup_printing FROM staff WHERE name=%s", (staff_name,))
+    row = cur.fetchone()
+    if row is None or row["category"] == "manager":
+        return False
+    return schedule_group(row) == "printing" and not row["can_edit_cup_printing"]
+
+
+@app.before_request
+def _guard_cup_printing_read_only():
+    """One rule for every Cup Printing write (/api/print/...), rather than a
+    check in each route."""
+    if request.method in ("GET", "HEAD", "OPTIONS") or "user_id" not in session:
+        return None
+    if not request.path.startswith("/api/print/") or not cup_printing_read_only():
+        return None
+    return jsonify({"status": "error", "message": "Cup Printing is view-only for your account."}), 403
+
+
 @app.before_request
 def _guard_payroll():
     """Refuse payroll and employee data until the PIN has been re-entered.
@@ -2483,6 +2511,7 @@ def index():
         "is_manager": manager,
         "is_outside_viewer": outside_viewer,
         "is_view_only": view_only,
+        "cup_printing_read_only": cup_printing_read_only(),
         "can_view_payroll": can_view_payroll(),
         "has_cup_printing_app": has_cup_printing_app,
         "has_office_app": has_office_app,
@@ -2526,7 +2555,7 @@ def api_staff_list():
                   sss_id, pagibig_id, philhealth_id, hmo_id,
                   bank_name, bank_account_name, bank_account_number,
                   staff.active, staff.archived_at,
-                  staff.can_access_cup_printing_app, staff.can_access_admin_app,
+                  staff.can_access_cup_printing_app, staff.can_access_admin_app, staff.can_edit_cup_printing,
                   COALESCE(app_users.login_enabled, FALSE) AS login_enabled,
                   (app_users.pin_hash IS NOT NULL) AS has_pin
            FROM staff
@@ -2727,7 +2756,7 @@ def api_staff_update(name):
     return jsonify({"status": "ok"})
 
 
-STAFF_ACCESS_FIELDS = ("can_access_cup_printing_app", "can_access_admin_app")
+STAFF_ACCESS_FIELDS = ("can_access_cup_printing_app", "can_access_admin_app", "can_edit_cup_printing")
 
 
 @app.route("/api/staff/<name>/access", methods=["POST"])

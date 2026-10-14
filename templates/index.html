@@ -237,6 +237,21 @@
   #capitalExpenseView td, #capitalExpenseView th { white-space: nowrap; }
   #expensesView .print-edit { padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; line-height: 18px; }
   #expensesView .expense-type-select { height: 20px; padding-top: 0 !important; padding-bottom: 0 !important; font-size: 12px; line-height: 18px; }
+  /* A machine operator's Cup Printing: look, don't touch. The server refuses the
+     writes anyway; this takes away what they'd press. */
+  .cup-readonly #statusNewBtn, .cup-readonly #cupPrintsNewBtn, .cup-readonly #printNewBtn, .cup-readonly #addClientBtn,
+  .cup-readonly .cps-menu-btn, .cup-readonly .print-logo-remove, .cup-readonly .print-discount-remove,
+  .cup-readonly #addDiscountBtn, .cup-readonly #newDiscountItem, .cup-readonly #newDiscountValue,
+  .cup-readonly #mergeClientBtn, .cup-readonly label:has(> .print-logo-input) { display: none !important; }
+  .cup-readonly #statusView .print-edit, .cup-readonly #cupPrintsView .print-edit, .cup-readonly #printView .print-edit,
+  .cup-readonly #printClientsView .print-edit, .cup-readonly #pricingView .print-edit, .cup-readonly #printDrawerName .print-edit,
+  .cup-readonly .print-contact, .cup-readonly .print-discount-field, .cup-readonly .cps-select { pointer-events: none; }
+  .cup-readonly .cps-select { appearance: none; background-image: none; }
+  .cup-readonly #statusView::before, .cup-readonly #cupPrintsView::before, .cup-readonly #printView::before,
+  .cup-readonly #printClientsView::before, .cup-readonly #pricingView::before {
+    content: "View only - you can look at Cup Printing but not change it."; display: block;
+    font-size: 12px; color: #6b7280; margin-bottom: 10px;
+  }
   /* Payroll: smaller type throughout, so the wide table reads without so much scrolling */
   #payrollView table { font-size: 13px; }
   #payrollView td { padding-top: 6px !important; padding-bottom: 6px !important; }

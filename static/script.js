@@ -9,6 +9,14 @@ const CURRENT_USER = window.CURRENT_USER || {
 const IS_SUPERUSER = !!CURRENT_USER.is_superuser;
 // Superuser or Clare - the only roles that get Payroll and Employees.
 const IS_MANAGER = !!CURRENT_USER.is_manager;
+// A machine operator opens Cup Printing to look, not to change it (unless the
+// superuser lets them); the server refuses the writes, this tidies the screen.
+if (CURRENT_USER.cup_printing_read_only) {
+  document.body.classList.add("cup-readonly");
+  document.addEventListener("dragstart", (e) => {
+    if (e.target.closest && e.target.closest("[draggable]")) e.preventDefault();
+  }, true);
+}
 // A co-owner opens Employees and Time Off to look, never to change
 const HR_VIEW_ONLY = !IS_MANAGER && !CURRENT_USER.staff_name && !!CURRENT_USER.can_view_payroll;
 
@@ -2639,6 +2647,14 @@ function employeeCardHtml(s) {
       <input type="checkbox" class="access-admin-input rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${s.can_access_admin_app ? "checked" : ""} />
       Admin (Collections, Expenses, Inventory, Notes)
     </label>
+    ${
+      s.category === "machine" || /machine operator/i.test(s.role || "")
+        ? `<label class="flex items-center gap-2 text-sm mb-2">
+      <input type="checkbox" class="access-edit-cup-input rounded border-gray-300 text-brand-blue focus:ring-brand-blue" ${s.can_edit_cup_printing ? "checked" : ""} />
+      Can edit Cup Printing <span class="text-xs text-gray-400">(machine operators can only view it unless this is on)</span>
+    </label>`
+        : ""
+    }
     <span class="access-save-status text-xs text-gray-500"></span>
     <p class="text-[11px] text-gray-400 mt-2">Payroll &amp; HRMS always stays available.</p>
   `;
@@ -2864,6 +2880,10 @@ function renderEmployees() {
     }
     const accessCupPrinting = card.querySelector(".access-cup-printing-input");
     const accessAdmin = card.querySelector(".access-admin-input");
+    const accessEditCup = card.querySelector(".access-edit-cup-input");
+    if (accessEditCup) {
+      accessEditCup.addEventListener("change", () => saveStaffAccess(card, name, "can_edit_cup_printing", accessEditCup.checked));
+    }
     if (accessCupPrinting) {
       accessCupPrinting.addEventListener("change", () =>
         saveStaffAccess(card, name, "can_access_cup_printing_app", accessCupPrinting.checked)
@@ -8951,7 +8971,8 @@ window.fetch = async function (...args) {
   }
   // a view-only account (a co-owner without full access) can open everything
   // and change nothing; the server refuses every write and this says so
-  if (res.status === 403 && CURRENT_USER.is_view_only) {
+  const url = typeof args[0] === "string" ? args[0] : (args[0] && args[0].url) || "";
+  if (res.status === 403 && (CURRENT_USER.is_view_only || (CURRENT_USER.cup_printing_read_only && url.includes("/api/print/")))) {
     const el = document.createElement("div");
     el.textContent = "This account is view-only - nothing was changed.";
     el.className = "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-gray-900 text-white text-sm rounded-lg px-4 py-2 shadow-lg";
