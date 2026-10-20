@@ -5848,9 +5848,11 @@ function renderCollectionsDashboard() {
     .map(
       (m) => `
       <div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${m.label}: ${printMoney(m.inv)} invoiced, ${printMoney(m.col)} collected">
-        <div class="flex items-end gap-[2px] w-full justify-center" style="height:${BAR_H}px">
-          <div style="width:40%;max-width:22px;height:${Math.max((m.inv / maxMonth) * BAR_H, m.inv ? 2 : 0)}px;background:#1e3a8a;border-radius:4px 4px 0 0"></div>
-          <div style="width:40%;max-width:22px;height:${Math.max((m.col / maxMonth) * BAR_H, m.col ? 2 : 0)}px;background:#16a34a;border-radius:4px 4px 0 0"></div>
+        <div class="relative w-full flex-1" style="min-height:${BAR_H}px">
+          <div class="absolute inset-0 flex items-end gap-[2px] justify-center">
+            <div style="width:40%;max-width:22px;height:${(m.inv / maxMonth) * 100}%;min-height:${m.inv ? 2 : 0}px;background:#1e3a8a;border-radius:4px 4px 0 0"></div>
+            <div style="width:40%;max-width:22px;height:${(m.col / maxMonth) * 100}%;min-height:${m.col ? 2 : 0}px;background:#16a34a;border-radius:4px 4px 0 0"></div>
+          </div>
         </div>
         <span class="text-[10px] text-gray-500">${m.label}</span>
         <span class="text-[10px] text-gray-400 leading-none">${m.inv ? dashMoneyShort(m.inv) : ""}</span>
@@ -5918,10 +5920,10 @@ function renderCollectionsDashboard() {
     : `<tr><td colspan="4" class="py-6 text-center text-gray-400">Nothing overdue or due this week.</td></tr>`;
 
   const card = (title, sub, body) => `
-    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0 flex flex-col">
       <h4 class="text-sm font-semibold text-gray-900">${title}</h4>
       <p class="text-[11px] text-gray-400 mb-2">${sub}</p>
-      ${body}
+      <div class="flex-1 flex flex-col min-h-0">${body}</div>
     </div>`;
 
   host.innerHTML = `
@@ -5931,7 +5933,7 @@ function renderCollectionsDashboard() {
       ${card(
         "Invoiced vs collected",
         `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Invoiced <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> Collected · last 6 months`,
-        `<div class="flex gap-1 pt-1">${chart}</div>`
+        `<div class="flex gap-1 pt-1 flex-1">${chart}</div>`
       )}
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -9735,9 +9737,11 @@ function renderClientsDashboard(d) {
       const returning = m.active - m.new;
       return `
       <div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${monthName(m.month)}: ${m.active} clients bought (${m.new} new, ${returning} returning) · ${m.orders} orders and receipts · ${printMoney(m.value)}">
-        <div class="flex flex-col justify-end w-full items-center" style="height:${BAR_H}px">
-          <div style="width:55%;max-width:34px;height:${(m.new / maxActive) * BAR_H}px;background:#16a34a;border-radius:4px 4px 0 0;margin-bottom:${m.new && returning ? 2 : 0}px"></div>
-          <div style="width:55%;max-width:34px;height:${(returning / maxActive) * BAR_H}px;background:#1e3a8a;border-radius:${m.new ? 0 : "4px 4px"} 0 0"></div>
+        <div class="relative w-full flex-1" style="min-height:${BAR_H}px">
+          <div class="absolute inset-0 flex flex-col justify-end items-center">
+            <div style="width:55%;max-width:34px;height:${(m.new / maxActive) * 100}%;background:#16a34a;border-radius:4px 4px 0 0;margin-bottom:${m.new && returning ? 2 : 0}px"></div>
+            <div style="width:55%;max-width:34px;height:${(returning / maxActive) * 100}%;background:#1e3a8a;border-radius:${m.new ? 0 : "4px 4px"} 0 0"></div>
+          </div>
         </div>
         <span class="text-[10px] text-gray-500">${monthName(m.month)}</span>
         <span class="text-[10px] text-gray-400 leading-none">${m.active}</span>
@@ -9790,10 +9794,10 @@ function renderClientsDashboard(d) {
     `<p class="text-[11px] text-gray-500 mt-2">${t.lapsed} client${t.lapsed === 1 ? " hasn't" : "s haven't"} ordered in over 90 days.</p>`;
 
   const card = (title, sub, body) => `
-    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0 flex flex-col">
       <h4 class="text-sm font-semibold text-gray-900">${title}</h4>
       <p class="text-[11px] text-gray-400 mb-2">${sub}</p>
-      ${body}
+      <div class="flex-1 flex flex-col min-h-0">${body}</div>
     </div>`;
 
   host.innerHTML = `
@@ -9807,7 +9811,7 @@ function renderClientsDashboard(d) {
       ${card(
         "New vs returning clients",
         `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Returning <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> New · clients who bought, last 6 months`,
-        `<div class="flex gap-1 pt-1">${chart}</div>`
+        `<div class="flex gap-1 pt-1 flex-1">${chart}</div>`
       )}
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
