@@ -153,7 +153,11 @@
   .week-chip .wc-client { font-weight: 600; display: block; }
   .week-chip .wc-meta { color: #6b7280; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
   .print-mode-on { background: #111827; color: #fff; }
-  .print-drawer-open { transform: none !important; }
+  /* the client card is a centred popup now; the class name is what the
+     open/close code has always toggled */
+  #printDrawer { display: none; }
+  #printDrawer.print-drawer-open { display: flex; animation: clientPop .16s ease-out; }
+  @keyframes clientPop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
   .tab-btn.active-tab, .payday-btn.active-payday { background: #ffffff; color: #1c33bb; }
   /* The <select>s in the header use white text/translucent background to
      sit on the blue header bar, but the opened option list is a separate
@@ -207,7 +211,8 @@
     background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%237a80a0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>');
     background-repeat: no-repeat; background-position: right .4rem center; background-size: 9px;
   }
-  .cps-sel-logo { background-color: #eef0fc; color: #15268f; }
+  .cps-sel-logo.v-yes { background-color: #1e3a8a; color: #fff; }
+  .cps-sel-logo.v-no { background-color: #f3f4f6; color: #4b5563; }
   .cps-sel-paid.v-yes { background-color: #e4f9ee; color: #067a48; }
   .cps-sel-paid.v-no { background-color: #f3f4f6; color: #4b5563; }
   .cps-sel-status.st-not_started { background-color: #f3f4f6; color: #4b5563; }
@@ -224,6 +229,17 @@
     padding: 0 .3rem; border-radius: 4px; transition: color .15s;
   }
   .cps-menu-btn:hover { color: #111827; background: #f3f4f6; }
+  .cps-edit-btn {
+    font-size: 11px; font-weight: 600; color: #15268f; border: 1px solid #c7cdf3;
+    border-radius: 6px; padding: .15rem .55rem; background: #fff; white-space: nowrap;
+  }
+  .po-invalid { border-color: #dc2626 !important; background-color: #fef2f2; }
+  .cps-edit-btn:hover { background: #eef0fc; }
+  /* an order saved but not confirmed yet */
+  .cps-draft {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #92400e; background: #fef3c7; border: 1px dashed #f59e0b; border-radius: 5px; padding: 0 .35rem;
+  }
   /* One size for every table's column headings, app-wide (the printed
      order sheet keeps its own) */
   table:not(.print-lines) th { font-size: 12px !important; letter-spacing: .04em; }
@@ -240,9 +256,9 @@
   /* A machine operator's Cup Printing: look, don't touch. The server refuses the
      writes anyway; this takes away what they'd press. */
   .cup-readonly #statusNewBtn, .cup-readonly #cupPrintsNewBtn, .cup-readonly #printNewBtn, .cup-readonly #addClientBtn,
-  .cup-readonly .cps-menu-btn, .cup-readonly .print-logo-remove, .cup-readonly .print-discount-remove,
+  .cup-readonly .cps-menu-btn, .cup-readonly .cps-edit-btn, .cup-readonly .print-logo-remove, .cup-readonly .print-discount-remove,
   .cup-readonly #addDiscountBtn, .cup-readonly #newDiscountItem, .cup-readonly #newDiscountValue,
-  .cup-readonly #mergeClientBtn, .cup-readonly label:has(> .print-logo-input) { display: none !important; }
+  .cup-readonly #mergeClientBtn, .cup-readonly #clientsImportBtn, .cup-readonly label:has(> .print-logo-input) { display: none !important; }
   .cup-readonly #statusView .print-edit, .cup-readonly #cupPrintsView .print-edit, .cup-readonly #printView .print-edit,
   .cup-readonly #printClientsView .print-edit, .cup-readonly #pricingView .print-edit, .cup-readonly #printDrawerName .print-edit,
   .cup-readonly .print-contact, .cup-readonly .print-discount-field, .cup-readonly .cps-select { pointer-events: none; }
@@ -317,7 +333,16 @@
         <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="admin">
           <span class="flex-1">
             <span class="block text-sm text-gray-900">Cup Printing</span>
-            <span class="block text-[11px] text-gray-400">Status, orders and clients</span>
+            <span class="block text-[11px] text-gray-400">Status, orders and pricing</span>
+          </span>
+          <span class="app-tick text-brand-blue hidden">&#10003;</span>
+        </button>
+        {% endif %}
+        {% if current_user.has_clients_app %}
+        <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="clients">
+          <span class="flex-1">
+            <span class="block text-sm text-gray-900">Clients</span>
+            <span class="block text-[11px] text-gray-400">Contacts, logos, discounts, balances</span>
           </span>
           <span class="app-tick text-brand-blue hidden">&#10003;</span>
         </button>
@@ -426,8 +451,13 @@
          other guards throughout script.js already no-op without it. #}
       {# <button id="tabPrintBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Print Queue</button> #}
       <button id="tabCupPrintsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Prints</button>
-      <button id="tabPrintClientsBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Clients</button>
       <button id="tabPricingBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Pricing</button>
+      {% endif %}
+      {# Clients module - one list of who we do business with, used by both
+         Cup Printing and Admin, so it belongs to neither. #}
+      {% if current_user.has_clients_app %}
+      <button id="tabClientsDashBtn" data-app="clients" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
+      <button id="tabPrintClientsBtn" data-app="clients" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Clients</button>
       {% endif %}
       {# Admin app - back-office record-keeping (collections, expenses,
          inventory, notes). Touches real money, so unlike Cup Printing it
@@ -437,7 +467,7 @@
       <button id="tabCollectionsBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Collections</button>
       <button id="tabExpensesBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Expenses</button>
       <button id="tabInventoryBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Inventory</button>
-      <button id="tabDiscountsBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Discounts</button>
+      <button id="tabDiscountsBtn" data-app="clients" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Discounts</button>
       <button id="tabNotesBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Notes</button>
       {% endif %}
       {# Operations - the owners' books; superuser and co-owners only. #}
@@ -867,7 +897,7 @@
           <thead>
             <tr>
               <th>Date</th><th>Client</th><th>Item</th><th>Lid</th><th>New logo</th>
-              <th class="r">Qty</th><th>Color</th><th>Paid</th><th>Status</th><th>Deadline</th><th>Remarks</th>
+              <th class="r">Qty</th><th>Color</th><th>Paid</th><th>Status</th><th>Deadline</th><th></th><th>Remarks</th>
             </tr>
           </thead>
           <tbody id="cupPrintsBody"></tbody>
@@ -987,6 +1017,14 @@
   </div>
   {% endif %}
 
+  <div id="clientsDashView" style="display:none">
+    <div class="mb-4">
+      <h2 class="font-display font-semibold text-xl leading-tight">Clients dashboard</h2>
+      <p id="clientsDashSubtitle" class="text-sm text-gray-500">Who we sell to, who's gone quiet, and who still owes.</p>
+    </div>
+    <div id="clientsDashBody"><p class="text-sm text-gray-400 py-8 text-center">Loading…</p></div>
+  </div>
+
   <div id="printClientsView" style="display:none">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
@@ -995,24 +1033,37 @@
       </div>
       <div class="flex items-center gap-2">
         <input id="printClientSearch" type="search" placeholder="Search clients…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+        <button id="clientsImportBtn" type="button" class="border border-gray-300 bg-white text-sm font-semibold px-3 py-2 rounded-lg hover:border-brand-blue hover:text-brand-blue transition whitespace-nowrap">Import StoreHub</button>
+        <input id="clientsImportFile" type="file" accept=".csv,text/csv" class="hidden" />
         <button id="addClientBtn" type="button" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ Add client</button>
       </div>
     </div>
+    <div id="clientsKpis" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3"></div>
+    <div id="clientsChips" class="flex flex-wrap gap-2 mb-3"></div>
     <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
       <table class="w-full text-sm">
         <thead>
-          <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
-            <th class="text-left px-3 py-2">Client</th>
-            <th class="text-left px-3 py-2">Contact</th>
-            <th class="text-left px-3 py-2">Instagram</th>
-            <th class="text-left px-3 py-2">Facebook</th>
-            <th class="text-left px-3 py-2">Phone</th>
-            <th class="text-right px-3 py-2">Orders</th>
-            <th class="text-right px-3 py-2">Owed</th>
-          </tr>
+          <tr id="clientsHeadRow" class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200"></tr>
         </thead>
         <tbody id="printClientsBody" class="divide-y divide-gray-100"></tbody>
       </table>
+    </div>
+    <div id="clientsPager" class="flex flex-wrap items-center justify-between gap-3 mt-3 text-sm"></div>
+  </div>
+
+  {# Store a StoreHub export's receipts against the clients they name. Same
+     button and same preview-then-import steps as Monthly Sales' import; this
+     one files each receipt under its customer instead of totalling the day. #}
+  <div id="clientsStorehubModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-2xl p-5 max-h-[90vh] overflow-y-auto">
+      <h3 class="font-display font-semibold text-lg leading-tight mb-1">Import from StoreHub</h3>
+      <p id="clientsStorehubFile" class="text-xs text-gray-500 mb-3"></p>
+      <div id="clientsStorehubPreview"></div>
+      <p id="clientsStorehubError" class="text-xs text-red-600 mt-2 hidden"></p>
+      <div class="flex justify-end gap-2 mt-4">
+        <button id="clientsStorehubCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="clientsStorehubGo" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Import</button>
+      </div>
     </div>
   </div>
 
@@ -1124,9 +1175,13 @@
           <option value="paid">Paid</option>
         </select>
         <input id="collectionsSearch" type="search" placeholder="Search clients…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-48" />
+        <button id="collectionsDashToggle" type="button" class="border border-gray-300 text-gray-600 text-sm px-3 py-1.5 rounded-lg hover:bg-gray-50 transition whitespace-nowrap">Hide dashboard</button>
         <button id="newPoBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ New PO</button>
       </div>
     </div>
+    {# Dashboard: drawn entirely from the PO list below (collectionsPOs), so
+       it needs no endpoint of its own. #}
+    <div id="collectionsDashboard" class="mb-5"></div>
     <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
       <table class="w-full text-sm">
         <thead>
@@ -1161,6 +1216,17 @@
           <input id="newPoAmount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
         </label>
       </div>
+      <label class="text-sm block mb-3">
+        <span class="text-xs text-gray-500 block mb-1">Payment terms</span>
+        <select id="newPoTerms" class="w-full border border-gray-300 rounded-lg px-2 py-1.5">
+          <option value="" selected>No terms</option>
+          <option value="15">15 days</option>
+          <option value="30">30 days</option>
+          <option value="45">45 days</option>
+          <option value="60">60 days</option>
+        </select>
+        <span id="newPoDueHint" class="text-[11px] text-gray-400 block mt-1">No due date unless terms are picked.</span>
+      </label>
       <label class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Remarks <span class="text-gray-400">(optional)</span></span>
         <input id="newPoRemarks" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" />
@@ -1738,16 +1804,16 @@
 
   {# Client details, opened from a client name on any card. #}
   <div id="printScrim" class="fixed inset-0 bg-black/40 z-40 hidden"></div>
-  <aside id="printDrawer" class="fixed top-0 right-0 bottom-0 w-full sm:w-[27rem] bg-white border-l border-gray-200 shadow-2xl z-50 translate-x-full transition-transform duration-200 flex flex-col">
-    <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
+  <aside id="printDrawer" class="fixed z-50 left-0 right-0 top-[4vh] mx-auto w-[calc(100%-1.5rem)] max-w-6xl max-h-[92vh] bg-white rounded-2xl shadow-2xl flex-col overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="printDrawerName">
+    <div class="flex items-center gap-3 px-5 py-3.5 border-b border-gray-200 bg-white shrink-0">
       <div id="printDrawerLogo" class="w-12 h-12 rounded-full grid place-items-center font-display font-bold text-lg shrink-0"></div>
       <div class="min-w-0">
-        <h3 id="printDrawerName" class="font-semibold leading-tight truncate"></h3>
+        <h3 id="printDrawerName" class="font-display font-semibold text-lg leading-tight truncate"></h3>
         <p id="printDrawerSub" class="text-xs text-gray-500"></p>
       </div>
       <button id="printDrawerClose" class="ml-auto w-8 h-8 rounded-md border border-gray-300 text-gray-500 hover:text-gray-900 shrink-0" aria-label="Close">&#10005;</button>
     </div>
-    <div id="printDrawerBody" class="overflow-y-auto px-4 py-4 flex flex-col gap-5"></div>
+    <div id="printDrawerBody" class="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden bg-[#F7F8FB]"></div>
   </aside>
 
   {# One client's orders and payment log, opened from the Collections table. #}
@@ -1782,8 +1848,8 @@
   {# New order form. #}
   <div id="printOrderModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
     <div class="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5">
-      <h3 class="font-display font-semibold text-lg leading-tight">New print order</h3>
-      <p class="text-xs text-gray-400 mb-5">Client, cups, and anything the sheet used to hold.</p>
+      <h3 id="poTitle" class="font-display font-semibold text-lg leading-tight">New print order</h3>
+      <p id="poSubtitle" class="text-xs text-gray-400 mb-5">Client, cups, and anything the sheet used to hold.</p>
 
       <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Order details</p>
       <div class="relative mb-3">
@@ -1827,7 +1893,7 @@
           <tbody id="poItems"></tbody>
         </table>
       </div>
-      <p class="text-[11px] text-gray-400 mb-3">The lid list only offers what fits the cup you picked. Pricing comes from the price list, so there is nothing to type.</p>
+      <p class="text-[11px] text-gray-400 mb-3">The lid list only offers what fits the cup you picked. Pricing comes from the price list, so there is nothing to type. A finalized order needs a cup, color and quantity on every line; the lid is optional.</p>
       <button id="poAddRow" class="text-sm text-brand-blue hover:underline mb-5">+ Add another cup</button>
 
       <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-2">Notes</p>
@@ -1837,7 +1903,9 @@
 
       <div class="flex justify-end gap-2 pt-3 border-t border-gray-100">
         <button id="poCancel" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="poDraft" class="border border-gray-300 text-gray-700 rounded-lg px-4 py-2 text-sm font-semibold hover:bg-gray-50" title="Save it without confirming - finalize it later from Edit">Save as draft</button>
         <button id="poSave" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold">Save order</button>
+        <button id="poFinalize" class="hidden bg-brand-blue text-white rounded-lg px-4 py-2 text-sm font-semibold hover:brightness-110" title="Save and confirm this order">Finalize order</button>
       </div>
     </div>
   </div>

@@ -9,10 +9,12 @@ Then open: http://127.0.0.1:5000
 import calendar
 import csv
 import io
+import json
 import os
 import re
 import secrets
 from datetime import date, datetime, timedelta
+from difflib import SequenceMatcher
 from functools import wraps
 
 import psycopg2
@@ -589,6 +591,9 @@ def init_db():
     cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS lid_product_id INTEGER REFERENCES print_products(id)")
     cur.execute("ALTER TABLE print_order_items ADD COLUMN IF NOT EXISTS cup_color TEXT")
     cur.execute("ALTER TABLE print_orders ADD COLUMN IF NOT EXISTS scheduled_date DATE")
+    # an order still being worked out with the client - saved so it isn't
+    # lost, but not yet confirmed. Finalizing just clears the flag.
+    cur.execute("ALTER TABLE print_orders ADD COLUMN IF NOT EXISTS is_draft BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute("CREATE INDEX IF NOT EXISTS print_orders_scheduled_idx ON print_orders(scheduled_date)")
     for col in ("discounted_1k", "discounted_no_min"):
         cur.execute(f"ALTER TABLE print_product_prices ADD COLUMN IF NOT EXISTS {col} NUMERIC(10,2)")
@@ -619,6 +624,48 @@ def init_db():
 
     cur.execute("CREATE INDEX IF NOT EXISTS print_order_items_order_idx ON print_order_items(order_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS print_orders_date_idx ON print_orders(order_date DESC)")
+
+    # What a client bought over the counter, from StoreHub transaction
+    # exports. One row per receipt; the receipt number is the key, so
+    # importing an overlapping export updates rather than duplicates.
+    # `amount` is signed (a return is negative), and a cancelled receipt is
+    # kept but flagged so every total can leave it out.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS client_transactions (
+            id SERIAL PRIMARY KEY,
+            receipt_number TEXT UNIQUE NOT NULL,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id),
+            txn_time TIMESTAMP NOT NULL,
+            txn_type TEXT,
+            original_receipt TEXT,
+            amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            discount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            cash NUMERIC(12,2) NOT NULL DEFAULT 0,
+            gcash NUMERIC(12,2) NOT NULL DEFAULT 0,
+            bank NUMERIC(12,2) NOT NULL DEFAULT 0,
+            po NUMERIC(12,2) NOT NULL DEFAULT 0,
+            own_use BOOLEAN NOT NULL DEFAULT FALSE,
+            is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+            cashier TEXT,
+            customer_text TEXT,
+            notes TEXT,
+            store TEXT,
+            imported_by TEXT,
+            imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS client_transactions_client_idx ON client_transactions(client_id, txn_time DESC)")
+    # Other spellings of a client's name, learned when an import suggestion is
+    # confirmed or two clients are merged. alias_key is the name reduced by
+    # _client_key, so "Brew Star" and "BREW-STAR" are one alias.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS client_aliases (
+            alias_key TEXT PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES print_clients(id) ON DELETE CASCADE,
+            alias_text TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
 
     # ------------------------------------------------------------------
     # Admin app - back-office record-keeping that isn't payroll and isn't
@@ -662,6 +709,9 @@ def init_db():
         )"""
     )
     cur.execute("CREATE INDEX IF NOT EXISTS purchase_orders_client_idx ON purchase_orders(client_id)")
+    # payment terms in days (15/30/45/60). NULL for POs entered before terms
+    # existed - they have no due date rather than a made-up one.
+    cur.execute("ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS terms_days INTEGER")
     cur.execute(
         """CREATE TABLE IF NOT EXISTS purchase_order_payments (
             id SERIAL PRIMARY KEY,
@@ -2504,6 +2554,10 @@ def index():
     view_only = is_coowner_viewer()
     has_office_app = True if (manager or view_only) else access["can_access_admin_app"]
     has_ops_app = is_owner()
+    # Clients is its own module, shared by Cup Printing (who the orders are
+    # for) and Admin (who the POs are owed by) - so anyone with either one
+    # has it, and no separate permission to hand out.
+    has_clients_app = has_cup_printing_app or has_office_app
 
     current_user = {
         "display_name": session.get("display_name"),
@@ -2516,9 +2570,10 @@ def index():
         "has_cup_printing_app": has_cup_printing_app,
         "has_office_app": has_office_app,
         "has_ops_app": has_ops_app,
+        "has_clients_app": has_clients_app,
         # whether the app-switcher shows at all - no point offering it for
         # a single available app
-        "has_app_switcher": has_cup_printing_app or has_office_app or has_ops_app,
+        "has_app_switcher": has_cup_printing_app or has_office_app or has_ops_app or has_clients_app,
         "payroll_unlocked": payroll_unlocked(),
         # branch-wide figures (per-person day totals) - the people running
         # the place and the owners, not the team
@@ -3461,7 +3516,7 @@ def _print_order_rows(where="", params=()):
     cur = get_db().cursor()
     cur.execute(
         f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
-                   o.is_rush, o.needs_new_frame,
+                   o.is_rush, o.needs_new_frame, o.is_draft,
                    o.is_paid, o.remarks, o.created_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
                    c.logo_filename, c.is_discounted
@@ -3541,7 +3596,7 @@ def api_print_orders_history():
     cur = get_db().cursor()
     cur.execute(
         f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
-                   o.is_rush, o.needs_new_frame,
+                   o.is_rush, o.needs_new_frame, o.is_draft,
                    o.is_paid, o.remarks, o.created_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
                    c.logo_filename, c.is_discounted,
@@ -3590,6 +3645,26 @@ def price_line(cur, product_id, lid_product_id, quantity):
     return round(total, 2)
 
 
+def _finalized_line_problem(items):
+    """What stops these lines from being a finalized order, or None. A cup,
+    a print colour and a quantity are required on every line; the lid isn't.
+    A draft skips this entirely. An existing line the sheet import never
+    matched to the price list has no product id but does carry its cup."""
+    for n, i in enumerate(items, 1):
+        has_cup = bool(i.get("product_id") or i.get("id") or (i.get("label") or "").strip())
+        if not has_cup:
+            return f"Line {n} needs a cup before the order can be finalized."
+        if not (i.get("ink") or "").strip():
+            return f"Line {n} needs a color before the order can be finalized."
+        try:
+            qty = int(i.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            return f"Line {n} needs a quantity before the order can be finalized."
+    return None
+
+
 @app.route("/api/print/orders", methods=["POST"])
 @login_required
 def api_print_order_create():
@@ -3610,6 +3685,11 @@ def api_print_order_create():
     except ValueError:
         return jsonify({"status": "error", "message": "That date is not a real date."}), 400
 
+    if not data.get("is_draft"):
+        problem = _finalized_line_problem(items)
+        if problem:
+            return jsonify({"status": "error", "message": problem}), 400
+
     db = get_db()
     cur = db.cursor()
     # an unknown name creates the client rather than blocking the order -
@@ -3624,12 +3704,13 @@ def api_print_order_create():
 
     cur.execute(
         """INSERT INTO print_orders
-             (client_id, order_date, due_date, is_rush, needs_new_frame, is_paid, remarks, created_by)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+             (client_id, order_date, due_date, is_rush, needs_new_frame, is_paid, is_draft, remarks, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (
             client_id, order_date, data.get("due_date") or None,
             bool(data.get("is_rush")), bool(data.get("needs_new_frame")),
-            bool(data.get("is_paid")), (data.get("remarks") or "").strip() or None,
+            bool(data.get("is_paid")), bool(data.get("is_draft")),
+            (data.get("remarks") or "").strip() or None,
             session.get("display_name"),
         ),
     )
@@ -3657,7 +3738,7 @@ def api_print_order_create():
         )
 
     record_audit(
-        cur, "Created print order", client_name,
+        cur, "Created draft print order" if data.get("is_draft") else "Created print order", client_name,
         {"items": len(items), "cups": sum(int(i.get("quantity") or 0) for i in items)},
     )
     db.commit()
@@ -3667,13 +3748,13 @@ def api_print_order_create():
 @app.route("/api/print/orders/<int:order_id>", methods=["POST"])
 @login_required
 def api_print_order_update(order_id):
-    """Order-level edits: paid, rush, frame, due date, remarks."""
+    """Order-level edits: paid, rush, frame, draft, due date, remarks."""
     data = request.get_json(force=True)
 
     # Ink is deliberately not settable here: a single order can print
     # different colours on different cups, so it belongs to the line.
     fields = {}
-    for key in ("is_paid", "is_rush", "needs_new_frame"):
+    for key in ("is_paid", "is_rush", "needs_new_frame", "is_draft"):
         if key in data:
             fields[key] = bool(data[key])
     for key in ("remarks", "due_date", "scheduled_date"):
@@ -3704,6 +3785,135 @@ def api_print_order_update(order_id):
     sets = ", ".join(f"{k}=%s" for k in fields)
     cur.execute(f"UPDATE print_orders SET {sets} WHERE id=%s", (*fields.values(), order_id))
     record_audit(cur, "Updated print order", row["name"], fields)
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/print/orders/<int:order_id>/edit", methods=["POST"])
+@login_required
+def api_print_order_edit(order_id):
+    """Save the whole order from the Edit form at once: the order's own
+    fields plus its cup lines, which can be added to, changed or removed.
+
+    A line that comes back with an id keeps its status and delivered count
+    and is only repriced when its cup, lid or quantity changed - an old
+    order keeps the price it was taken at. A line without an id is new; a
+    line that doesn't come back at all was removed."""
+    data = request.get_json(force=True)
+    client_name = (data.get("client") or "").strip()
+    if not client_name:
+        return jsonify({"status": "error", "message": "Pick a client for this order."}), 400
+
+    items = [
+        i for i in (data.get("items") or [])
+        if i.get("id") or i.get("product_id") or (i.get("label") or "").strip()
+    ]
+    if not items:
+        return jsonify({"status": "error", "message": "An order needs at least one cup line."}), 400
+
+    order_date = (data.get("order_date") or "").strip() or date.today().isoformat()
+    try:
+        date.fromisoformat(order_date)
+        if data.get("due_date"):
+            date.fromisoformat(data["due_date"])
+    except ValueError:
+        return jsonify({"status": "error", "message": "That date is not a real date."}), 400
+
+    if not data.get("is_draft"):
+        problem = _finalized_line_problem(items)
+        if problem:
+            return jsonify({"status": "error", "message": problem}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM print_orders WHERE id=%s", (order_id,))
+    if cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "That order no longer exists."}), 404
+
+    cur.execute(
+        """SELECT id, product_id, lid_product_id, quantity, qty_delivered, status
+           FROM print_order_items WHERE order_id=%s""",
+        (order_id,),
+    )
+    existing = {r["id"]: dict(r) for r in cur.fetchall()}
+    for i in items:
+        if i.get("id") and int(i["id"]) not in existing:
+            return jsonify({"status": "error", "message": "A cup line on this order changed - reopen it and try again."}), 409
+
+    cur.execute("SELECT id FROM print_clients WHERE LOWER(name)=LOWER(%s)", (client_name,))
+    row = cur.fetchone()
+    if row:
+        client_id = row["id"]
+    else:
+        cur.execute("INSERT INTO print_clients (name) VALUES (%s) RETURNING id", (client_name,))
+        client_id = cur.fetchone()["id"]
+
+    is_draft = bool(data.get("is_draft"))
+    cur.execute(
+        """UPDATE print_orders
+           SET client_id=%s, order_date=%s, due_date=%s, is_rush=%s,
+               needs_new_frame=%s, is_paid=%s, is_draft=%s, remarks=%s
+           WHERE id=%s""",
+        (
+            client_id, order_date, data.get("due_date") or None,
+            bool(data.get("is_rush")), bool(data.get("needs_new_frame")),
+            bool(data.get("is_paid")), is_draft,
+            (data.get("remarks") or "").strip() or None, order_id,
+        ),
+    )
+
+    kept = set()
+    for i in items:
+        quantity = max(int(i.get("quantity") or 0), 0)
+        ink = (i.get("ink") or "").strip() or None
+        cup_color = (i.get("cup_color") or "").strip() or None
+        if i.get("id"):
+            item_id = int(i["id"])
+            kept.add(item_id)
+            old = existing[item_id]
+            fields = {"ink_color": ink, "cup_color": cup_color, "quantity": quantity}
+            # a line the sheet import never matched to the price list comes
+            # back without a product - it keeps whatever it already had
+            if i.get("product_id"):
+                fields["product_id"] = int(i["product_id"])
+                fields["item_text"] = (i.get("label") or "").strip() or None
+                fields["lid_product_id"] = i.get("lid_product_id") or None
+                fields["lid_text"] = (i.get("lid") or "").strip() or None
+            if old["qty_delivered"] > quantity:
+                fields["qty_delivered"] = quantity
+                if old["status"] != "cancelled":
+                    fields["status"] = "done" if quantity else "not_started"
+            product_id = fields.get("product_id", old["product_id"])
+            lid_product_id = fields.get("lid_product_id", old["lid_product_id"])
+            if (product_id, lid_product_id, quantity) != (old["product_id"], old["lid_product_id"], old["quantity"]):
+                fields["unit_price"] = price_line(cur, product_id, lid_product_id, quantity)
+            sets = ", ".join(f"{k}=%s" for k in fields)
+            cur.execute(f"UPDATE print_order_items SET {sets} WHERE id=%s", (*fields.values(), item_id))
+        else:
+            product_id = i.get("product_id") or None
+            lid_product_id = i.get("lid_product_id") or None
+            cur.execute(
+                """INSERT INTO print_order_items
+                     (order_id, product_id, lid_product_id, item_text, lid_text,
+                      ink_color, cup_color, quantity, unit_price, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'not_started')""",
+                (
+                    order_id, product_id, lid_product_id,
+                    (i.get("label") or "").strip(),
+                    (i.get("lid") or "").strip() or None,
+                    ink, cup_color, quantity,
+                    price_line(cur, product_id, lid_product_id, quantity),
+                ),
+            )
+
+    removed = [item_id for item_id in existing if item_id not in kept]
+    if removed:
+        cur.execute("DELETE FROM print_order_items WHERE id = ANY(%s)", (removed,))
+
+    record_audit(
+        cur, "Edited draft print order" if is_draft else "Edited print order", client_name,
+        {"order_id": order_id, "items": len(items), "removed": len(removed)},
+    )
     db.commit()
     return jsonify({"status": "ok"})
 
@@ -4054,58 +4264,590 @@ def api_print_clients():
     return jsonify({"clients": clients})
 
 
+def _client_key(name):
+    """A client name reduced to what identifies it: case, spacing, punctuation
+    and "&" vs "and" all ignored, so "Brew Star" finds "Brewstar" instead of
+    creating a second client."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower().replace("&", "and"))
+
+
+# words that say what kind of business it is, not which one: "Tigers Cafe" and
+# "Tigers" are the same client, "Tigers Cafe" and "Lion Cafe" are not
+_NAME_NOISE = {"cafe", "caffe", "coffee", "shop", "the", "and", "co", "inc", "corp", "company", "store", "resto", "restaurant"}
+
+
+def _client_core(name):
+    toks = re.findall(r"[a-z0-9]+", (name or "").lower().replace("&", " and "))
+    return [t for t in toks if t not in _NAME_NOISE] or toks
+
+
+def _similar_clients(name, clients):
+    """Existing clients whose name could be this one, best first, as
+    (score, client, confident). Score 1.0 means the names say the same thing
+    once noise words, spacing and word order are ignored ("Tigers Cafe,NCF"
+    and "NCF Tigers"). Below that it is a suggestion: one name starting the
+    other, one holding all the other's words, or a close spelling.
+
+    `confident` separates the suggestions worth defaulting to from the ones
+    only worth showing: a near-identical spelling ("Tacozilla"/"Takozilla"),
+    or the shorter name's words all inside the longer one where what the
+    longer adds is a short tag ("Ms. Vera") or the shorter is its distinctive
+    leading word ("Molino"/"Molino Uno"). A short or trailing overlap
+    ("Brew & Co"/"Baryo Brew") is not."""
+    core = _client_core(name)
+    squash = "".join(core)
+    words = set(core)
+    found = []
+    for c in clients:
+        if not squash or not c["squash"]:
+            continue
+        if squash == c["squash"] or words == c["words"]:
+            found.append((1.0, c, True))
+            continue
+        (short, short_core), (long_, long_core) = sorted(
+            ((squash, core), (c["squash"], c["core"])), key=lambda x: len(x[0])
+        )
+        ratio = SequenceMatcher(None, squash, c["squash"]).ratio()
+        inside = set(short_core) <= set(long_core)
+        prefix = len(short) >= 4 and long_.startswith(short)
+        subset = len(short) >= 4 and inside
+        score = max(ratio, 0.85 if (prefix or subset) else 0.0)
+        if score < 0.82:
+            continue
+        extras = set(long_core) - set(short_core)
+        leading = long_core[: len(short_core)] == short_core
+        # one name is the other plus a few letters ("Unplug"/"Unplugged")
+        stem = prefix and len(short) >= 6 and len(long_) - len(short) <= 3
+        confident = ratio >= 0.86 or stem or (
+            inside
+            and ((bool(extras) and all(len(w) <= 3 for w in extras)) or (leading and max(map(len, short_core)) >= 6))
+        )
+        found.append((score, c, confident))
+    found.sort(key=lambda f: -f[0])
+    return found
+
+
+def _storehub_receipts(text):
+    """A StoreHub "Transactions" export -> one dict per receipt that names a
+    customer. Same file the Monthly Sales import reads; this is the other
+    half of it - who the receipt was for rather than what the day took.
+
+    A return is stored negative so a client's total nets it off. Receipts
+    with no customer (walk-ins) are only counted, never stored. The same
+    receipt can repeat on several rows in some exports; the first wins."""
+    rows = list(csv.reader(io.StringIO(text)))
+    header = rows[0] if rows else []
+    if "Time" not in header or "Total" not in header or "Is_Cancelled" not in header or "Receipt Number" not in header:
+        raise ValueError("That doesn't look like a StoreHub transactions export.")
+    idx = {}
+    for i, h in enumerate(header):  # "Employee" appears twice - the first one is the cashier
+        idx.setdefault(h, i)
+
+    def cell(r, name):
+        i = idx.get(name)
+        return r[i].strip() if i is not None and i < len(r) else ""
+
+    def num(r, name):
+        v = cell(r, name)
+        try:
+            return float(v) if v else 0.0
+        except ValueError:
+            return 0.0
+
+    seen = set()
+    receipts, blank, total_rows = [], 0, 0
+    for r in rows[1:]:
+        if not r or not cell(r, "Time"):
+            continue
+        number = cell(r, "Receipt Number")
+        if not number or number in seen:
+            continue
+        seen.add(number)
+        total_rows += 1
+        try:
+            when = datetime.strptime(cell(r, "Time"), "%m/%d/%Y %H:%M")
+        except ValueError:
+            raise ValueError(f"Couldn't read the date '{cell(r, 'Time')}'.")
+        customer = " ".join(cell(r, "Customer").split())
+        if not customer:
+            blank += 1
+            continue
+        kind = cell(r, "Transaction Type") or "Sale"
+        total = num(r, "Total")
+        receipts.append({
+            "receipt": number,
+            "time": when,
+            "type": kind,
+            "original": cell(r, "Original Sale Receipt Number") or None,
+            "customer": customer,
+            "amount": round(-total if kind.lower() == "return" else total, 2),
+            "discount": round(num(r, "Discount"), 2),
+            "cash": round(num(r, "Cash"), 2),
+            "gcash": round(num(r, "GCash"), 2),
+            "bank": round(num(r, "BPI") + num(r, "Credit Card") + num(r, "Debit Card") + num(r, "Check"), 2),
+            "po": round(num(r, "P.O."), 2),
+            "own_use": bool(num(r, "MPD Usage") or num(r, "Usage (Deleted)")),
+            "cancelled": cell(r, "Is_Cancelled") == "True",
+            "cashier": cell(r, "Employee") or None,
+            "notes": cell(r, "Notes") or None,
+            "store": cell(r, "Store") or None,
+        })
+    return {"receipts": receipts, "blank": blank, "total": total_rows}
+
+
+def _import_client_receipts(cur, receipts, apply, choices=None):
+    """File StoreHub receipts under the clients their Customer column names.
+    Shared by the Clients import and Monthly Sales' import, so the same file
+    fills both. Does not commit - the caller does.
+
+    A customer is matched, in order, by exact name (spacing, case and
+    punctuation ignored), by a learned alias, and by a name that says the
+    same thing once noise words and word order are ignored. Anything looser
+    is only a suggestion, and does nothing until `choices` confirms it:
+    choices maps a customer's key to "new" (make a client), "skip", or an
+    existing client's id. A confirmed id is remembered as an alias. With no
+    choices (Monthly Sales' import, which has nobody to ask) unmatched
+    customers are skipped."""
+    choices = choices or {}
+    cur.execute("SELECT id, name FROM print_clients")
+    clients = []
+    by_key = {}
+    for r in cur.fetchall():
+        c = dict(r)
+        core = _client_core(c["name"])
+        c["squash"], c["words"], c["core"] = "".join(core), set(core), core
+        clients.append(c)
+        by_key[_client_key(c["name"])] = c
+    by_id = {c["id"]: c for c in clients}
+    cur.execute("SELECT alias_key, client_id FROM client_aliases")
+    for r in cur.fetchall():
+        if r["alias_key"] not in by_key and r["client_id"] in by_id:
+            by_key[r["alias_key"]] = by_id[r["client_id"]]
+
+    # one decision per distinct customer spelling, not per receipt
+    resolved = {}  # key -> {"client": c|None, "how": exact|alias|similar|None, "suggest": c|None}
+    for r in receipts:
+        key = _client_key(r["customer"])
+        if key in resolved:
+            continue
+        client = by_key.get(key)
+        how = "exact" if client and key == _client_key(client["name"]) else ("alias" if client else None)
+        suggest = None
+        if client is None:
+            near = _similar_clients(r["customer"], clients)
+            if near and near[0][0] == 1.0 and (len(near) == 1 or near[1][0] < 1.0):
+                client, how = near[0][1], "similar"
+            elif near:
+                suggest = {"id": near[0][1]["id"], "name": near[0][1]["name"], "confident": near[0][2]}
+        resolved[key] = {"client": client, "how": how, "suggest": suggest}
+
+    cur.execute(
+        "SELECT receipt_number, client_id, amount, is_cancelled FROM client_transactions WHERE receipt_number = ANY(%s)",
+        ([r["receipt"] for r in receipts],),
+    )
+    existing = {r["receipt_number"]: dict(r) for r in cur.fetchall()}
+
+    matched, unmatched = {}, {}
+    counts = {"new": 0, "update": 0, "same": 0, "cancelled": 0, "returns": 0}
+    for r in receipts:
+        key = _client_key(r["customer"])
+        res = resolved[key]
+        client = res["client"]
+        if client:
+            entry = matched.setdefault(client["id"], {"name": client["name"], "id": client["id"],
+                                                      "receipts": 0, "net": 0.0, "variants": set()})
+            if " ".join(r["customer"].split()).lower() != " ".join(client["name"].split()).lower():
+                entry["variants"].add(r["customer"])
+        else:
+            entry = unmatched.setdefault(key, {"key": key, "name": r["customer"], "id": None, "receipts": 0, "net": 0.0,
+                                               "suggestion": res["suggest"]})
+        entry["receipts"] += 1
+        if not r["cancelled"]:
+            entry["net"] += r["amount"]
+        else:
+            counts["cancelled"] += 1
+        if r["type"].lower() == "return":
+            counts["returns"] += 1
+        if client:
+            old = existing.get(r["receipt"])
+            if old is None:
+                counts["new"] += 1
+            elif (old["client_id"] == client["id"] and abs(float(old["amount"]) - r["amount"]) < 0.005
+                  and old["is_cancelled"] == r["cancelled"]):
+                counts["same"] += 1
+            else:
+                counts["update"] += 1
+
+    stored = created_clients = learned = 0
+    if apply:
+        target = {key: res["client"] for key, res in resolved.items() if res["client"]}
+        for key, u in unmatched.items():
+            choice = choices.get(key)
+            if choice == "new":
+                cur.execute("INSERT INTO print_clients (name) VALUES (%s) ON CONFLICT (name) DO NOTHING RETURNING id",
+                            (u["name"],))
+                row = cur.fetchone()
+                if row is None:
+                    cur.execute("SELECT id FROM print_clients WHERE name=%s", (u["name"],))
+                    row = cur.fetchone()
+                else:
+                    created_clients += 1
+                target[key] = {"id": row["id"], "name": u["name"]}
+            elif isinstance(choice, int) and choice in by_id:
+                target[key] = by_id[choice]
+                # a confirmed match is remembered: next time it needs no asking
+                cur.execute(
+                    """INSERT INTO client_aliases (alias_key, client_id, alias_text) VALUES (%s,%s,%s)
+                       ON CONFLICT (alias_key) DO UPDATE SET client_id=EXCLUDED.client_id""",
+                    (key, choice, u["name"]),
+                )
+                learned += 1
+        for r in receipts:
+            client = target.get(_client_key(r["customer"]))
+            if client is None:
+                continue
+            cur.execute(
+                """INSERT INTO client_transactions
+                     (receipt_number, client_id, txn_time, txn_type, original_receipt, amount, discount,
+                      cash, gcash, bank, po, own_use, is_cancelled, cashier, customer_text, notes, store, imported_by)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (receipt_number) DO UPDATE SET
+                     client_id=EXCLUDED.client_id, txn_time=EXCLUDED.txn_time, txn_type=EXCLUDED.txn_type,
+                     original_receipt=EXCLUDED.original_receipt, amount=EXCLUDED.amount, discount=EXCLUDED.discount,
+                     cash=EXCLUDED.cash, gcash=EXCLUDED.gcash, bank=EXCLUDED.bank, po=EXCLUDED.po,
+                     own_use=EXCLUDED.own_use, is_cancelled=EXCLUDED.is_cancelled, cashier=EXCLUDED.cashier,
+                     customer_text=EXCLUDED.customer_text, notes=EXCLUDED.notes, store=EXCLUDED.store""",
+                (r["receipt"], client["id"], r["time"], r["type"], r["original"], r["amount"], r["discount"],
+                 r["cash"], r["gcash"], r["bank"], r["po"], r["own_use"], r["cancelled"], r["cashier"],
+                 r["customer"], r["notes"], r["store"], session.get("display_name")),
+            )
+            stored += 1
+
+    times = [r["time"] for r in receipts]
+    for m in matched.values():
+        m["variants"] = sorted(m["variants"])
+    return {
+        "stored": stored, "created_clients": created_clients, "learned": learned,
+        "date_from": min(times).date().isoformat(), "date_to": max(times).date().isoformat(),
+        "counts": counts,
+        "matched": sorted(matched.values(), key=lambda e: -e["net"]),
+        "unmatched": sorted(unmatched.values(), key=lambda e: -e["net"]),
+    }
+
+
+@app.route("/api/print/clients/storehub", methods=["POST"])
+@login_required
+def api_print_clients_storehub():
+    """Store a StoreHub export's receipts against the clients they name -
+    and nothing else: Monthly Sales is not touched from here. Without
+    apply=1 it only reports what would happen. `choices` says what to do with
+    each customer that matched no client - make it one, file it under an
+    existing client, or leave it out - since the export also holds
+    first-name-only walk-ins that shouldn't become clients unasked.
+    Importing the same receipts again changes nothing."""
+    upload = request.files.get("file")
+    if upload is None:
+        return jsonify({"status": "error", "message": "Choose the StoreHub CSV first."}), 400
+    try:
+        parsed = _storehub_receipts(upload.read().decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    if not parsed["receipts"]:
+        return jsonify({"status": "error", "message": "None of the receipts in that file name a customer."}), 400
+    apply = request.form.get("apply") == "1"
+    choices = {}
+    try:
+        for key, value in (json.loads(request.form.get("choices") or "{}")).items():
+            choices[_client_key(key)] = value if value in ("new", "skip") else int(value)
+    except (TypeError, ValueError, AttributeError):
+        choices = {}
+
+    db = get_db()
+    cur = db.cursor()
+    result = _import_client_receipts(cur, parsed["receipts"], apply, choices)
+    if apply:
+        record_audit(
+            cur, "Imported StoreHub client transactions", f"{result['date_from']} to {result['date_to']}",
+            {"stored": result["stored"], "new_clients": result["created_clients"], "learned": result["learned"]},
+        )
+        db.commit()
+    return jsonify({
+        "status": "ok", "applied": apply, "rows": parsed["total"], "blank_customer": parsed["blank"], **result,
+    })
+
+
+@app.route("/api/print/clients/dashboard")
+@login_required
+def api_print_clients_dashboard():
+    """Everything the Clients dashboard shows, worked out over every client
+    and order at once - the paginated client list can't answer "who are our
+    best customers" because it only ever holds a page of them.
+
+    Built from print orders only (what was ordered, and whether it is marked
+    paid), the same data the Clients list's Owed column already uses, so it
+    needs no more access than that list does. Drafts and cancelled lines
+    never count: neither is business that happened."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT c.id, c.name, c.logo_filename, c.is_discounted,
+                  (COALESCE(NULLIF(c.phone, ''), NULLIF(c.email, ''), NULLIF(c.instagram, ''),
+                            NULLIF(c.facebook, ''), NULLIF(c.primary_contact, ''),
+                            NULLIF(c.contact_person, '')) IS NOT NULL) AS has_contact
+           FROM print_clients c"""
+    )
+    clients = {r["id"]: dict(r) for r in cur.fetchall()}
+
+    cur.execute(
+        """SELECT o.id, o.client_id, o.order_date, o.is_paid,
+                  COALESCE(SUM(CASE WHEN i.status = 'cancelled' THEN 0
+                                    ELSE i.quantity * i.unit_price END), 0) AS total
+           FROM print_orders o
+           LEFT JOIN print_order_items i ON i.order_id = o.id
+           WHERE NOT o.is_draft
+           GROUP BY o.id"""
+    )
+    by_client = {}
+    for r in cur.fetchall():
+        by_client.setdefault(r["client_id"], []).append(
+            {"date": r["order_date"], "paid": r["is_paid"], "total": float(r["total"] or 0)}
+        )
+
+    today = date.today()
+    year_ago = today - timedelta(days=365)
+    this_month = (today.year, today.month)
+
+    def month_back(n):
+        y, m = today.year, today.month - n
+        while m <= 0:
+            y, m = y - 1, m + 12
+        return (y, m)
+
+    months = {month_back(n): {"month": "%04d-%02d" % month_back(n), "active": 0, "new": 0, "orders": 0, "value": 0.0}
+              for n in range(5, -1, -1)}
+
+    ordering = active_90 = lapsed = repeat = new_this_month = 0
+    value_12 = 0.0
+    orders_12 = 0
+    rows = []
+    reorder = []
+    unpaid_by_client = {}
+    for cid, orders in by_client.items():
+        if cid not in clients or not orders:
+            continue
+        orders.sort(key=lambda o: o["date"])
+        ordering += 1
+        first, last = orders[0]["date"], orders[-1]["date"]
+        since = (today - last).days
+        if since <= 90:
+            active_90 += 1
+        else:
+            lapsed += 1
+        if len(orders) >= 2:
+            repeat += 1
+        if (first.year, first.month) == this_month:
+            new_this_month += 1
+
+        lifetime = sum(o["total"] for o in orders)
+        v12 = sum(o["total"] for o in orders if o["date"] >= year_ago)
+        n12 = sum(1 for o in orders if o["date"] >= year_ago)
+        value_12 += v12
+        orders_12 += n12
+        rows.append({"id": cid, "name": clients[cid]["name"], "logo_filename": clients[cid]["logo_filename"],
+                     "value_12": round(v12, 2), "orders_12": n12})
+
+        seen_months = set()
+        for o in orders:
+            key = (o["date"].year, o["date"].month)
+            if key in months:
+                months[key]["orders"] += 1
+                months[key]["value"] += o["total"]
+                if key not in seen_months:
+                    seen_months.add(key)
+                    months[key]["active"] += 1
+        fkey = (first.year, first.month)
+        if fkey in months:
+            months[fkey]["new"] += 1
+
+        # a client with a rhythm (3+ orders) who has gone well past it
+        if len(orders) >= 3:
+            gap = (last - first).days / (len(orders) - 1)
+            if gap >= 3 and 1.5 * gap < since <= 365:
+                reorder.append({
+                    "id": cid, "name": clients[cid]["name"], "logo_filename": clients[cid]["logo_filename"],
+                    "orders": len(orders), "typical_gap_days": round(gap), "days_since": since,
+                    "last_order": last.isoformat(), "lifetime_value": round(lifetime, 2),
+                })
+
+        for o in orders:
+            if not o["paid"] and o["total"] > 0:
+                u = unpaid_by_client.setdefault(cid, {"amount": 0.0, "orders": 0, "oldest": o["date"]})
+                u["amount"] += o["total"]
+                u["orders"] += 1
+                u["oldest"] = min(u["oldest"], o["date"])
+
+    rows.sort(key=lambda r: r["value_12"], reverse=True)
+    top = [r for r in rows if r["value_12"] > 0][:8]
+    top5_value = sum(r["value_12"] for r in rows[:5])
+
+    reorder.sort(key=lambda r: r["lifetime_value"], reverse=True)
+
+    unpaid = [
+        {"id": cid, "name": clients[cid]["name"], "amount": round(u["amount"], 2), "orders": u["orders"],
+         "oldest_days": (today - u["oldest"]).days}
+        for cid, u in unpaid_by_client.items() if cid in clients
+    ]
+    unpaid.sort(key=lambda u: u["amount"], reverse=True)
+
+    ordering_ids = [cid for cid in by_client if cid in clients]
+    return jsonify({
+        "totals": {
+            "clients": len(clients),
+            "ordering": ordering,
+            "never_ordered": len(clients) - ordering,
+            "active_90": active_90,
+            "lapsed": lapsed,
+            "new_this_month": new_this_month,
+            "repeat_rate": round(repeat / ordering * 100) if ordering else None,
+            "avg_order_value": round(value_12 / orders_12, 2) if orders_12 else None,
+            "value_12": round(value_12, 2),
+            "orders_12": orders_12,
+            "top5_share": round(top5_value / value_12 * 100) if value_12 else None,
+            "unpaid_total": round(sum(u["amount"] for u in unpaid), 2),
+            "unpaid_orders": sum(u["orders"] for u in unpaid),
+            "with_contact": sum(1 for cid in ordering_ids if clients[cid]["has_contact"]),
+            "with_logo": sum(1 for cid in ordering_ids if clients[cid]["logo_filename"]),
+            "discounted": sum(1 for c in clients.values() if c["is_discounted"]),
+        },
+        "months": [{**m, "value": round(m["value"], 2)} for m in months.values()],
+        "top": top,
+        "reorder": reorder[:8],
+        "reorder_count": len(reorder),
+        "unpaid": unpaid[:6],
+    })
+
+
+# Everything the Clients page shows per client, in one place so the rows, the
+# filter counts and the totals can never disagree. Cup sales leave out drafts
+# and cancelled lines (neither is business that happened); store purchases are
+# the StoreHub receipts filed under the client, net of returns.
+CLIENTS_PAGE_CTE = """
+WITH ord AS (
+    SELECT o.client_id, o.id, o.order_date, o.is_paid,
+           COALESCE(SUM(i.quantity) FILTER (WHERE i.status <> 'cancelled'), 0) AS cups,
+           COALESCE(SUM(i.quantity * i.unit_price) FILTER (WHERE i.status <> 'cancelled'), 0) AS total
+    FROM print_orders o
+    LEFT JOIN print_order_items i ON i.order_id = o.id
+    WHERE NOT o.is_draft
+    GROUP BY o.id
+), oc AS (
+    SELECT client_id, COUNT(*) AS orders, SUM(cups) AS cups,
+           COALESCE(SUM(total) FILTER (WHERE order_date >= CURRENT_DATE - 365), 0) AS value_12,
+           COALESCE(SUM(total) FILTER (WHERE NOT is_paid), 0) AS owed,
+           MIN(order_date) AS first_order, MAX(order_date) AS last_order
+    FROM ord GROUP BY client_id
+), st AS (
+    SELECT client_id,
+           COUNT(*) FILTER (WHERE NOT is_cancelled) AS store_receipts,
+           COALESCE(SUM(amount) FILTER (WHERE NOT is_cancelled), 0) AS store_net,
+           (MAX(txn_time) FILTER (WHERE NOT is_cancelled))::date AS last_store
+    FROM client_transactions GROUP BY client_id
+), base AS (
+    SELECT c.id, c.name, c.instagram, c.facebook, c.phone, c.email,
+           COALESCE(c.primary_contact, c.contact_person) AS primary_contact,
+           c.is_discounted, c.logo_filename,
+           COALESCE(oc.orders, 0) AS order_count, COALESCE(oc.cups, 0) AS cups,
+           COALESCE(oc.value_12, 0) AS value_12, COALESCE(oc.owed, 0) AS owed,
+           oc.first_order, oc.last_order,
+           COALESCE(st.store_receipts, 0) AS store_receipts, COALESCE(st.store_net, 0) AS store_net,
+           st.last_store, GREATEST(oc.last_order, st.last_store) AS last_activity
+    FROM print_clients c
+    LEFT JOIN oc ON oc.client_id = c.id
+    LEFT JOIN st ON st.client_id = c.id
+)
+"""
+
+# a client's standing, by what they last did - an order or a store purchase
+CLIENTS_PAGE_FILTERS = {
+    "all": "TRUE",
+    "active": "last_activity >= CURRENT_DATE - 90",
+    "quiet": "last_activity < CURRENT_DATE - 90",
+    "owing": "owed > 0",
+    "new": "first_order >= CURRENT_DATE - 30",
+    "never": "last_activity IS NULL",
+}
+CLIENTS_PAGE_SORTS = {
+    "name": "LOWER(name)",
+    "orders": "order_count",
+    "sales": "value_12",
+    "store": "store_net",
+    "last": "last_activity",
+    "owed": "owed",
+}
+
+
 @app.route("/api/print/clients/page")
 @login_required
 def api_print_clients_page():
-    """The Clients tab's own paginated, searchable view - separate from
-    api_print_clients above, which the New Order form's client combobox
-    and Collections' "+ New PO" picker need the *whole* list from to
-    search-as-you-type against. This one is built to stay fast as the
-    client list grows without bound.
-
-    Cursor is the last-loaded client's name (the list is already ordered
-    by name) rather than an offset, so paging in stays correct even if a
-    client is added or renamed in between."""
+    """The Clients tab's table: paginated, searchable, filterable and
+    sortable on the server, so it stays fast as the list grows. A separate
+    route from api_print_clients, which the order form's client picker needs
+    the whole list from."""
     try:
-        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+        per_page = min(max(int(request.args.get("per_page", 25)), 5), 100)
+        page = max(int(request.args.get("page", 1)), 1)
     except ValueError:
-        limit = 50
-    after_name = request.args.get("after_name") or ""
+        per_page, page = 25, 1
     q = (request.args.get("q") or "").strip()
+    flt = request.args.get("filter", "all")
+    if flt not in CLIENTS_PAGE_FILTERS:
+        flt = "all"
+    sort = request.args.get("sort", "name")
+    if sort not in CLIENTS_PAGE_SORTS:
+        sort = "name"
+    direction = "DESC" if request.args.get("dir") == "desc" else "ASC"
 
-    where_parts = []
-    params = []
+    where_q, params = "TRUE", []
     if q:
-        where_parts.append("c.name ILIKE %s")
+        where_q = "name ILIKE %s"
         params.append(f"%{q}%")
-    if after_name:
-        where_parts.append("c.name > %s")
-        params.append(after_name)
-    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     cur = get_db().cursor()
+    # chip counts follow the search, not the filter: they say how many each
+    # chip would show
     cur.execute(
-        f"""SELECT c.id, c.name, c.instagram, c.facebook, c.phone, c.email,
-                  COALESCE(c.primary_contact, c.contact_person) AS primary_contact,
-                  c.is_discounted, c.logo_filename,
-                  COUNT(DISTINCT o.id) AS order_count,
-                  COALESCE(SUM(i.quantity), 0) AS cups,
-                  COALESCE(SUM(CASE WHEN o.is_paid THEN 0
-                                    ELSE i.quantity * i.unit_price END), 0) AS owed
-           FROM print_clients c
-           LEFT JOIN print_orders o ON o.client_id = c.id
-           LEFT JOIN print_order_items i ON i.order_id = o.id
-           {where_sql}
-           GROUP BY c.id ORDER BY c.name
-           LIMIT %s""",
-        (*params, limit + 1),
+        CLIENTS_PAGE_CTE
+        + "SELECT "
+        + ", ".join(f"COUNT(*) FILTER (WHERE {cond}) AS {name}" for name, cond in CLIENTS_PAGE_FILTERS.items())
+        + f", COALESCE(SUM(owed), 0) AS owed, COALESCE(SUM(value_12), 0) AS value_12,"
+        + f" COALESCE(SUM(store_net), 0) AS store_net FROM base WHERE {where_q}",
+        params,
     )
-    rows = [dict(r) for r in cur.fetchall()]
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-    for row in rows:
-        row["owed"] = float(row["owed"] or 0)
-    return jsonify({"clients": rows, "has_more": has_more})
+    agg = dict(cur.fetchone())
+    totals = {k: float(agg.pop(k) or 0) for k in ("owed", "value_12", "store_net")}
+    counts = agg
+    total = counts[flt]
+
+    pages = max((total + per_page - 1) // per_page, 1)
+    page = min(page, pages)
+    cur.execute(
+        CLIENTS_PAGE_CTE
+        + f"SELECT * FROM base WHERE {where_q} AND {CLIENTS_PAGE_FILTERS[flt]} "
+        + f"ORDER BY {CLIENTS_PAGE_SORTS[sort]} {direction} NULLS LAST, LOWER(name) "
+        + "LIMIT %s OFFSET %s",
+        (*params, per_page, (page - 1) * per_page),
+    )
+    rows = []
+    for r in cur.fetchall():
+        row = dict(r)
+        for k in ("owed", "value_12", "store_net"):
+            row[k] = float(row[k] or 0)
+        for k in ("first_order", "last_order", "last_store", "last_activity"):
+            row[k] = row[k].isoformat() if row[k] else None
+        rows.append(row)
+    return jsonify({
+        "clients": rows, "total": total, "page": page, "per_page": per_page, "pages": pages,
+        "counts": counts, "totals": totals,
+    })
 
 
 @app.route("/api/print/clients/<int:client_id>")
@@ -4131,7 +4873,7 @@ def api_print_client(client_id):
            FROM print_orders o
            LEFT JOIN print_order_items i ON i.order_id = o.id
            WHERE o.client_id = %s
-           GROUP BY o.id ORDER BY o.order_date DESC LIMIT 12""",
+           GROUP BY o.id ORDER BY o.order_date DESC, o.id DESC LIMIT 30""",
         (client_id,),
     )
     history = []
@@ -4144,7 +4886,8 @@ def api_print_client(client_id):
     cur.execute(
         """SELECT COUNT(DISTINCT o.id) AS orders,
                   COALESCE(SUM(i.quantity), 0) AS cups,
-                  COALESCE(SUM(CASE WHEN o.is_paid THEN 0 ELSE i.quantity * i.unit_price END), 0) AS owed
+                  COALESCE(SUM(CASE WHEN o.is_paid THEN 0 ELSE i.quantity * i.unit_price END), 0) AS owed,
+                  COALESCE(SUM(i.quantity * i.unit_price) FILTER (WHERE i.status <> 'cancelled'), 0) AS value
            FROM print_orders o
            LEFT JOIN print_order_items i ON i.order_id = o.id
            WHERE o.client_id = %s""",
@@ -4152,6 +4895,7 @@ def api_print_client(client_id):
     )
     totals = dict(cur.fetchone())
     totals["owed"] = float(totals["owed"] or 0)
+    totals["value"] = float(totals["value"] or 0)
 
     cur.execute(
         """SELECT cp.price, cp.note, p.family, p.size
@@ -4172,7 +4916,56 @@ def api_print_client(client_id):
     )
     discounts = [dict(r) for r in cur.fetchall()]
 
-    return jsonify({"client": client, "totals": totals, "history": history, "deals": deals, "discounts": discounts})
+    cur.execute(
+        """SELECT COUNT(*) FILTER (WHERE NOT is_cancelled) AS receipts,
+                  COALESCE(SUM(amount) FILTER (WHERE NOT is_cancelled), 0) AS net,
+                  MAX(txn_time) FILTER (WHERE NOT is_cancelled) AS last_time
+           FROM client_transactions WHERE client_id=%s""",
+        (client_id,),
+    )
+    srow = dict(cur.fetchone())
+    cur.execute(
+        """SELECT receipt_number, txn_time, txn_type, amount, cash, gcash, bank, po, own_use, is_cancelled, notes
+           FROM client_transactions WHERE client_id=%s ORDER BY txn_time DESC, id DESC LIMIT 40""",
+        (client_id,),
+    )
+    recent = []
+    for r in cur.fetchall():
+        t = dict(r)
+        pays = {k: float(t.pop(k) or 0) for k in ("cash", "gcash", "bank", "po")}
+        t["method"] = max(pays, key=pays.get) if any(pays.values()) else None
+        t["txn_time"] = t["txn_time"].isoformat()
+        t["amount"] = float(t["amount"])
+        recent.append(t)
+    cur.execute(
+        """SELECT date_trunc('month', txn_time)::date AS m, SUM(amount) AS net
+           FROM client_transactions
+           WHERE client_id=%s AND NOT is_cancelled
+             AND txn_time >= date_trunc('month', NOW()) - INTERVAL '5 months'
+           GROUP BY 1""",
+        (client_id,),
+    )
+    by_month = {r["m"].strftime("%Y-%m"): float(r["net"]) for r in cur.fetchall()}
+    today = date.today()
+    months = []
+    for n in range(5, -1, -1):
+        y, m = today.year, today.month - n
+        while m <= 0:
+            y, m = y - 1, m + 12
+        key = "%04d-%02d" % (y, m)
+        months.append({"month": key, "net": by_month.get(key, 0.0)})
+    net = float(srow["net"] or 0)
+    store = {
+        "receipts": srow["receipts"],
+        "net": net,
+        "average": round(net / srow["receipts"], 2) if srow["receipts"] else 0,
+        "last": srow["last_time"].isoformat() if srow["last_time"] else None,
+        "months": months,
+        "recent": recent,
+    }
+
+    return jsonify({"client": client, "totals": totals, "history": history, "deals": deals, "discounts": discounts,
+                    "store": store})
 
 
 @app.route("/api/print/clients/<int:client_id>/logo", methods=["POST"])
@@ -4343,7 +5136,8 @@ def api_print_client_merge(client_id):
              (SELECT product_id FROM print_client_prices WHERE client_id=%s)""",
         (client_id, into_id),
     )
-    for table in ("print_client_prices", "print_client_discounts", "print_orders", "print_payments", "purchase_orders"):
+    for table in ("print_client_prices", "print_client_discounts", "print_orders", "print_payments", "purchase_orders",
+                  "client_transactions"):
         cur.execute(f"UPDATE {table} SET client_id=%s WHERE client_id=%s", (into_id, client_id))
         moved[table] = cur.rowcount
 
@@ -4358,6 +5152,15 @@ def api_print_client_merge(client_id):
         sets = ", ".join(f"{f}=%s" for f in fill)
         cur.execute(f"UPDATE print_clients SET {sets} WHERE id=%s", (*fill.values(), into_id))
 
+    # remember the duplicate's name (and any it had learned) for the next import
+    cur.execute("UPDATE client_aliases SET client_id=%s WHERE client_id=%s", (into_id, client_id))
+    dup_key = _client_key(dup["name"])
+    if dup_key and dup_key != _client_key(keep["name"]):
+        cur.execute(
+            """INSERT INTO client_aliases (alias_key, client_id, alias_text) VALUES (%s,%s,%s)
+               ON CONFLICT (alias_key) DO UPDATE SET client_id=EXCLUDED.client_id""",
+            (dup_key, into_id, dup["name"]),
+        )
     cur.execute("DELETE FROM print_clients WHERE id=%s", (client_id,))
     record_audit(cur, "Merged clients", f"{dup['name']} into {keep['name']}", {"moved": moved, "copied": list(fill)})
     db.commit()
@@ -4450,9 +5253,30 @@ def api_print_client_discount_delete(client_id, discount_id):
 # payroll PIN lock via PAYROLL_LOCKED_PREFIXES.
 # ---------------------------------------------------------------------------
 
+PO_TERMS_DAYS = (15, 30, 45, 60)
+
+
+def _parse_po_terms(raw):
+    """(terms_days, error). Blank or "No terms" is None, not an error."""
+    if raw in (None, "", 0, "0", "none"):
+        return None, False
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return None, True
+    return (days, False) if days in PO_TERMS_DAYS else (None, True)
+
+
+def _po_due_date(po_date, terms_days):
+    """po_date + terms, as an ISO string; None when the PO has no terms."""
+    if not po_date or not terms_days:
+        return None
+    return (po_date + timedelta(days=terms_days)).isoformat()
+
+
 def _po_row(cur, po_id):
     cur.execute(
-        """SELECT po.id, po.client_id, po.po_date, po.amount, po.remarks,
+        """SELECT po.id, po.client_id, po.po_date, po.amount, po.remarks, po.terms_days,
                   COALESCE(pay.collected, 0) AS collected, pay.last_paid_date
            FROM purchase_orders po
            LEFT JOIN (
@@ -4466,6 +5290,7 @@ def _po_row(cur, po_id):
     if row is None:
         return None
     po = dict(row)
+    po["due_date"] = _po_due_date(po["po_date"], po["terms_days"])
     po["po_date"] = po["po_date"].isoformat() if po["po_date"] else None
     po["last_paid_date"] = po["last_paid_date"].isoformat() if po["last_paid_date"] else None
     po["amount"] = float(po["amount"] or 0)
@@ -4530,6 +5355,7 @@ def api_purchase_orders_list():
     cur = get_db().cursor()
     cur.execute(
         """SELECT po.id, po.client_id, c.name AS client_name, po.po_date, po.amount, po.remarks,
+                  po.terms_days,
                   COALESCE(pay.collected, 0) AS collected, pay.last_paid_date
            FROM purchase_orders po
            JOIN print_clients c ON c.id = po.client_id
@@ -4542,12 +5368,22 @@ def api_purchase_orders_list():
     pos = []
     for r in cur.fetchall():
         po = dict(r)
+        po["due_date"] = _po_due_date(po["po_date"], po["terms_days"])
         po["po_date"] = po["po_date"].isoformat() if po["po_date"] else None
         po["last_paid_date"] = po["last_paid_date"].isoformat() if po["last_paid_date"] else None
         po["amount"] = float(po["amount"] or 0)
         po["collected"] = float(po["collected"] or 0)
         po["balance"] = round(po["amount"] - po["collected"], 2)
+        po["payments"] = []
         pos.append(po)
+
+    by_id = {po["id"]: po for po in pos}
+    cur.execute("SELECT purchase_order_id, paid_date, amount FROM purchase_order_payments ORDER BY paid_date, id")
+    for p in cur.fetchall():
+        if p["purchase_order_id"] in by_id:
+            by_id[p["purchase_order_id"]]["payments"].append(
+                {"paid_date": p["paid_date"].isoformat(), "amount": float(p["amount"])}
+            )
     return jsonify({"pos": pos})
 
 
@@ -4597,6 +5433,11 @@ def api_purchase_order_create():
     except ValueError:
         return jsonify({"status": "error", "message": "That date is not a real date."}), 400
 
+    # blank / "No terms" is a real choice: the PO simply has no due date
+    terms_days, bad_terms = _parse_po_terms(data.get("terms_days"))
+    if bad_terms:
+        return jsonify({"status": "error", "message": "Terms must be No terms, or 15, 30, 45 or 60 days."}), 400
+
     db = get_db()
     cur = db.cursor()
     cur.execute("SELECT name FROM print_clients WHERE id=%s", (client_id,))
@@ -4605,18 +5446,18 @@ def api_purchase_order_create():
         return jsonify({"status": "error", "message": "No such client"}), 404
 
     cur.execute(
-        """INSERT INTO purchase_orders (client_id, po_date, amount, remarks, created_by)
-           VALUES (%s,%s,%s,%s,%s) RETURNING id""",
-        (client_id, po_date, amount, (data.get("remarks") or "").strip() or None,
+        """INSERT INTO purchase_orders (client_id, po_date, amount, terms_days, remarks, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (client_id, po_date, amount, terms_days, (data.get("remarks") or "").strip() or None,
          session.get("display_name") or "Unknown"),
     )
     po_id = cur.fetchone()["id"]
-    record_audit(cur, "Added a purchase order", client["name"], {"amount": amount, "po_date": po_date})
+    record_audit(cur, "Added a purchase order", client["name"], {"amount": amount, "po_date": po_date, "terms_days": terms_days})
     db.commit()
     return jsonify({"status": "ok", "id": po_id})
 
 
-PURCHASE_ORDER_FIELDS = ("po_date", "amount", "remarks")
+PURCHASE_ORDER_FIELDS = ("po_date", "amount", "remarks", "terms_days")
 
 
 @app.route("/api/office/purchase-orders/<int:po_id>", methods=["POST"])
@@ -4641,6 +5482,10 @@ def api_purchase_order_update(po_id):
             return jsonify({"status": "error", "message": "That date is not a real date."}), 400
     if "remarks" in updates:
         updates["remarks"] = (updates["remarks"] or "").strip() or None
+    if "terms_days" in updates:
+        updates["terms_days"], bad_terms = _parse_po_terms(updates["terms_days"])
+        if bad_terms:
+            return jsonify({"status": "error", "message": "Terms must be No terms, or 15, 30, 45 or 60 days."}), 400
     if not updates:
         return jsonify({"status": "ok"})
 
@@ -5474,7 +6319,8 @@ def api_ops_sales_storehub():
     if upload is None:
         return _ops_error("Choose the StoreHub CSV first.")
     try:
-        parsed = _storehub_parse(upload.read().decode("utf-8-sig"))
+        text = upload.read().decode("utf-8-sig")
+        parsed = _storehub_parse(text)
     except (UnicodeDecodeError, ValueError) as exc:
         return _ops_error(exc)
     if not parsed:
@@ -5508,13 +6354,35 @@ def api_ops_sales_storehub():
                     (*new_vals, row["id"]),
                 )
             changed += 1
+
+    # The same file also says who each receipt was for, so it is filed under
+    # the clients too. Only clients that already exist: this import has no
+    # way to ask which new names should become clients - that is what the
+    # Clients tab's own import is for.
+    clients_part = None
+    try:
+        receipts = _storehub_receipts(text)["receipts"]
+        if receipts:
+            clients_part = _import_client_receipts(cur, receipts, apply)
+    except ValueError:
+        pass  # an export without receipt numbers: sales still import
+
     if apply:
         record_audit(
             cur, "Imported StoreHub sales", f"{parsed[0]['date']} to {parsed[-1]['date']}",
-            {"days": len(parsed), "changed": changed},
+            {"days": len(parsed), "changed": changed,
+             "client_receipts": clients_part["stored"] if clients_part else 0},
         )
         db.commit()
-    return jsonify({"status": "ok", "applied": apply, "changed": changed, "days": parsed})
+    if clients_part:
+        clients_part = {
+            "stored": clients_part["stored"],
+            "counts": clients_part["counts"],
+            "clients": len(clients_part["matched"]),
+            "skipped_customers": len(clients_part["unmatched"]),
+            "skipped_receipts": sum(u["receipts"] for u in clients_part["unmatched"]),
+        }
+    return jsonify({"status": "ok", "applied": apply, "changed": changed, "days": parsed, "clients": clients_part})
 
 
 @app.route("/api/ops/sales/<int:day_id>", methods=["POST"])

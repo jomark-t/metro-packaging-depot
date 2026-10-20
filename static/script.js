@@ -492,6 +492,8 @@ const printView = document.getElementById("printView");
 const tabCupPrintsBtn = document.getElementById("tabCupPrintsBtn");
 const cupPrintsView = document.getElementById("cupPrintsView");
 const tabPrintClientsBtn = document.getElementById("tabPrintClientsBtn");
+const tabClientsDashBtn = document.getElementById("tabClientsDashBtn");
+const clientsDashView = document.getElementById("clientsDashView");
 const printClientsView = document.getElementById("printClientsView");
 const tabPricingBtn = document.getElementById("tabPricingBtn");
 const pricingView = document.getElementById("pricingView");
@@ -540,6 +542,7 @@ if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, c
 if (tabStatusBtn) TABS.status = { btn: tabStatusBtn, view: statusView, controls: null };
 if (tabPrintBtn) TABS.print = { btn: tabPrintBtn, view: printView, controls: null };
 if (tabCupPrintsBtn) TABS.cupprints = { btn: tabCupPrintsBtn, view: cupPrintsView, controls: null };
+if (tabClientsDashBtn) TABS.clientsdash = { btn: tabClientsDashBtn, view: clientsDashView, controls: null };
 if (tabPrintClientsBtn) TABS.printclients = { btn: tabPrintClientsBtn, view: printClientsView, controls: null };
 if (tabPricingBtn) TABS.pricing = { btn: tabPricingBtn, view: pricingView, controls: null };
 if (tabAdminBtn) TABS.admin = { btn: tabAdminBtn, view: adminView, controls: null };
@@ -595,6 +598,9 @@ function showTab(tab) {
   if (tab === "printclients") {
     loadPrintClientsPage();
   }
+  if (tab === "clientsdash") {
+    loadClientsDashboard(); // always fresh - it's a "right now" view
+  }
   if (tab === "pricing") {
     loadPricing();
   }
@@ -645,6 +651,7 @@ if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("acti
 if (tabStatusBtn) tabStatusBtn.addEventListener("click", () => showTab("status"));
 if (tabPrintBtn) tabPrintBtn.addEventListener("click", () => showTab("print"));
 if (tabCupPrintsBtn) tabCupPrintsBtn.addEventListener("click", () => showTab("cupprints"));
+if (tabClientsDashBtn) tabClientsDashBtn.addEventListener("click", () => showTab("clientsdash"));
 if (tabPrintClientsBtn) tabPrintClientsBtn.addEventListener("click", () => showTab("printclients"));
 if (tabPricingBtn) tabPricingBtn.addEventListener("click", () => showTab("pricing"));
 if (tabAdminBtn) tabAdminBtn.addEventListener("click", () => showTab("admin"));
@@ -4387,7 +4394,7 @@ async function loadCupPrints() {
   try {
     await loadPrintCatalogue();
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
   await loadMoreCupPrints({ reset: true });
@@ -4421,7 +4428,7 @@ async function loadMoreCupPrints({ reset = false, limit } = {}) {
     cupPrintsLoading = false;
     if (reset) {
       document.getElementById("cupPrintsBody").innerHTML =
-        `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
+        `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     }
     return;
   }
@@ -4455,7 +4462,7 @@ function ensureCupPrintsScrollListener() {
 }
 
 function cupYesNoSelect(kind, orderId, current) {
-  const cls = kind === "logo" ? "cps-sel-logo" : `cps-sel-paid ${current ? "v-yes" : "v-no"}`;
+  const cls = `${kind === "logo" ? "cps-sel-logo" : "cps-sel-paid"} ${current ? "v-yes" : "v-no"}`;
   const val = current ? "Yes" : "No";
   return `<select class="cps-select ${cls}" data-kind="${kind}" data-order="${orderId}">` +
     ["Yes", "No"].map((o) => `<option${o === val ? " selected" : ""}>${o}</option>`).join("") +
@@ -4533,6 +4540,7 @@ function cupPrintsRowsHTML(list) {
         ? "Needs a new frame"
         : "New client";
     const badges = [
+      o.is_draft ? `<span class="cps-draft" title="Draft - not finalized yet">Draft</span>` : "",
       o.is_rush ? `<span class="text-amber-500" title="Rush order">&#9889;</span>` : "",
       o.needs_new_frame || isNewClient ? `<span class="text-emerald-500" title="${newTitle}">&#127381;</span>` : "",
     ]
@@ -4552,6 +4560,7 @@ function cupPrintsRowsHTML(list) {
       cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
       if (first) {
         cells.push(`<td rowspan="${o.items.length}" class="whitespace-nowrap">${o.due_date ? printShortDate(o.due_date) : "—"}</td>`);
+        cells.push(`<td rowspan="${o.items.length}"><button type="button" class="cps-edit-btn" data-order="${o.id}" title="Edit this order - add, change or remove cups">Edit</button></td>`);
         cells.push(
           `<td rowspan="${o.items.length}" style="max-width:14rem">` +
             `<div class="flex items-start gap-1.5">${cupRemarksHTML(o)}` +
@@ -4561,7 +4570,7 @@ function cupPrintsRowsHTML(list) {
       }
       out.push(`<tr class="${first && gi > 0 ? "group-start" : ""}">${cells.join("")}</tr>`);
     });
-    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="11"></td></tr>`);
+    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="12"></td></tr>`);
   });
   return out.join("");
 }
@@ -4575,7 +4584,7 @@ function renderCupPrints() {
   const body = document.getElementById("cupPrintsBody");
   body.innerHTML = visible.length
     ? cupPrintsRowsHTML(visible)
-    : `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
+    : `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
 
   const total = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + i.quantity * Number(i.unit_price || 0), 0), 0);
   document.getElementById("cupPrintsTotal").textContent = printMoney(total);
@@ -4599,6 +4608,13 @@ function wireCupPrints() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       openCupPrintsMenu(btn);
+    });
+  });
+
+  body.querySelectorAll(".cps-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const order = cupPrintsOrders.find((o) => String(o.id) === btn.dataset.order);
+      if (order) openPrintOrderForm(order);
     });
   });
 
@@ -4687,7 +4703,10 @@ async function openMergeClient(client) {
   const modal = document.getElementById("mergeClientModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
-  document.getElementById("mergeClientTarget").focus();
+  const target = document.getElementById("mergeClientTarget");
+  target.focus();
+  // list everyone straight away, even if the window never reports the focus
+  target.dispatchEvent(new Event("focus"));
 }
 
 function closeMergeClient() {
@@ -4699,10 +4718,19 @@ function closeMergeClient() {
 async function submitMergeClient() {
   const errorEl = document.getElementById("mergeClientError");
   errorEl.classList.add("hidden");
-  const name = document.getElementById("mergeClientTarget").value.trim().toLowerCase();
-  const target = printClients.find((x) => x.id !== mergeFrom.id && x.name.toLowerCase() === name);
+  const typed = document.getElementById("mergeClientTarget").value.trim();
+  const others = printClients.filter((x) => x.id !== mergeFrom.id);
+  // the exact name, else the same name ignoring spacing and punctuation, else
+  // the one client the text narrows the list to
+  const near = clientPickerMatches(typed, others);
+  const target =
+    others.find((x) => x.name.toLowerCase() === typed.toLowerCase()) ||
+    others.find((x) => typed && clientPickerKey(x.name) === clientPickerKey(typed)) ||
+    (typed && near.length === 1 ? near[0] : null);
   if (!target) {
-    errorEl.textContent = "Pick the client to keep from the list.";
+    errorEl.textContent = typed && near.length > 1
+      ? `${near.length} clients match that - pick one from the list.`
+      : "Pick the client to keep from the list.";
     errorEl.classList.remove("hidden");
     return;
   }
@@ -4729,10 +4757,97 @@ async function submitMergeClient() {
   refreshAllPrintViews();
   if (window.loadCollections) window.loadCollections();
 }
-attachCombo(
+// A name reduced to letters and digits, so "sun child malaya" finds
+// "Sunchild Malaya" and "beans & bottles" finds "Beans and Bottles".
+function clientPickerKey(text) {
+  return String(text || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+}
+
+// Clients matching what was typed, best first: names that start with it, then
+// ones containing it, then ones holding every typed word wherever they fall.
+// Spacing, case and punctuation are ignored. Nothing typed lists everyone.
+function clientPickerMatches(query, clients) {
+  const whole = clientPickerKey(query);
+  const words = String(query || "").toLowerCase().split(/\s+/).map(clientPickerKey).filter(Boolean);
+  const ranked = [];
+  clients.forEach((c) => {
+    const key = clientPickerKey(c.name);
+    let rank = null;
+    if (!whole) rank = 3;
+    else if (key.startsWith(whole)) rank = 0;
+    else if (key.includes(whole)) rank = 1;
+    else if (words.length > 1 && words.every((w) => key.includes(w))) rank = 2;
+    if (rank !== null) ranked.push({ c, rank });
+  });
+  ranked.sort((a, b) => a.rank - b.rank || a.c.name.localeCompare(b.c.name));
+  return ranked.map((r) => r.c);
+}
+
+// A client picker for the merge box: the whole list the moment it is clicked
+// (scrollable), narrowed as you type, with each client's logo and order count
+// so look-alikes can be told apart.
+function attachClientPicker(input, drop, getClients) {
+  let active = -1;
+  const LIMIT = 60;
+  const options = () => [...drop.querySelectorAll(".picker-opt")];
+  const choose = (name) => {
+    input.value = name;
+    drop.classList.add("hidden");
+  };
+  const render = () => {
+    const q = input.value.trim();
+    const all = clientPickerMatches(q, getClients());
+    const shown = all.slice(0, LIMIT);
+    drop.innerHTML = shown.length
+      ? shown
+          .map(
+            (c) => `<button type="button" class="picker-opt w-full flex items-center gap-2.5 text-left px-2.5 py-1.5 hover:bg-gray-50" data-name="${escapeHtml(c.name)}">
+              ${poClientAvatar(c.name, c.logo_filename)}
+              <span class="flex-1 min-w-0 truncate">${poClientHighlight(c.name, q)}</span>
+              ${c.order_count ? `<span class="text-[10px] text-gray-400 shrink-0">${c.order_count} order${c.order_count === 1 ? "" : "s"}</span>` : ""}
+            </button>`
+          )
+          .join("") +
+        (all.length > LIMIT ? `<p class="px-3 py-1.5 text-[11px] text-gray-400 border-t border-gray-100">${all.length - LIMIT} more — keep typing to narrow it.</p>` : "")
+      : `<p class="px-3 py-2 text-gray-400 italic">No client matches “${escapeHtml(q)}”.</p>`;
+    active = -1;
+    drop.classList.remove("hidden");
+    options().forEach((b) =>
+      b.addEventListener("mousedown", (e) => {
+        e.preventDefault(); // before the input's blur would close the list
+        choose(b.dataset.name);
+      })
+    );
+  };
+  input.addEventListener("focus", render);
+  input.addEventListener("input", render);
+  input.addEventListener("blur", () => setTimeout(() => drop.classList.add("hidden"), 120));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && drop.classList.contains("hidden")) return render();
+    if (drop.classList.contains("hidden")) return;
+    const opts = options();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!opts.length) return;
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length;
+      opts.forEach((o, i) => o.classList.toggle("bg-gray-100", i === active));
+      opts[active].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      // Enter takes the highlighted row, or the only/top match
+      e.preventDefault();
+      const pick = opts[active >= 0 ? active : 0];
+      if (pick) choose(pick.dataset.name);
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      drop.classList.add("hidden");
+    }
+  });
+}
+
+attachClientPicker(
   document.getElementById("mergeClientTarget"),
   document.getElementById("mergeClientDropdown"),
-  () => printClients.filter((x) => !mergeFrom || x.id !== mergeFrom.id).map((x) => x.name)
+  () => printClients.filter((x) => !mergeFrom || x.id !== mergeFrom.id)
 );
 document.getElementById("mergeClientCancel").addEventListener("click", closeMergeClient);
 document.getElementById("mergeClientGo").addEventListener("click", submitMergeClient);
@@ -4752,8 +4867,14 @@ async function openPrintClient(clientId) {
   document.getElementById("printDrawerName").innerHTML =
     `<span class="print-edit" tabindex="0" role="button" data-client-field="name"
            data-client="${c.id}" title="Click to rename">${escapeHtml(c.name)}</span>`;
-  document.getElementById("printDrawerSub").textContent =
-    `${t.orders} order${t.orders === 1 ? "" : "s"} · ${Number(t.cups).toLocaleString("en-PH")} cups printed`;
+  const store = data.store || { receipts: 0, recent: [], months: [] };
+  const hasStore = store.receipts > 0;
+  const hasCups = t.orders > 0;
+  document.getElementById("printDrawerSub").textContent = [
+    hasCups && `${t.orders} cup order${t.orders === 1 ? "" : "s"}`,
+    hasStore && `${store.receipts} store receipt${store.receipts === 1 ? "" : "s"}`,
+    c.created_at && `client since ${printShortDate(c.created_at.slice(0, 10))}`,
+  ].filter(Boolean).join(" · ") || "No orders or store purchases yet";
 
   const contactRow = (label, field, value) => `
     <div class="flex items-center gap-2 py-1.5 border-b border-dashed border-gray-100 text-sm">
@@ -4774,21 +4895,21 @@ async function openPrintClient(clientId) {
         .join("")}</table>`
     : `<p class="text-xs text-gray-400 italic">No agreed prices yet — the grid rate applies.</p>`;
 
-  const history = data.history.length
-    ? `<table class="w-full text-sm">${data.history
-        .map(
-          (h) =>
-            `<tr class="border-b border-gray-100 last:border-0">
-               <td class="py-1 text-xs text-gray-400 whitespace-nowrap">${printShortDate(h.order_date)}</td>
-               <td class="py-1 text-right">${Number(h.cups).toLocaleString("en-PH")}</td>
-               <td class="py-1 text-right ${h.is_paid ? "text-gray-500" : "text-red-600"}">${printMoney(h.total)}</td>
-             </tr>`
-        )
-        .join("")}</table>`
-    : `<p class="text-xs text-gray-400 italic">No orders yet.</p>`;
-
   const sectionHead = (title) =>
     `<div class="flex items-center gap-2"><span class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">${title}</span><span class="flex-1 h-px bg-gray-100"></span></div>`;
+  const tile = (label, value, cls) => `
+    <div class="bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-1.5 min-w-0">
+      <p class="text-[10px] text-gray-400 uppercase tracking-wide font-mono">${label}</p>
+      <p class="font-display font-semibold text-base truncate ${cls || ""}">${value}</p>
+    </div>`;
+  const card = (title, sub, inner) => `
+    <section class="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col min-h-0 lg:max-h-[calc(92vh-6.5rem)]">
+      <div class="px-4 pt-3 pb-2 border-b border-gray-100 shrink-0">
+        <h4 class="text-sm font-semibold text-gray-900">${title}</h4>
+        ${sub ? `<p class="text-[11px] text-gray-400">${sub}</p>` : ""}
+      </div>
+      <div class="px-4 py-3 overflow-y-auto flex flex-col gap-4">${inner}</div>
+    </section>`;
 
   const discountRow = (d) => `
     <div class="flex items-center gap-2 py-1.5 border-b border-dashed border-gray-100 text-sm">
@@ -4802,45 +4923,29 @@ async function openPrintClient(clientId) {
     ? data.discounts.map(discountRow).join("")
     : `<p class="text-xs text-gray-400 italic">No special discounts yet.</p>`;
 
-  document.getElementById("printDrawerBody").innerHTML = `
-    <div class="grid grid-cols-3 gap-2">
-      <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Orders</p>
-        <p class="font-display font-semibold text-lg">${t.orders}</p>
-      </div>
-      <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Cups</p>
-        <p class="font-display font-semibold text-lg">${Number(t.cups).toLocaleString("en-PH")}</p>
-      </div>
-      <div class="bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Owed</p>
-        <p class="font-display font-semibold text-lg ${Number(t.owed) > 0 ? "text-red-600" : ""}">${Number(t.owed) > 0 ? printMoney(t.owed) : "—"}</p>
+  // ---- column 1: who they are
+  const detailsCol = card("Details", "Click a field to edit - it saves when you click away", `
+    <div class="flex items-center gap-3">
+      ${printLogo(c.name, true, c.logo_filename)}
+      <div class="flex-1 min-w-0">
+        <p class="text-xs text-gray-500 mb-1.5">${
+          c.logo_filename ? "The logo we print for them." : "No logo yet — a monogram stands in."
+        }</p>
+        <div class="flex gap-2">
+          <label class="text-xs border border-gray-300 rounded-md px-2 py-1 cursor-pointer hover:border-gray-400 transition">
+            ${c.logo_filename ? "Replace" : "Upload logo"}
+            <input type="file" accept="image/png,image/jpeg,image/webp" class="hidden print-logo-input" data-client="${c.id}" />
+          </label>
+          ${
+            c.logo_filename
+              ? `<button type="button" class="print-logo-remove text-xs border border-gray-300 rounded-md px-2 py-1 text-gray-500 hover:text-red-600 hover:border-red-300 transition" data-client="${c.id}">Remove</button>`
+              : ""
+          }
+        </div>
+        <p class="print-logo-note text-[11px] text-gray-400 mt-1"></p>
       </div>
     </div>
-    <section class="flex flex-col gap-2">
-      ${sectionHead("Logo")}
-      <div class="flex items-center gap-3">
-        ${printLogo(c.name, true, c.logo_filename)}
-        <div class="flex-1 min-w-0">
-          <p class="text-xs text-gray-500 mb-1.5">${
-            c.logo_filename ? "The logo we print for them." : "No logo yet — a monogram stands in."
-          }</p>
-          <div class="flex gap-2">
-            <label class="text-xs border border-gray-300 rounded-md px-2 py-1 cursor-pointer hover:border-gray-400 transition">
-              ${c.logo_filename ? "Replace" : "Upload logo"}
-              <input type="file" accept="image/png,image/jpeg,image/webp" class="hidden print-logo-input" data-client="${c.id}" />
-            </label>
-            ${
-              c.logo_filename
-                ? `<button type="button" class="print-logo-remove text-xs border border-gray-300 rounded-md px-2 py-1 text-gray-500 hover:text-red-600 hover:border-red-300 transition" data-client="${c.id}">Remove</button>`
-                : ""
-            }
-          </div>
-          <p class="print-logo-note text-[11px] text-gray-400 mt-1"></p>
-        </div>
-      </div>
-    </section>
-    <section class="flex flex-col gap-2">
+    <div class="flex flex-col gap-1">
       ${sectionHead("Contact")}
       <div>
         ${contactRow("Instagram", "instagram", c.instagram)}
@@ -4850,18 +4955,16 @@ async function openPrintClient(clientId) {
         ${contactRow("Phone", "phone", c.phone)}
         ${contactRow("Email", "email", c.email)}
       </div>
-      <p class="text-[11px] text-gray-400">Type to edit — saves when you click away.</p>
-    </section>
-    <section class="flex flex-col gap-2">
-      ${sectionHead("Business details")}
+    </div>
+    <div class="flex flex-col gap-1">
+      ${sectionHead("Business details · for sales invoices")}
       <div>
         ${contactRow("Trade Name", "trade_name", c.trade_name)}
         ${contactRow("TIN", "tax_id", c.tax_id)}
       </div>
-      <p class="text-[11px] text-gray-400">For sales invoices.</p>
-    </section>
-    <section class="flex flex-col gap-2">${sectionHead("Agreed prices")}${deals}</section>
-    <section class="flex flex-col gap-2">
+    </div>
+    <div class="flex flex-col gap-1">${sectionHead("Agreed prices")}${deals}</div>
+    <div class="flex flex-col gap-2">
       ${sectionHead("Special discounts")}
       <div id="clientDiscountsBody">${discounts}</div>
       <div class="flex items-center gap-2">
@@ -4869,17 +4972,88 @@ async function openPrintClient(clientId) {
         <input id="newDiscountValue" type="text" placeholder="Discount" class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
         <button id="addDiscountBtn" type="button" class="text-xs border border-gray-300 rounded-md px-2 py-1 hover:border-gray-400 shrink-0" data-client="${c.id}">+ Add</button>
       </div>
-      <p class="text-[11px] text-gray-400">For items outside the cup catalogue — typed in by hand, e.g. a bulk rate or a promo.</p>
-    </section>
-    <section class="flex flex-col gap-2">${sectionHead("Recent orders")}${history}</section>
+      <p class="text-[11px] text-gray-400">For items outside the cup catalogue — a bulk rate or a promo, typed by hand.</p>
+    </div>
     ${
       IS_SUPERUSER
-        ? `<section class="flex flex-col gap-2">${sectionHead("Duplicate?")}
-            <p class="text-xs text-gray-500">Entered twice under slightly different names? Fold this client into the right one - its orders, collections and details move across.</p>
+        ? `<div class="flex flex-col gap-2">${sectionHead("Duplicate?")}
+            <p class="text-xs text-gray-500">Entered twice under slightly different names? Fold this client into the right one - its orders, collections and purchases move across, and the name is remembered for imports.</p>
             <button type="button" id="mergeClientBtn" class="self-start text-xs border border-gray-300 rounded-md px-2.5 py-1 hover:border-brand-blue hover:text-brand-blue transition">Merge into another client&hellip;</button>
-          </section>`
+          </div>`
         : ""
-    }`;
+    }`);
+
+  // ---- column 2: what they buy over the counter
+  const monthName = (key) => new Date(key + "-01T00:00:00").toLocaleString("en-PH", { month: "short" });
+  const maxMonth = Math.max(...store.months.map((m) => Math.abs(m.net)), 1);
+  const spend = store.months
+    .map(
+      (m) => `<div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${monthName(m.month)}: ${printMoney(m.net)}">
+        <div class="flex items-end w-full justify-center" style="height:46px"><div style="width:60%;max-width:26px;height:${Math.max((Math.max(m.net, 0) / maxMonth) * 46, m.net > 0 ? 2 : 0)}px;background:#16a34a;border-radius:4px 4px 0 0"></div></div>
+        <span class="text-[10px] text-gray-400">${monthName(m.month)}</span></div>`
+    )
+    .join("");
+  const methodName = { cash: "Cash", gcash: "GCash", bank: "Bank", po: "PO" };
+  const storeCol = hasStore
+    ? card("Store purchases", "From imported StoreHub receipts", `
+      <div class="grid grid-cols-2 gap-2">
+        ${tile("Total", printMoney(store.net))}
+        ${tile("Receipts", store.receipts)}
+        ${tile("Average", printMoney(store.average))}
+        ${tile("Last purchase", printShortDate(store.last.slice(0, 10)))}
+      </div>
+      <div><p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1">Last 6 months</p>${
+        store.months.some((m) => m.net !== 0) ? `<div class="flex gap-1">${spend}</div>` : `<p class="text-xs text-gray-400 italic">Nothing bought in the last 6 months.</p>`
+      }</div>
+      <div>
+        <table class="w-full text-sm">${store.recent
+          .map(
+            (r) => `<tr class="border-b border-gray-100 last:border-0 ${r.is_cancelled ? "opacity-50 line-through" : ""}">
+              <td class="py-1 text-xs text-gray-400 whitespace-nowrap">${printShortDate(r.txn_time.slice(0, 10))}</td>
+              <td class="py-1 text-xs text-gray-400">${escapeHtml(r.txn_type === "Sale" ? "" : r.txn_type)}${r.own_use ? " own use" : ""}</td>
+              <td class="py-1 text-xs text-gray-400">${r.method ? methodName[r.method] : ""}</td>
+              <td class="py-1 text-right ${r.amount < 0 ? "text-red-600" : ""}">${printMoney(r.amount)}</td></tr>`
+          )
+          .join("")}</table>
+        ${store.receipts > store.recent.length ? `<p class="text-[11px] text-gray-400 mt-1">Latest ${store.recent.length} of ${store.receipts}.</p>` : ""}
+      </div>`)
+    : "";
+
+  // ---- column 3: cup prints, when they have any
+  const history = data.history.length
+    ? `<table class="w-full text-sm"><thead><tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400"><th class="text-left font-normal pb-1">Date</th><th class="text-right font-normal pb-1">Cups</th><th class="text-right font-normal pb-1">Total</th><th class="text-right font-normal pb-1">&nbsp;</th></tr></thead>${data.history
+        .map(
+          (h) => `<tr class="border-b border-gray-100 last:border-0">
+            <td class="py-1 text-xs text-gray-400 whitespace-nowrap">${printShortDate(h.order_date)}</td>
+            <td class="py-1 text-right">${Number(h.cups).toLocaleString("en-PH")}</td>
+            <td class="py-1 text-right">${printMoney(h.total)}</td>
+            <td class="py-1 text-right"><span class="text-[10px] rounded px-1.5 py-px ${h.is_paid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}">${h.is_paid ? "Paid" : "Unpaid"}</span></td></tr>`
+        )
+        .join("")}</table>
+       ${t.orders > data.history.length ? `<p class="text-[11px] text-gray-400 mt-1">Latest ${data.history.length} of ${t.orders}.</p>` : ""}`
+    : "";
+  const cupCol = hasCups
+    ? card("Cup prints", "Printed orders", `
+      <div class="grid grid-cols-2 gap-2">
+        ${tile("Orders", t.orders)}
+        ${tile("Cups", Number(t.cups).toLocaleString("en-PH"))}
+        ${tile("Order value", printMoney(t.value))}
+        ${tile("Owed", Number(t.owed) > 0 ? printMoney(t.owed) : "—", Number(t.owed) > 0 ? "text-red-600" : "")}
+      </div>
+      <div>${history}</div>`)
+    : "";
+
+  // columns only for what applies: a client who never bought over the counter
+  // (or never printed) doesn't get an empty one
+  const cols = [detailsCol, storeCol, cupCol].filter(Boolean);
+  const drawer = document.getElementById("printDrawer");
+  drawer.classList.remove("max-w-xl", "max-w-4xl", "max-w-6xl");
+  drawer.classList.add(["max-w-xl", "max-w-4xl", "max-w-6xl"][cols.length - 1]);
+  document.getElementById("printDrawerBody").innerHTML = `
+    <div class="grid gap-3 p-3 ${cols.length === 3 ? "lg:grid-cols-3" : cols.length === 2 ? "sm:grid-cols-2" : ""}">
+      ${cols.join("")}
+      ${cols.length === 1 ? `<p class="text-xs text-gray-400 text-center pb-1">No cup orders or store purchases yet.</p>` : ""}
+    </div>`;
 
   const nameCell = document.querySelector('[data-client-field="name"]');
   if (nameCell) wireEditCell(nameCell);
@@ -5107,10 +5281,16 @@ function movePoClientActive(delta) {
   opts[poClientActiveIndex].scrollIntoView({ block: "nearest" });
 }
 
-function poItemRow() {
+// `item` is an existing cup line when the form is editing an order, so the
+// row comes up filled in and keeps the line's id - that id is what tells
+// the server to update the line rather than add a new one.
+function poItemRow(item) {
   const cat = printCatalogue || { cups: [], lids: [], fits: {} };
+  // a cup since taken off the price list still has to show as what it is
+  const missingCup = item && item.product_id && !cat.cups.some((c) => String(c.id) === String(item.product_id));
   const cupOptions =
-    `<option value="">Pick a cup…</option>` +
+    `<option value="">${item && !item.product_id ? escapeHtml(item.label || "Pick a cup…") : "Pick a cup…"}</option>` +
+    (missingCup ? `<option value="${item.product_id}">${escapeHtml(item.label || "")}</option>` : "") +
     cat.cups.map((c) => `<option value="${c.id}">${escapeHtml(c.label)}</option>`).join("");
 
   const tr = document.createElement("tr");
@@ -5161,22 +5341,73 @@ function poItemRow() {
     fillColours();
   });
   tr.querySelector(".po-remove").addEventListener("click", () => tr.remove());
+
+  if (item) {
+    tr.dataset.itemId = item.id;
+    cupSel.value = item.product_id ? String(item.product_id) : "";
+    fillLids();
+    fillColours();
+    if (item.lid_product_id) {
+      if (![...lidSel.options].some((o) => o.value === String(item.lid_product_id))) {
+        lidSel.insertAdjacentHTML("beforeend", `<option value="${item.lid_product_id}">${escapeHtml(item.lid_label || "")}</option>`);
+      }
+      lidSel.value = String(item.lid_product_id);
+    }
+    if (item.cup_color) {
+      if (!colourSel.classList.contains("hidden")) {
+        if (![...colourSel.options].some((o) => o.value === item.cup_color)) {
+          colourSel.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(item.cup_color)}">${escapeHtml(item.cup_color)}</option>`);
+        }
+        colourSel.value = item.cup_color;
+      } else {
+        colourText.classList.remove("hidden");
+        colourText.value = item.cup_color;
+      }
+    }
+    tr.querySelector(".po-ink").value = item.ink_color || "";
+    qty.value = item.quantity || "";
+  }
   return tr;
 }
 
-async function openPrintOrderForm() {
+// The order being edited, or null when the form is taking a new one. The
+// same form does both, so adding cups to a saved order looks exactly like
+// entering them the first time.
+let poEditing = null;
+
+async function openPrintOrderForm(order) {
+  // also wired straight to the "+ New order" buttons, which pass a click event
+  poEditing = order && Array.isArray(order.items) ? order : null;
   await loadPrintCatalogue();
   await loadPrintClients(); // fresh, in case one was added since page load
-  document.getElementById("poClient").value = "";
+  const o = poEditing;
+  document.getElementById("poClient").value = o ? o.client_name : "";
   document.getElementById("poClientDropdown").classList.add("hidden");
-  document.getElementById("poDate").value = isoDate(new Date());
-  document.getElementById("poDue").value = "";
-  document.getElementById("poRemarks").value = "";
-  ["poRush", "poFrame", "poPaid"].forEach((id) => (document.getElementById(id).checked = false));
+  document.getElementById("poDate").value = o ? o.order_date || "" : isoDate(new Date());
+  document.getElementById("poDue").value = o ? o.due_date || "" : "";
+  document.getElementById("poRemarks").value = o ? o.remarks || "" : "";
+  document.getElementById("poRush").checked = !!(o && o.is_rush);
+  document.getElementById("poFrame").checked = !!(o && o.needs_new_frame);
+  document.getElementById("poPaid").checked = !!(o && o.is_paid);
+
+  document.getElementById("poTitle").textContent = !o
+    ? "New print order"
+    : o.is_draft ? "Edit draft order" : "Edit print order";
+  document.getElementById("poSubtitle").textContent = !o
+    ? "Client, cups, and anything the sheet used to hold."
+    : o.is_draft
+    ? "Still a draft - finalize it once the client confirms."
+    : "Add, change or remove cups. Lines already printed keep their status.";
+  // new: Save as draft + Save order. Editing a draft: Save changes (stays
+  // a draft) + Finalize order. Editing a finalized order: Save changes.
+  document.getElementById("poDraft").classList.toggle("hidden", !!o);
+  document.getElementById("poSave").textContent = o ? "Save changes" : "Save order";
+  document.getElementById("poFinalize").classList.toggle("hidden", !(o && o.is_draft));
 
   const body = document.getElementById("poItems");
   body.innerHTML = "";
-  body.appendChild(poItemRow());
+  if (o && o.items.length) o.items.forEach((i) => body.appendChild(poItemRow(i)));
+  else body.appendChild(poItemRow());
 
   // suggest the inks already on the board rather than making them be typed
   // from memory
@@ -5193,7 +5424,7 @@ async function openPrintOrderForm() {
   const modal = document.getElementById("printOrderModal");
   modal.classList.remove("hidden");
   modal.classList.add("flex");
-  document.getElementById("poClient").focus();
+  if (!o) document.getElementById("poClient").focus();
 }
 
 function closePrintOrderForm() {
@@ -5202,17 +5433,26 @@ function closePrintOrderForm() {
   modal.classList.remove("flex");
 }
 
-async function savePrintOrder() {
+// draft: true saves it as not finalized yet, false finalizes it. Left out
+// when editing, so an order stays whatever it already was.
+async function savePrintOrder({ draft } = {}) {
   const cat = printCatalogue || { cups: [], lids: [] };
   const items = [...document.querySelectorAll("#poItems tr")]
     .map((tr) => {
-      const cup = cat.cups.find((c) => String(c.id) === tr.querySelector(".po-cup").value);
-      const lid = cat.lids.find((l) => String(l.id) === tr.querySelector(".po-lid").value);
+      // an option added for a cup or lid no longer on the price list isn't
+      // in the catalogue, so its label comes off the option itself
+      const cupSel = tr.querySelector(".po-cup");
+      const lidSel = tr.querySelector(".po-lid");
+      const cupId = cupSel.value ? Number(cupSel.value) : null;
+      const lidId = lidSel.value ? Number(lidSel.value) : null;
+      const cup = cat.cups.find((c) => c.id === cupId);
+      const lid = cat.lids.find((l) => l.id === lidId);
       return {
-        product_id: cup ? cup.id : null,
-        lid_product_id: lid ? lid.id : null,
-        label: cup ? cup.label : "",
-        lid: lid ? lid.family : "",
+        id: tr.dataset.itemId ? Number(tr.dataset.itemId) : undefined,
+        product_id: cupId,
+        lid_product_id: lidId,
+        label: cup ? cup.label : cupId ? cupSel.selectedOptions[0].textContent : "",
+        lid: lid ? lid.family : lidId ? lidSel.selectedOptions[0].textContent : "",
         // ink is per line: one order can print different colours on
         // different cups
         ink: tr.querySelector(".po-ink").value.trim(),
@@ -5222,17 +5462,65 @@ async function savePrintOrder() {
         quantity: Number(tr.querySelector(".po-qty").value || 0),
       };
     })
-    .filter((i) => i.product_id);
+    // an existing line the sheet import never matched to a cup has no
+    // product, but it is still a line - keep it
+    .filter((i) => i.product_id || i.id);
+
+  const editing = poEditing;
+  const asDraft = draft === undefined ? !!(editing && editing.is_draft) : draft;
+
+  // A draft can be saved half-filled; a finalized order needs its cups, the
+  // print colour and a quantity on every line (the lid stays optional).
+  document.querySelectorAll("#poItems .po-invalid").forEach((el) => el.classList.remove("po-invalid"));
+  if (!asDraft) {
+    let firstBad = null;
+    document.querySelectorAll("#poItems tr").forEach((tr) => {
+      const cupSel = tr.querySelector(".po-cup");
+      const ink = tr.querySelector(".po-ink");
+      const qty = tr.querySelector(".po-qty");
+      const untouched = !tr.dataset.itemId && !cupSel.value && !ink.value.trim() && !Number(qty.value);
+      if (untouched) return;
+      [
+        [cupSel, !cupSel.value && !tr.dataset.itemId],
+        [ink, !ink.value.trim()],
+        [qty, !(Number(qty.value) > 0)],
+      ].forEach(([el, bad]) => {
+        if (!bad) return;
+        el.classList.add("po-invalid");
+        firstBad = firstBad || el;
+      });
+    });
+    if (!items.length) {
+      const first = document.querySelector("#poItems .po-cup");
+      if (first) first.classList.add("po-invalid");
+      firstBad = first;
+    }
+    if (firstBad) {
+      firstBad.focus();
+      alert("Every cup line needs a cup, a color and a quantity before the order can be finalized. Use Save as draft if it isn't ready yet.");
+      return;
+    }
+  }
 
   if (!items.length) {
     alert("Pick a cup on at least one line before saving.");
     return;
   }
 
-  const res = await fetch("/api/print/orders", {
+  const removed = editing ? editing.items.filter((i) => !items.some((x) => x.id === i.id)) : [];
+  if (removed.length) {
+    const ok = await confirmDialog(
+      removed.map((i) => `${i.label || "Cup"} · ${Number(i.quantity).toLocaleString("en-PH")} cups`).join(", "),
+      { title: `Remove ${removed.length} cup line${removed.length === 1 ? "" : "s"} from this order?`, confirmLabel: "Remove" }
+    );
+    if (!ok) return;
+  }
+
+  const res = await fetch(editing ? `/api/print/orders/${editing.id}/edit` : "/api/print/orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      is_draft: asDraft,
       client: document.getElementById("poClient").value.trim(),
       order_date: document.getElementById("poDate").value,
       due_date: document.getElementById("poDue").value,
@@ -5249,6 +5537,7 @@ async function savePrintOrder() {
     alert(data.message || "Could not save that order.");
     return;
   }
+  poEditing = null;
   closePrintOrderForm();
   await loadPrintClients();
   // Board, Status and Cup Prints all share this one form now (each has
@@ -5339,7 +5628,9 @@ if (document.getElementById("printOrderModal")) {
 
   document.getElementById("printNewBtn").addEventListener("click", openPrintOrderForm);
   document.getElementById("poCancel").addEventListener("click", closePrintOrderForm);
-  document.getElementById("poSave").addEventListener("click", savePrintOrder);
+  document.getElementById("poSave").addEventListener("click", () => savePrintOrder({ draft: poEditing ? undefined : false }));
+  document.getElementById("poDraft").addEventListener("click", () => savePrintOrder({ draft: true }));
+  document.getElementById("poFinalize").addEventListener("click", () => savePrintOrder({ draft: false }));
   document.getElementById("poAddRow").addEventListener("click", () => {
     document.getElementById("poItems").appendChild(poItemRow());
   });
@@ -5428,6 +5719,248 @@ function collectionsPassesFilter(balance) {
   return true;
 }
 
+// ---- Collections dashboard -------------------------------------------------
+// Everything below works off collectionsPOs (the flat PO list, with each
+// PO's terms, due date and payments), so it always agrees with the table.
+
+function addDaysISO(iso, days) {
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return isoDate(d);
+}
+function daysBetweenISO(fromIso, toIso) {
+  return Math.round((new Date(toIso + "T00:00:00") - new Date(fromIso + "T00:00:00")) / 86400000);
+}
+
+// Where an unpaid PO stands against its due date. null for a paid PO or one
+// with no terms (entered before terms existed), which has no due date.
+function poDueState(po, todayIso) {
+  if (po.balance <= 0 || !po.due_date) return null;
+  const diff = daysBetweenISO(todayIso, po.due_date); // + = days left, - = days late
+  if (diff < 0) return { kind: "overdue", days: -diff };
+  if (diff <= 7) return { kind: "soon", days: diff };
+  return { kind: "ok", days: diff };
+}
+
+function poDueHTML(po, withDate) {
+  if (!po.due_date) return "";
+  const date = printShortDate(po.due_date);
+  if (po.balance <= 0) return `<span class="text-gray-400">${withDate ? date : "paid"}</span>`;
+  const st = poDueState(po, isoDate(new Date()));
+  if (st.kind === "overdue") return `<span class="text-red-600 font-medium">${withDate ? date + " · " : ""}${st.days}d late</span>`;
+  if (st.kind === "soon") return `<span class="text-amber-600 font-medium">${withDate ? date + " · " : ""}${st.days === 0 ? "due today" : "in " + st.days + "d"}</span>`;
+  return `<span class="text-gray-500">${date}</span>`;
+}
+
+function dashMoneyShort(n) {
+  const abs = Math.abs(n);
+  if (abs >= 1e6) return "₱" + (n / 1e6).toFixed(abs >= 1e7 ? 0 : 1) + "M";
+  if (abs >= 1e3) return "₱" + (n / 1e3).toFixed(abs >= 1e5 ? 0 : 1) + "k";
+  return "₱" + Math.round(n);
+}
+
+function renderCollectionsDashboard() {
+  const host = document.getElementById("collectionsDashboard");
+  if (!host) return;
+  if (collectionsDashHidden || !collectionsPOs.length) {
+    host.innerHTML = "";
+    return;
+  }
+  const today = isoDate(new Date());
+  const open = collectionsPOs.filter((po) => po.balance > 0);
+
+  // --- headline numbers
+  const invoiced = collectionsPOs.reduce((n, po) => n + po.amount, 0);
+  const collected = collectionsPOs.reduce((n, po) => n + po.collected, 0);
+  const outstanding = open.reduce((n, po) => n + po.balance, 0);
+  const rate = invoiced ? Math.round((collected / invoiced) * 100) : 0;
+  const withState = open.map((po) => ({ po, st: poDueState(po, today) }));
+  const overdue = withState.filter((x) => x.st && x.st.kind === "overdue");
+  const soon = withState.filter((x) => x.st && x.st.kind === "soon");
+  const overdueAmt = overdue.reduce((n, x) => n + x.po.balance, 0);
+  const soonAmt = soon.reduce((n, x) => n + x.po.balance, 0);
+
+  const tile = (label, value, sub, tone) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+      <p class="text-[10px] uppercase tracking-wide font-mono text-gray-400">${label}</p>
+      <p class="text-xl font-semibold mt-0.5 truncate ${tone || "text-gray-900"}">${value}</p>
+      <p class="text-[11px] text-gray-500 mt-0.5 truncate">${sub}</p>
+    </div>`;
+  const tiles = [
+    tile("Invoiced", printMoney(invoiced), `${collectionsPOs.length} purchase order${collectionsPOs.length === 1 ? "" : "s"}`),
+    tile("Collected", printMoney(collected), `${rate}% of invoiced`),
+    tile("Outstanding", printMoney(outstanding), `${open.length} unpaid PO${open.length === 1 ? "" : "s"}`, outstanding > 0 ? "text-gray-900" : "text-gray-400"),
+    tile("Overdue", printMoney(overdueAmt), overdue.length ? `${overdue.length} PO${overdue.length === 1 ? "" : "s"} past due` : "Nothing past due", overdueAmt > 0 ? "text-red-600" : "text-gray-400"),
+    tile("Due in 7 days", printMoney(soonAmt), soon.length ? `${soon.length} PO${soon.length === 1 ? "" : "s"} coming up` : "Nothing due this week", soonAmt > 0 ? "text-amber-600" : "text-gray-400"),
+  ].join("");
+
+  // --- aging of what is still owed
+  const buckets = [
+    { key: "ok", label: "Not yet due", color: "#9ca3af", sum: 0, n: 0 },
+    { key: "d30", label: "1–30 days late", color: "#f59e0b", sum: 0, n: 0 },
+    { key: "d60", label: "31–60 days late", color: "#ea580c", sum: 0, n: 0 },
+    { key: "d61", label: "Over 60 days late", color: "#dc2626", sum: 0, n: 0 },
+    { key: "none", label: "No terms set", color: "#d1d5db", sum: 0, n: 0 },
+  ];
+  const bucketOf = (k) => buckets.find((b) => b.key === k);
+  withState.forEach(({ po, st }) => {
+    let b;
+    if (!st) b = bucketOf(po.due_date ? "ok" : "none");
+    else if (st.kind !== "overdue") b = bucketOf("ok");
+    else b = bucketOf(st.days <= 30 ? "d30" : st.days <= 60 ? "d60" : "d61");
+    b.sum += po.balance;
+    b.n += 1;
+  });
+  const maxBucket = Math.max(...buckets.map((b) => b.sum), 1);
+  const aging = outstanding > 0
+    ? buckets
+        .filter((b) => b.n > 0 || b.key !== "none")
+        .map(
+          (b) => `
+      <div class="flex items-center gap-3 text-xs py-1" title="${b.label}: ${printMoney(b.sum)} across ${b.n} PO${b.n === 1 ? "" : "s"}">
+        <span class="w-32 shrink-0 text-gray-600">${b.label}</span>
+        <div class="flex-1 h-4 bg-gray-50 rounded-sm overflow-hidden"><div style="width:${(b.sum / maxBucket) * 100}%;background:${b.color};height:100%;border-radius:0 4px 4px 0"></div></div>
+        <span class="w-24 shrink-0 text-right font-medium text-gray-800">${printMoney(b.sum)}</span>
+        <span class="w-14 shrink-0 text-right text-gray-400 whitespace-nowrap">${b.n} PO${b.n === 1 ? "" : "s"}</span>
+      </div>`
+        )
+        .join("")
+    : `<p class="text-sm text-gray-400 py-6 text-center">Everything has been collected.</p>`;
+
+  // --- invoiced vs collected, last 6 months
+  const months = [];
+  const now = new Date();
+  for (let k = 5; k >= 0; k--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    months.push({ key: isoDate(d).slice(0, 7), label: d.toLocaleString("en-PH", { month: "short" }), inv: 0, col: 0 });
+  }
+  collectionsPOs.forEach((po) => {
+    const m = months.find((x) => x.key === (po.po_date || "").slice(0, 7));
+    if (m) m.inv += po.amount;
+    (po.payments || []).forEach((p) => {
+      const pm = months.find((x) => x.key === p.paid_date.slice(0, 7));
+      if (pm) pm.col += p.amount;
+    });
+  });
+  const maxMonth = Math.max(...months.map((m) => Math.max(m.inv, m.col)), 1);
+  const BAR_H = 110;
+  const chart = months
+    .map(
+      (m) => `
+      <div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${m.label}: ${printMoney(m.inv)} invoiced, ${printMoney(m.col)} collected">
+        <div class="flex items-end gap-[2px] w-full justify-center" style="height:${BAR_H}px">
+          <div style="width:40%;max-width:22px;height:${Math.max((m.inv / maxMonth) * BAR_H, m.inv ? 2 : 0)}px;background:#1e3a8a;border-radius:4px 4px 0 0"></div>
+          <div style="width:40%;max-width:22px;height:${Math.max((m.col / maxMonth) * BAR_H, m.col ? 2 : 0)}px;background:#16a34a;border-radius:4px 4px 0 0"></div>
+        </div>
+        <span class="text-[10px] text-gray-500">${m.label}</span>
+        <span class="text-[10px] text-gray-400 leading-none">${m.inv ? dashMoneyShort(m.inv) : ""}</span>
+      </div>`
+    )
+    .join("");
+
+  // --- how clients actually pay
+  const paidWithTerms = collectionsPOs.filter((po) => po.balance <= 0 && po.due_date && po.last_paid_date);
+  const onTime = paidWithTerms.filter((po) => po.last_paid_date <= po.due_date).length;
+  const onTimeRate = paidWithTerms.length ? Math.round((onTime / paidWithTerms.length) * 100) : null;
+  const avgDays = paidWithTerms.length
+    ? Math.round(paidWithTerms.reduce((n, po) => n + daysBetweenISO(po.po_date, po.last_paid_date), 0) / paidWithTerms.length)
+    : null;
+  const avgTerms = paidWithTerms.length
+    ? Math.round(paidWithTerms.reduce((n, po) => n + po.terms_days, 0) / paidWithTerms.length)
+    : null;
+  const behaviour = paidWithTerms.length
+    ? `<div class="grid grid-cols-3 gap-2 text-center mb-3">
+         <div class="bg-gray-50 rounded-lg py-2"><p class="text-lg font-semibold ${onTimeRate >= 70 ? "text-green-700" : onTimeRate >= 40 ? "text-amber-600" : "text-red-600"}">${onTimeRate}%</p><p class="text-[10px] uppercase tracking-wide text-gray-400">Paid on time</p></div>
+         <div class="bg-gray-50 rounded-lg py-2"><p class="text-lg font-semibold text-gray-900">${avgDays}d</p><p class="text-[10px] uppercase tracking-wide text-gray-400">Avg days to pay</p></div>
+         <div class="bg-gray-50 rounded-lg py-2"><p class="text-lg font-semibold text-gray-900">${avgTerms}d</p><p class="text-[10px] uppercase tracking-wide text-gray-400">Avg terms given</p></div>
+       </div>`
+    : `<p class="text-xs text-gray-400 mb-3">Payment habits show up here once POs with terms have been paid off.</p>`;
+
+  // top balances by client, with how much of it is already late
+  const lateByClient = {};
+  overdue.forEach((x) => (lateByClient[x.po.client_id] = (lateByClient[x.po.client_id] || 0) + x.po.balance));
+  const top = collectionsClients.filter((c) => c.balance > 0).sort((a, b) => b.balance - a.balance).slice(0, 5);
+  const maxTop = Math.max(...top.map((c) => c.balance), 1);
+  const topRows = top.length
+    ? top
+        .map((c) => {
+          const late = lateByClient[c.id] || 0;
+          return `
+      <div class="flex items-center gap-2 text-xs py-1 cursor-pointer hover:bg-gray-50 rounded" data-dash-client="${c.id}" title="${escapeHtml(c.name)}: ${printMoney(c.balance)} owed${late ? ", " + printMoney(late) + " of it overdue" : ""}">
+        <span class="w-28 shrink-0 truncate text-gray-700">${escapeHtml(c.name)}</span>
+        <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden flex">
+          <div style="width:${((c.balance - late) / maxTop) * 100}%;background:#9ca3af;height:100%"></div>
+          <div style="width:${(late / maxTop) * 100}%;background:#dc2626;height:100%"></div>
+        </div>
+        <span class="w-20 shrink-0 text-right font-medium text-gray-800">${printMoney(c.balance)}</span>
+      </div>`;
+        })
+        .join("")
+    : `<p class="text-sm text-gray-400 py-3 text-center">No balances outstanding.</p>`;
+
+  // --- what to chase first: most overdue, then soonest due
+  const urgent = [...withState]
+    .filter((x) => x.st && x.st.kind !== "ok")
+    .sort((a, b) => (a.st.kind === b.st.kind ? (a.st.kind === "overdue" ? b.st.days - a.st.days : a.st.days - b.st.days) : a.st.kind === "overdue" ? -1 : 1))
+    .slice(0, 6);
+  const urgentRows = urgent.length
+    ? urgent
+        .map(
+          ({ po }) => `
+      <tr class="cursor-pointer hover:bg-gray-50" data-dash-client="${po.client_id}">
+        <td class="py-1.5 pr-2 font-medium text-gray-900 truncate max-w-[9rem]">${escapeHtml(po.client_name)}</td>
+        <td class="py-1.5 pr-2 text-gray-400 whitespace-nowrap">${printShortDate(po.po_date)} · ${po.terms_days}d</td>
+        <td class="py-1.5 pr-2 text-right whitespace-nowrap">${printMoney(po.balance)}</td>
+        <td class="py-1.5 text-right whitespace-nowrap">${poDueHTML(po)}</td>
+      </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4" class="py-6 text-center text-gray-400">Nothing overdue or due this week.</td></tr>`;
+
+  const card = (title, sub, body) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+      <h4 class="text-sm font-semibold text-gray-900">${title}</h4>
+      <p class="text-[11px] text-gray-400 mb-2">${sub}</p>
+      ${body}
+    </div>`;
+
+  host.innerHTML = `
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">${tiles}</div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+      ${card("Who owes what, and how late", "Unpaid balance by how far past its due date", aging)}
+      ${card(
+        "Invoiced vs collected",
+        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Invoiced <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> Collected · last 6 months`,
+        `<div class="flex gap-1 pt-1">${chart}</div>`
+      )}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      ${card("Chase these first", "Most overdue, then due in the next 7 days", `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${urgentRows}</tbody></table>`)}
+      ${card("How clients pay", "Based on POs that have been paid off · red = already overdue", behaviour + topRows)}
+    </div>`;
+
+  host.querySelectorAll("[data-dash-client]").forEach((el) => {
+    el.addEventListener("click", () => openCollectionsClient(el.dataset.dashClient));
+  });
+}
+
+let collectionsDashHidden = false;
+try {
+  collectionsDashHidden = localStorage.getItem("collectionsDashHidden") === "1";
+} catch (e) {}
+{
+  const btn = document.getElementById("collectionsDashToggle");
+  btn.textContent = collectionsDashHidden ? "Show dashboard" : "Hide dashboard";
+  btn.addEventListener("click", () => {
+    collectionsDashHidden = !collectionsDashHidden;
+    try {
+      localStorage.setItem("collectionsDashHidden", collectionsDashHidden ? "1" : "0");
+    } catch (e) {}
+    btn.textContent = collectionsDashHidden ? "Show dashboard" : "Hide dashboard";
+    renderCollectionsDashboard();
+  });
+}
+
 function renderCollectionsHead() {
   const headRow = document.getElementById("collectionsHeadRow");
   headRow.innerHTML =
@@ -5442,6 +5975,8 @@ function renderCollectionsHead() {
          <th class="text-right px-3 py-2">Amount</th>
          <th class="text-right px-3 py-2">Collected</th>
          <th class="text-right px-3 py-2">Balance</th>
+         <th class="text-left px-3 py-2">Terms</th>
+         <th class="text-left px-3 py-2">Due</th>
          <th class="text-left px-3 py-2">Paid Date</th>
          <th class="text-left px-3 py-2">Remarks</th>
          <th class="px-3 py-2"></th>`;
@@ -5460,7 +5995,8 @@ function renderCollections() {
   renderCollectionsHead();
   const body = document.getElementById("collectionsBody");
   const q = collectionsQuery.trim().toLowerCase();
-  const colspan = collectionsViewMode === "grouped" ? 5 : 8;
+  const colspan = collectionsViewMode === "grouped" ? 5 : 10;
+  renderCollectionsDashboard();
 
   const outstanding = collectionsClients.filter((c) => c.balance > 0);
   const totalBalance = outstanding.reduce((n, c) => n + c.balance, 0);
@@ -5509,6 +6045,8 @@ function renderCollections() {
         <td class="px-3 py-2 text-right">${printMoney(po.amount)}</td>
         <td class="px-3 py-2 text-right">${printMoney(po.collected)}</td>
         <td class="px-3 py-2 text-right ${po.balance > 0 ? "text-red-600 font-semibold" : "text-gray-400"}">${printMoney(po.balance)}</td>
+        <td class="px-3 py-2 text-gray-500 whitespace-nowrap">${po.terms_days ? po.terms_days + " days" : "No terms"}</td>
+        <td class="px-3 py-2 whitespace-nowrap">${po.terms_days ? poDueHTML(po, true) : `<span class="text-gray-300">—</span>`}</td>
         <td class="px-3 py-2 text-gray-500 whitespace-nowrap">${po.last_paid_date ? printShortDate(po.last_paid_date) : "—"}</td>
         <td class="px-3 py-2 text-gray-500">${escapeHtml(po.remarks || "—")}</td>
         <td class="px-3 py-2 text-right whitespace-nowrap">
@@ -5636,7 +6174,9 @@ function renderCollectionsDrawerBody(data) {
             : "";
           return `
       <tr data-po="${po.id}">
-        <td class="py-1.5 pr-2 text-gray-500 whitespace-nowrap">${caret}${printShortDate(po.po_date)}</td>
+        <td class="py-1.5 pr-2 text-gray-500 whitespace-nowrap">${caret}${printShortDate(po.po_date)}${
+          po.terms_days ? `<span class="block text-[10px] text-gray-400 pl-4">${po.terms_days}d · ${poDueHTML(po)}</span>` : ""
+        }</td>
         <td class="py-1.5 pr-2 text-right">${printMoney(po.amount)}</td>
         <td class="py-1.5 pr-2 text-right whitespace-nowrap">${poStatusHTML(po)}</td>
         <td class="py-1.5 pr-2 text-gray-500">${escapeHtml(po.remarks || "—")}</td>
@@ -5670,6 +6210,13 @@ function renderCollectionsDrawerBody(data) {
       <form id="drawerPoForm" class="flex flex-wrap gap-2 items-start">
         <input name="po_date" type="date" value="${isoDate(new Date())}" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-36" />
         <input name="amount" type="number" step="0.01" min="0.01" placeholder="Amount" required class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-28" />
+        <select name="terms_days" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-28">
+          <option value="" selected>No terms</option>
+          <option value="15">15 days</option>
+          <option value="30">30 days</option>
+          <option value="45">45 days</option>
+          <option value="60">60 days</option>
+        </select>
         <input name="remarks" type="text" placeholder="Remarks (optional)" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm flex-1 min-w-[8rem]" />
         <button type="submit" class="bg-brand-green text-white text-sm font-semibold px-3 py-1.5 rounded-lg hover:opacity-90 transition">Add</button>
       </form>
@@ -5692,6 +6239,7 @@ function renderCollectionsDrawerBody(data) {
         client_id: data.client.id,
         po_date: fd.get("po_date"),
         amount: fd.get("amount"),
+        terms_days: fd.get("terms_days"),
         remarks: fd.get("remarks"),
       });
     } catch (err) {
@@ -5867,6 +6415,8 @@ async function openNewPoModal() {
   document.getElementById("newPoClient").value = "";
   document.getElementById("newPoDate").value = isoDate(new Date());
   document.getElementById("newPoAmount").value = "";
+  document.getElementById("newPoTerms").value = "";
+  document.getElementById("newPoDueHint").textContent = "No due date unless terms are picked.";
   document.getElementById("newPoRemarks").value = "";
   document.getElementById("newPoError").classList.add("hidden");
   document.getElementById("newPoClientDropdown").classList.add("hidden");
@@ -5909,6 +6459,7 @@ async function saveNewPo() {
       client_id: client.id,
       po_date: document.getElementById("newPoDate").value,
       amount: document.getElementById("newPoAmount").value,
+      terms_days: document.getElementById("newPoTerms").value,
       remarks: document.getElementById("newPoRemarks").value,
     });
   } catch (err) {
@@ -5921,6 +6472,15 @@ async function saveNewPo() {
   if (String(collectionsCurrentClientId) === String(client.id)) openCollectionsClient(client.id);
 }
 
+// show the due date as soon as both the date and the terms are known
+function updateNewPoDueHint() {
+  const date = document.getElementById("newPoDate").value;
+  const terms = Number(document.getElementById("newPoTerms").value);
+  document.getElementById("newPoDueHint").textContent =
+    date && terms ? `Due ${printShortDate(addDaysISO(date, terms))}` : "No due date unless terms are picked.";
+}
+document.getElementById("newPoTerms").addEventListener("change", updateNewPoDueHint);
+document.getElementById("newPoDate").addEventListener("change", updateNewPoDueHint);
 document.getElementById("newPoBtn").addEventListener("click", openNewPoModal);
 document.getElementById("newPoCancel").addEventListener("click", closeNewPoModal);
 document.getElementById("newPoSave").addEventListener("click", saveNewPo);
@@ -7130,6 +7690,18 @@ function renderStorehubPreview(data) {
     .join("");
   const total = data.days.reduce((n, d) => n + d.sales, 0);
   const touching = data.days.filter((d) => d.status !== "same").length;
+  // the same file also files each receipt under the client it names
+  const cl = data.clients;
+  const clientTodo = cl ? cl.counts.new + cl.counts.update : 0;
+  const clientLine = cl
+    ? `<p class="text-sm mt-2">Also files <b>${clientTodo}</b> receipt${clientTodo === 1 ? "" : "s"} under <b>${cl.clients}</b> existing client${cl.clients === 1 ? "" : "s"}${
+        cl.counts.same ? ` <span class="text-gray-400">(${cl.counts.same} already there)</span>` : ""
+      }.${
+        cl.skipped_customers
+          ? ` <span class="text-gray-400">${cl.skipped_customers} customer${cl.skipped_customers === 1 ? "" : "s"} (${cl.skipped_receipts} receipt${cl.skipped_receipts === 1 ? "" : "s"}) aren't clients yet and are skipped - add them with Import StoreHub on the Clients tab.</span>`
+          : ""
+      }</p>`
+    : "";
   document.getElementById("storehubPreview").innerHTML = `
     <table class="w-full text-sm">
       <thead><tr class="${opsHead} border-b border-gray-200">
@@ -7139,11 +7711,12 @@ function renderStorehubPreview(data) {
       <tbody>${rows}</tbody></table>
     <p class="text-sm mt-3"><b>${data.days.length}</b> day${data.days.length === 1 ? "" : "s"}, <b>${printMoney(total)}</b> in sales.
       ${touching ? `${touching} will be added or changed.` : "Everything is already in Monthly Sales."}
-      <span class="text-gray-400">Gross profit, collected dates and notes are left as they are.</span></p>`;
+      <span class="text-gray-400">Gross profit, collected dates and notes are left as they are.</span></p>${clientLine}`;
   const go = document.getElementById("storehubGo");
-  go.disabled = !touching;
-  go.classList.toggle("opacity-50", !touching);
-  go.textContent = touching ? `Import ${touching} day${touching === 1 ? "" : "s"}` : "Nothing to import";
+  const todo = touching || clientTodo;
+  go.disabled = !todo;
+  go.classList.toggle("opacity-50", !todo);
+  go.textContent = touching ? `Import ${touching} day${touching === 1 ? "" : "s"}` : clientTodo ? "Import client receipts" : "Nothing to import";
 }
 
 document.getElementById("salesImportBtn").addEventListener("click", () => document.getElementById("salesImportFile").click());
@@ -8849,9 +9422,9 @@ const appMenu = document.getElementById("appMenu");
 const appLabel = document.getElementById("appLabel");
 const payrollLockModal = document.getElementById("payrollLockModal");
 
-const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", office: "Admin", ops: "Operations" };
+const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", clients: "Clients", office: "Admin", ops: "Operations" };
 // where each app opens: the first thing you want to see in it
-const APP_HOME = { payroll: "dashboard", admin: "status", office: "collections", ops: "masterSales" };
+const APP_HOME = { payroll: "dashboard", admin: "status", clients: "clientsdash", office: "collections", ops: "masterSales" };
 
 let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't
@@ -8908,7 +9481,7 @@ function switchApp(app) {
     openPayrollLock();
     return;
   }
-  if (app === "admin" && payrollUnlocked && !payrollAlwaysUnlocked) {
+  if ((app === "admin" || app === "clients") && payrollUnlocked && !payrollAlwaysUnlocked) {
     // leaving payroll drops the unlock, so coming back asks again
     fetch("/api/payroll/lock", { method: "POST" }).catch(() => {});
     payrollUnlocked = false;
@@ -9059,111 +9632,527 @@ function priceFor(cup, lid, qty) {
 // Clients page
 // ---------------------------------------------------------------------------
 
-const PRINT_CLIENTS_PAGE_SIZE = 50;
-let printClientRows = [];
-let printClientsHasMore = true;
-let printClientsLoading = false;
-let printClientsSearchTimer = null;
+// ---------------------------------------------------------------------------
+// Clients dashboard - computed server-side over every client and order (the
+// Clients list is paginated, so it can't answer questions about the whole
+// book). Print-order data only: what was ordered and whether it's marked
+// paid, the same thing the Clients list's Owed column already shows.
+// ---------------------------------------------------------------------------
 
-async function loadPrintClientsPage() {
-  await loadMorePrintClients({ reset: true });
+function clientsDashAvatar(c) {
+  return printLogo(c.name, false, c.logo_filename).replace("w-9 h-9 text-sm", "w-5 h-5 text-[9px]");
 }
 
-// Paginated and searched server-side, same shape as Cup Prints' history -
-// the client list only grows, so this stays fast rather than fetching
-// every client (with a full order/cups/owed aggregation each) every time.
-async function loadMorePrintClients({ reset = false } = {}) {
-  if (printClientsLoading) return;
-  if (!reset && !printClientsHasMore) return;
-  printClientsLoading = true;
-
-  const q = (document.getElementById("printClientSearch").value || "").trim();
-  const params = new URLSearchParams();
-  params.set("limit", String(PRINT_CLIENTS_PAGE_SIZE));
-  if (q) params.set("q", q);
-  if (!reset && printClientRows.length) {
-    params.set("after_name", printClientRows[printClientRows.length - 1].name);
-  }
-
-  const body = document.getElementById("printClientsBody");
+async function loadClientsDashboard() {
+  const host = document.getElementById("clientsDashBody");
+  let data;
   try {
-    const res = await fetch(`/api/print/clients/page?${params.toString()}`);
-    if (!res.ok) throw new Error("Could not load the clients.");
-    const data = await res.json();
-    printClientRows = reset ? data.clients : printClientRows.concat(data.clients);
-    printClientsHasMore = data.has_more;
+    const res = await fetch("/api/print/clients/dashboard");
+    if (!res.ok) throw new Error("Could not load the dashboard.");
+    data = await res.json();
   } catch (err) {
-    printClientsLoading = false;
-    if (reset) {
-      body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">${escapeHtml(err.message)}</td></tr>`;
-    }
+    host.innerHTML = `<p class="text-sm text-gray-500 py-8 text-center">${escapeHtml(err.message)}</p>`;
     return;
   }
-  printClientsLoading = false;
-  renderPrintClients();
+  renderClientsDashboard(data);
 }
 
-// The Clients table isn't in its own scroll box - the whole page scrolls -
-// so this is a window listener rather than a container one, bound once.
-// Guarded on the tab's own view actually being on screen (offsetParent is
-// null while its ancestor is display:none), since a window scroll fires
-// no matter which tab you're looking at.
-let printClientsScrollBound = false;
-function ensurePrintClientsScrollListener() {
-  if (printClientsScrollBound) return;
-  printClientsScrollBound = true;
-  window.addEventListener("scroll", () => {
-    const view = document.getElementById("printClientsView");
-    if (!view || view.offsetParent === null) return;
-    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 300) {
-      loadMorePrintClients();
-    }
+function renderClientsDashboard(d) {
+  const host = document.getElementById("clientsDashBody");
+  const t = d.totals;
+  const pct = (n, of) => (of ? Math.round((n / of) * 100) : 0);
+
+  document.getElementById("clientsDashSubtitle").textContent =
+    `${t.clients} clients · ${t.ordering} have ordered · ${printMoney(t.value_12)} in the last 12 months`;
+
+  const tile = (label, value, sub, tone) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+      <p class="text-[10px] uppercase tracking-wide font-mono text-gray-400">${label}</p>
+      <p class="text-xl font-semibold mt-0.5 truncate ${tone || "text-gray-900"}">${value}</p>
+      <p class="text-[11px] text-gray-500 mt-0.5 leading-snug">${sub}</p>
+    </div>`;
+  const tiles = [
+    tile("Clients", t.clients.toLocaleString("en-PH"), `${t.never_ordered} never ordered`),
+    tile("Active, last 90 days", t.active_90.toLocaleString("en-PH"), `${pct(t.active_90, t.ordering)}% of clients who've ordered`),
+    tile("New this month", t.new_this_month.toLocaleString("en-PH"), "first order placed this month"),
+    tile("Repeat clients", t.repeat_rate === null ? "—" : t.repeat_rate + "%", "ordered more than once", t.repeat_rate !== null && t.repeat_rate < 40 ? "text-amber-600" : ""),
+    tile("Avg order value", t.avg_order_value === null ? "—" : printMoney(t.avg_order_value), `${t.orders_12} orders, last 12 months`),
+    tile("Unpaid orders", printMoney(t.unpaid_total), `${t.unpaid_orders} order${t.unpaid_orders === 1 ? "" : "s"} not marked paid`, t.unpaid_total > 0 ? "text-red-600" : "text-gray-400"),
+  ].join("");
+
+  // --- best clients, last 12 months
+  const maxTop = Math.max(...d.top.map((c) => c.value_12), 1);
+  const topRows = d.top.length
+    ? d.top
+        .map(
+          (c) => `
+      <div class="flex items-center gap-2 text-xs py-1 cursor-pointer hover:bg-gray-50 rounded" data-dash-client="${c.id}"
+           title="${escapeHtml(c.name)}: ${printMoney(c.value_12)} from ${c.orders_12} order${c.orders_12 === 1 ? "" : "s"}">
+        ${clientsDashAvatar(c)}
+        <span class="w-28 shrink-0 truncate text-gray-700">${escapeHtml(c.name)}</span>
+        <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden"><div style="width:${(c.value_12 / maxTop) * 100}%;background:#1e3a8a;height:100%;border-radius:0 4px 4px 0"></div></div>
+        <span class="w-24 shrink-0 text-right font-medium text-gray-800">${printMoney(c.value_12)}</span>
+        <span class="w-14 shrink-0 text-right text-gray-400">${pct(c.value_12, t.value_12)}%</span>
+      </div>`
+        )
+        .join("")
+    : `<p class="text-sm text-gray-400 py-6 text-center">No orders in the last 12 months.</p>`;
+  const concentration =
+    t.top5_share === null
+      ? ""
+      : `<p class="text-[11px] mt-2 ${t.top5_share >= 60 ? "text-amber-600" : "text-gray-500"}">Top 5 clients make up <b>${t.top5_share}%</b> of the last 12 months' sales${
+          t.top5_share >= 60 ? " — a lot rides on a few accounts." : "."
+        }</p>`;
+
+  // --- new vs returning, per month
+  const maxActive = Math.max(...d.months.map((m) => m.active), 1);
+  const BAR_H = 110;
+  const monthName = (key) => new Date(key + "-01T00:00:00").toLocaleString("en-PH", { month: "short" });
+  const chart = d.months
+    .map((m) => {
+      const returning = m.active - m.new;
+      return `
+      <div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${monthName(m.month)}: ${m.active} clients ordered (${m.new} new, ${returning} returning) · ${m.orders} orders · ${printMoney(m.value)}">
+        <div class="flex flex-col justify-end w-full items-center" style="height:${BAR_H}px">
+          <div style="width:55%;max-width:34px;height:${(m.new / maxActive) * BAR_H}px;background:#16a34a;border-radius:4px 4px 0 0;margin-bottom:${m.new && returning ? 2 : 0}px"></div>
+          <div style="width:55%;max-width:34px;height:${(returning / maxActive) * BAR_H}px;background:#1e3a8a;border-radius:${m.new ? 0 : "4px 4px"} 0 0"></div>
+        </div>
+        <span class="text-[10px] text-gray-500">${monthName(m.month)}</span>
+        <span class="text-[10px] text-gray-400 leading-none">${m.active}</span>
+      </div>`;
+    })
+    .join("");
+
+  // --- clients overdue for a reorder
+  const reorderRows = d.reorder.length
+    ? d.reorder
+        .map(
+          (c) => `
+      <tr class="cursor-pointer hover:bg-gray-50" data-dash-client="${c.id}">
+        <td class="py-1.5 pr-2"><span class="inline-flex items-center gap-2">${clientsDashAvatar(c)}<span class="font-medium text-gray-900 truncate max-w-[9rem]">${escapeHtml(c.name)}</span></span></td>
+        <td class="py-1.5 pr-2 text-gray-400 whitespace-nowrap">every ~${c.typical_gap_days}d</td>
+        <td class="py-1.5 pr-2 text-right whitespace-nowrap text-amber-600 font-medium">${c.days_since}d quiet</td>
+        <td class="py-1.5 text-right whitespace-nowrap text-gray-500">${printMoney(c.lifetime_value)}</td>
+      </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4" class="py-6 text-center text-gray-400">Nobody is overdue to reorder.</td></tr>`;
+
+  // --- unpaid
+  const unpaidRows = d.unpaid.length
+    ? d.unpaid
+        .map(
+          (u) => `
+      <tr class="cursor-pointer hover:bg-gray-50" data-dash-client="${u.id}">
+        <td class="py-1.5 pr-2 font-medium text-gray-900 truncate max-w-[9rem]">${escapeHtml(u.name)}</td>
+        <td class="py-1.5 pr-2 text-gray-400 whitespace-nowrap">${u.orders} order${u.orders === 1 ? "" : "s"}</td>
+        <td class="py-1.5 pr-2 text-right whitespace-nowrap text-red-600 font-medium">${printMoney(u.amount)}</td>
+        <td class="py-1.5 text-right whitespace-nowrap text-gray-500">oldest ${u.oldest_days}d</td>
+      </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4" class="py-6 text-center text-gray-400">Every order is marked paid.</td></tr>`;
+
+  // --- how complete the client file is
+  const health = (label, n, of, hint) => {
+    const p = pct(n, of);
+    return `
+      <div class="py-1.5" title="${hint}">
+        <div class="flex justify-between text-xs mb-1"><span class="text-gray-600">${label}</span><span class="text-gray-800 font-medium">${n} of ${of} · ${p}%</span></div>
+        <div class="h-2 bg-gray-100 rounded-sm overflow-hidden"><div style="width:${p}%;background:${p >= 70 ? "#16a34a" : p >= 30 ? "#f59e0b" : "#dc2626"};height:100%"></div></div>
+      </div>`;
+  };
+  const healthHTML =
+    health("Have contact details", t.with_contact, t.ordering, "A phone, email, Instagram, Facebook or named contact") +
+    health("Have a logo", t.with_logo, t.ordering, "Logo uploaded on the client's page") +
+    `<p class="text-[11px] text-gray-500 mt-2">${t.lapsed} client${t.lapsed === 1 ? " hasn't" : "s haven't"} ordered in over 90 days.</p>`;
+
+  const card = (title, sub, body) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+      <h4 class="text-sm font-semibold text-gray-900">${title}</h4>
+      <p class="text-[11px] text-gray-400 mb-2">${sub}</p>
+      ${body}
+    </div>`;
+
+  host.innerHTML = `
+    <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-3">${tiles}</div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+      ${card("Who brings in the sales", "Order value by client, last 12 months · share of the total", topRows + concentration)}
+      ${card(
+        "New vs returning clients",
+        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Returning <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> New · clients who ordered, last 6 months`,
+        `<div class="flex gap-1 pt-1">${chart}</div>`
+      )}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      ${card(
+        "Due to reorder",
+        d.reorder_count > 8 ? `Quiet well past their usual rhythm · top 8 of ${d.reorder_count}` : "Quiet well past their usual rhythm (3+ orders)",
+        `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${reorderRows}</tbody></table>`
+      )}
+      ${card("Unpaid orders", "Biggest amounts not marked paid", `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${unpaidRows}</tbody></table>`)}
+      ${card("Client file health", "Among clients who have ordered", healthHTML)}
+    </div>`;
+
+  host.querySelectorAll("[data-dash-client]").forEach((el) => {
+    el.addEventListener("click", () => openPrintClient(el.dataset.dashClient));
   });
 }
 
-function renderPrintClients() {
-  const rows = printClientRows;
-  // owed here is only across what's loaded so far - like Cup Prints'
-  // header figures, it says "shown", not "every client we've ever had"
-  const owed = rows.reduce((n, c) => n + Number(c.owed || 0), 0);
+// ---------------------------------------------------------------------------
+// Import a StoreHub export against clients. Same steps as Monthly Sales'
+// import: pick the file, read what would happen, and only save on Import.
+// Each receipt is filed under the client its Customer column names.
+// ---------------------------------------------------------------------------
 
-  document.getElementById("printClientsSubtitle").textContent = rows.length
-    ? `${rows.length}${printClientsHasMore ? "+" : ""} client${rows.length === 1 ? "" : "s"} · ${printMoney(owed)} outstanding`
-    : "";
+let clientsStorehubFile = null;
+let clientsStorehubData = null;
+
+async function clientsStorehubSend(apply, choices) {
+  const form = new FormData();
+  form.append("file", clientsStorehubFile);
+  form.append("apply", apply ? "1" : "0");
+  form.append("choices", JSON.stringify(choices || {}));
+  const res = await fetch("/api/print/clients/storehub", { method: "POST", body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || "That didn't work.");
+  return data;
+}
+
+// what to do with each customer that isn't a client yet: "new", "skip", or
+// an existing client's id (a suggestion taken)
+function clientsStorehubChoices() {
+  const out = {};
+  document.querySelectorAll("#clientsStorehubPreview .sh-choice").forEach((sel) => {
+    const v = sel.value;
+    out[sel.dataset.key] = v === "new" || v === "skip" ? v : Number(v);
+  });
+  return out;
+}
+
+function updateClientsStorehubButton() {
+  const data = clientsStorehubData;
+  const go = document.getElementById("clientsStorehubGo");
+  const extra = [...document.querySelectorAll("#clientsStorehubPreview .sh-choice")]
+    .filter((sel) => sel.value !== "skip")
+    .reduce((n, sel) => n + Number(sel.dataset.receipts), 0);
+  const todo = data.counts.new + data.counts.update + extra;
+  go.disabled = !todo;
+  go.classList.toggle("opacity-50", !todo);
+  go.textContent = todo ? `Import ${todo} receipt${todo === 1 ? "" : "s"}` : "Nothing to import";
+}
+
+function renderClientsStorehubPreview(data) {
+  clientsStorehubData = data;
+  const c = data.counts;
+  const matchedRows = data.matched
+    .slice(0, 8)
+    .map(
+      (m) => `<tr class="border-b border-gray-100">
+        <td class="py-1 pr-3"><span class="font-medium">${escapeHtml(m.name)}</span>${
+          m.variants.length ? `<span class="block text-[11px] text-gray-400">also written as ${m.variants.map(escapeHtml).join(", ")}</span>` : ""
+        }</td>
+        <td class="py-1 pr-3 text-right text-gray-500 align-top">${m.receipts}</td>
+        <td class="py-1 text-right align-top">${printMoney(m.net)}</td></tr>`
+    )
+    .join("");
+
+  const choiceRow = (u) => {
+    const sg = u.suggestion;
+    const def = sg && sg.confident ? String(sg.id) : "new";
+    const options = [
+      sg ? `<option value="${sg.id}">Use “${escapeHtml(sg.name)}”${sg.confident ? "" : " (maybe)"}</option>` : "",
+      `<option value="new">Add as new client</option>`,
+      `<option value="skip">Skip</option>`,
+    ].join("");
+    return `<div class="flex items-center gap-2 py-1.5 border-b border-gray-100 text-sm">
+        <span class="flex-1 min-w-0"><span class="block truncate">${escapeHtml(u.name)}</span>
+          <span class="text-[11px] text-gray-400">${u.receipts} receipt${u.receipts === 1 ? "" : "s"} · ${printMoney(u.net)}</span></span>
+        <select class="sh-choice border border-gray-300 rounded-md px-1.5 py-1 text-xs max-w-[13rem]" data-key="${escapeHtml(u.key)}" data-receipts="${u.receipts}" data-default="${def}">${options}</select>
+      </div>`;
+  };
+  const similar = data.unmatched.filter((u) => u.suggestion);
+  const plain = data.unmatched.filter((u) => !u.suggestion);
+
+  const notes = [];
+  if (c.same) notes.push(`${c.same} already imported`);
+  if (c.update) notes.push(`${c.update} will be updated`);
+  if (c.cancelled) notes.push(`${c.cancelled} cancelled (kept, not counted)`);
+  if (c.returns) notes.push(`${c.returns} return${c.returns === 1 ? "" : "s"} counted as negative`);
+  notes.push(`${data.blank_customer} receipt${data.blank_customer === 1 ? "" : "s"} with no customer skipped`);
+
+  document.getElementById("clientsStorehubPreview").innerHTML = `
+    <p class="text-sm mb-3"><b>${data.rows - data.blank_customer}</b> receipts name a customer, ${printShortDate(data.date_from)} to ${printShortDate(data.date_to)}.
+      <span class="text-gray-400">${notes.join(" · ")}.</span></p>
+    ${
+      data.matched.length
+        ? `<p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1">Existing clients · ${data.matched.length}</p>
+           <table class="w-full text-sm mb-1"><thead><tr class="text-xs text-gray-400"><th class="text-left font-normal">Client</th><th class="text-right font-normal pr-3">Receipts</th><th class="text-right font-normal">Total</th></tr></thead><tbody>${matchedRows}</tbody></table>
+           ${data.matched.length > 8 ? `<p class="text-xs text-gray-400 mb-3">and ${data.matched.length - 8} more</p>` : `<div class="mb-3"></div>`}`
+        : ""
+    }
+    ${
+      similar.length
+        ? `<p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1">Looks like a client we have · ${similar.length}</p>
+           <div class="max-h-52 overflow-y-auto border border-gray-200 rounded-lg px-3 mb-1">${similar.map(choiceRow).join("")}</div>
+           <p class="text-[11px] text-gray-400 mb-3">Pick “Use …” and the name is remembered, so next time it matches by itself.</p>`
+        : ""
+    }
+    ${
+      plain.length
+        ? `<div class="flex items-center justify-between mb-1">
+             <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Not a client yet · ${plain.length}</p>
+             <span class="text-xs text-gray-500"><button type="button" id="shReset" class="text-brand-blue hover:underline">reset</button> · <button type="button" id="shSkipAll" class="text-brand-blue hover:underline">skip all</button></span>
+           </div>
+           <div class="max-h-56 overflow-y-auto border border-gray-200 rounded-lg px-3">${plain.map(choiceRow).join("")}</div>
+           <p class="text-[11px] text-gray-400 mt-1">Skip the one-off walk-ins you don't want on the client list; their receipts are then left out.</p>`
+        : ""
+    }`;
+
+  document.querySelectorAll("#clientsStorehubPreview .sh-choice").forEach((sel) => {
+    sel.value = sel.dataset.default;
+    sel.addEventListener("change", updateClientsStorehubButton);
+  });
+  const setAll = (value) => {
+    document.querySelectorAll("#clientsStorehubPreview .sh-choice").forEach((sel) => {
+      if (value === "default" || [...sel.options].some((o) => o.value === value)) sel.value = value === "default" ? sel.dataset.default : value;
+    });
+    updateClientsStorehubButton();
+  };
+  const reset = document.getElementById("shReset");
+  const skipAll = document.getElementById("shSkipAll");
+  if (reset) reset.addEventListener("click", () => setAll("default"));
+  if (skipAll) skipAll.addEventListener("click", () => setAll("skip"));
+  updateClientsStorehubButton();
+}
+
+function clientsStorehubModal(open) {
+  const modal = document.getElementById("clientsStorehubModal");
+  modal.classList.toggle("hidden", !open);
+  modal.classList.toggle("flex", open);
+}
+
+let printClientRows = [];
+let printClientsSearchTimer = null;
+// which page, how it is sorted and which chip is on - kept between visits to
+// the tab, reset to page 1 whenever the search, sort or chip changes
+const printClientsState = { page: 1, perPage: 25, sort: "name", dir: "asc", filter: "all" };
+
+const CLIENT_COLUMNS = [
+  { key: "name", label: "Client", align: "left" },
+  { key: null, label: "Contact", align: "left" },
+  { key: "orders", label: "Orders", align: "right" },
+  { key: "sales", label: "Cup sales · 12 mo", align: "right" },
+  { key: "store", label: "Store purchases", align: "right" },
+  { key: "last", label: "Last activity", align: "left" },
+  { key: "owed", label: "Owed", align: "right" },
+];
+const CLIENT_CHIPS = [
+  ["all", "All"],
+  ["active", "Active"],
+  ["new", "New"],
+  ["quiet", "Gone quiet"],
+  ["owing", "Owes us"],
+  ["never", "Never bought"],
+];
+const CLIENT_CHIP_HINTS = {
+  active: "Ordered or bought something in the last 90 days",
+  new: "First cup order was in the last 30 days",
+  quiet: "Has bought before, but nothing in the last 90 days",
+  owing: "Has cup orders not marked paid",
+  never: "No cup orders and no store purchases yet",
+};
+
+async function loadPrintClientsPage() {
+  const st = printClientsState;
+  const params = new URLSearchParams({
+    page: st.page, per_page: st.perPage, sort: st.sort, dir: st.dir, filter: st.filter,
+  });
+  const q = (document.getElementById("printClientSearch").value || "").trim();
+  if (q) params.set("q", q);
+
+  const body = document.getElementById("printClientsBody");
+  let data;
+  try {
+    const res = await fetch(`/api/print/clients/page?${params.toString()}`);
+    if (!res.ok) throw new Error("Could not load the clients.");
+    data = await res.json();
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">${escapeHtml(err.message)}</td></tr>`;
+    return;
+  }
+  st.page = data.page; // the server clamps it if a filter left fewer pages
+  printClientRows = data.clients;
+  renderPrintClients(data);
+}
+
+// "today", "12d ago", "3 mo ago" - how long since an ISO date
+function clientAgo(iso) {
+  if (!iso) return null;
+  const days = Math.round((new Date(isoDate(new Date()) + "T00:00:00") - new Date(iso + "T00:00:00")) / 86400000);
+  if (days <= 0) return "today";
+  if (days < 60) return `${days}d ago`;
+  if (days < 700) return `${Math.round(days / 30)} mo ago`;
+  return `${(days / 365).toFixed(1)} yr ago`;
+}
+
+function clientStatusBadge(c) {
+  const tag = (text, cls, title) => `<span class="text-[9px] uppercase tracking-wide font-semibold rounded px-1.5 py-px ${cls}" title="${title}">${text}</span>`;
+  const today = isoDate(new Date());
+  const daysSince = (iso) => Math.round((new Date(today + "T00:00:00") - new Date(iso + "T00:00:00")) / 86400000);
+  if (!c.last_activity) return tag("No orders", "bg-gray-100 text-gray-500", "No cup orders or store purchases yet");
+  if (c.first_order && daysSince(c.first_order) <= 30) return tag("New", "bg-green-100 text-green-700", "First cup order in the last 30 days");
+  if (daysSince(c.last_activity) > 90) return tag("Quiet", "bg-amber-100 text-amber-700", "Nothing in the last 90 days");
+  return "";
+}
+
+function renderPrintClients(data) {
+  const st = printClientsState;
+  const rows = data.clients;
+
+  document.getElementById("printClientsSubtitle").textContent =
+    `${data.counts.all} client${data.counts.all === 1 ? "" : "s"} · ${printMoney(data.totals.owed)} outstanding`;
+
+  // headline figures for whatever the search matches (not just this page)
+  const kpi = (label, value, sub) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+      <p class="text-[10px] uppercase tracking-wide font-mono text-gray-400">${label}</p>
+      <p class="text-lg font-semibold mt-0.5 truncate">${value}</p>
+      <p class="text-[11px] text-gray-500 leading-snug">${sub}</p>
+    </div>`;
+  document.getElementById("clientsKpis").innerHTML = [
+    kpi("Clients", data.counts.all.toLocaleString("en-PH"), `${data.counts.active} active · ${data.counts.quiet} gone quiet`),
+    kpi("Cup sales · 12 mo", printMoney(data.totals.value_12), "drafts and cancelled lines left out"),
+    kpi("Store purchases", printMoney(data.totals.store_net), "from imported StoreHub receipts, net of returns"),
+    kpi("Outstanding", `<span class="${data.totals.owed > 0 ? "text-red-600" : "text-gray-400"}">${printMoney(data.totals.owed)}</span>`, `${data.counts.owing} client${data.counts.owing === 1 ? "" : "s"} with unpaid orders`),
+  ].join("");
+
+  // filter chips, each with how many it would show
+  const chips = document.getElementById("clientsChips");
+  chips.innerHTML = CLIENT_CHIPS.map(([key, label]) => {
+    const on = st.filter === key;
+    return `<button type="button" data-filter="${key}" title="${CLIENT_CHIP_HINTS[key] || "Every client"}"
+      class="text-xs rounded-full border px-3 py-1 transition ${on ? "bg-brand-blue border-brand-blue text-white" : "bg-white border-gray-300 text-gray-600 hover:border-brand-blue"}">
+      ${label} <span class="${on ? "text-white/70" : "text-gray-400"}">${data.counts[key]}</span></button>`;
+  }).join("");
+  chips.querySelectorAll("[data-filter]").forEach((b) =>
+    b.addEventListener("click", () => {
+      st.filter = b.dataset.filter;
+      st.page = 1;
+      loadPrintClientsPage();
+    })
+  );
+
+  // sortable headings
+  const head = document.getElementById("clientsHeadRow");
+  head.innerHTML = CLIENT_COLUMNS.map((col) => {
+    const align = col.align === "right" ? "text-right" : "text-left";
+    if (!col.key) return `<th class="${align} px-3 py-2">${col.label}</th>`;
+    const on = st.sort === col.key;
+    return `<th class="${align} px-3 py-2"><button type="button" data-sort="${col.key}" class="uppercase tracking-wide hover:text-gray-700 ${on ? "text-gray-700" : ""}">${col.label}${on ? (st.dir === "asc" ? " ▲" : " ▼") : ""}</button></th>`;
+  }).join("");
+  head.querySelectorAll("[data-sort]").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (st.sort === b.dataset.sort) st.dir = st.dir === "asc" ? "desc" : "asc";
+      else {
+        st.sort = b.dataset.sort;
+        // money, counts and dates read best biggest/newest first
+        st.dir = b.dataset.sort === "name" ? "asc" : "desc";
+      }
+      st.page = 1;
+      loadPrintClientsPage();
+    })
+  );
 
   const body = document.getElementById("printClientsBody");
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-400 italic">Nobody matches that.</td></tr>`;
-    return;
-  }
-  const rowsHTML = rows
-    .map(
-      (c) => `
+  } else {
+    body.innerHTML = rows
+      .map((c) => {
+        const contact = [c.primary_contact, c.phone, c.instagram && "@" + String(c.instagram).replace(/^@/, "")]
+          .filter(Boolean);
+        const ago = clientAgo(c.last_activity);
+        const lastBits = [c.last_order && "order", c.last_store && "store"].filter(Boolean);
+        return `
       <tr class="hover:bg-gray-50">
         <td class="px-3 py-2">
           <span class="inline-flex items-center gap-2">
             ${printLogo(c.name, false, c.logo_filename).replace("w-9 h-9 text-sm", "w-6 h-6 text-[10px]")}
             <button class="print-client-btn font-medium hover:text-brand-blue text-left" data-client="${c.id}">${escapeHtml(c.name)} &rsaquo;</button>
+            ${clientStatusBadge(c)}
           </span>
         </td>
-        <td class="px-3 py-2 ${c.primary_contact ? "" : "text-gray-300"}">${escapeHtml(c.primary_contact || "—")}</td>
-        <td class="px-3 py-2 ${c.instagram ? "" : "text-gray-300"}">${escapeHtml(c.instagram || "—")}</td>
-        <td class="px-3 py-2 ${c.facebook ? "" : "text-gray-300"}">${escapeHtml(c.facebook || "—")}</td>
-        <td class="px-3 py-2 ${c.phone ? "" : "text-gray-300"}">${escapeHtml(c.phone || "—")}</td>
-        <td class="px-3 py-2 text-right">${c.order_count}</td>
-        <td class="px-3 py-2 text-right ${Number(c.owed) > 0 ? "text-red-600" : "text-gray-300"}">${
-          Number(c.owed) > 0 ? printMoney(c.owed) : "—"
+        <td class="px-3 py-2 text-xs ${contact.length ? "text-gray-600" : "text-gray-300"}">${
+          contact.length ? escapeHtml(contact[0]) + (contact.length > 1 ? `<span class="block text-[11px] text-gray-400">${escapeHtml(contact.slice(1).join(" · "))}</span>` : "") : "—"
         }</td>
-      </tr>`
-    )
-    .join("");
-  body.innerHTML = rowsHTML;
+        <td class="px-3 py-2 text-right ${c.order_count ? "" : "text-gray-300"}">${c.order_count || "—"}</td>
+        <td class="px-3 py-2 text-right ${c.value_12 > 0 ? "" : "text-gray-300"}">${c.value_12 > 0 ? printMoney(c.value_12) : "—"}</td>
+        <td class="px-3 py-2 text-right ${c.store_net !== 0 ? "" : "text-gray-300"}" ${c.store_receipts ? `title="${c.store_receipts} receipt${c.store_receipts === 1 ? "" : "s"}"` : ""}>${c.store_net !== 0 ? printMoney(c.store_net) : "—"}</td>
+        <td class="px-3 py-2 whitespace-nowrap text-xs ${ago ? "text-gray-600" : "text-gray-300"}" ${lastBits.length ? `title="${c.last_order ? "Last order " + printShortDate(c.last_order) : ""}${c.last_order && c.last_store ? " · " : ""}${c.last_store ? "Last store purchase " + printShortDate(c.last_store) : ""}"` : ""}>${ago || "—"}</td>
+        <td class="px-3 py-2 text-right ${c.owed > 0 ? "text-red-600" : "text-gray-300"}">${c.owed > 0 ? printMoney(c.owed) : "—"}</td>
+      </tr>`;
+      })
+      .join("");
+    body.querySelectorAll(".print-client-btn").forEach((b) => {
+      b.addEventListener("click", () => openPrintClient(b.dataset.client));
+    });
+  }
 
-  body.querySelectorAll(".print-client-btn").forEach((b) => {
-    b.addEventListener("click", () => openPrintClient(b.dataset.client));
+  renderClientsPager(data);
+}
+
+// page numbers with gaps: 1 … 4 5 [6] 7 8 … 29
+function clientPageList(page, pages) {
+  const set = new Set([1, pages, page, page - 1, page + 1, page - 2, page + 2]);
+  const list = [...set].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out = [];
+  list.forEach((n, i) => {
+    if (i && n - list[i - 1] > 1) out.push("…");
+    out.push(n);
   });
+  return out;
+}
 
-  ensurePrintClientsScrollListener();
+function renderClientsPager(data) {
+  const st = printClientsState;
+  const pager = document.getElementById("clientsPager");
+  if (!data.total) {
+    pager.innerHTML = "";
+    return;
+  }
+  const from = (data.page - 1) * data.per_page + 1;
+  const to = Math.min(data.page * data.per_page, data.total);
+  const btn = (label, page, { on = false, off = false } = {}) =>
+    `<button type="button" ${off ? "disabled" : `data-page="${page}"`} class="min-w-[2rem] px-2 py-1 rounded-md border text-xs ${
+      on ? "bg-brand-blue border-brand-blue text-white" : off ? "border-gray-200 text-gray-300" : "border-gray-300 text-gray-600 hover:border-brand-blue"
+    }">${label}</button>`;
+  pager.innerHTML = `
+    <span class="text-xs text-gray-500">Showing <b>${from}–${to}</b> of <b>${data.total}</b></span>
+    <div class="flex items-center gap-1 flex-wrap">
+      ${btn("‹ Prev", data.page - 1, { off: data.page <= 1 })}
+      ${clientPageList(data.page, data.pages)
+        .map((n) => (n === "…" ? `<span class="px-1 text-gray-400">…</span>` : btn(n, n, { on: n === data.page })))
+        .join("")}
+      ${btn("Next ›", data.page + 1, { off: data.page >= data.pages })}
+    </div>
+    <label class="text-xs text-gray-500 flex items-center gap-1.5">Per page
+      <select id="clientsPerPage" class="border border-gray-300 rounded-md px-1.5 py-1 text-xs">
+        ${[25, 50, 100].map((n) => `<option value="${n}"${n === st.perPage ? " selected" : ""}>${n}</option>`).join("")}
+      </select>
+    </label>`;
+  pager.querySelectorAll("[data-page]").forEach((b) =>
+    b.addEventListener("click", () => {
+      st.page = Number(b.dataset.page);
+      loadPrintClientsPage();
+      document.getElementById("printClientsView").scrollIntoView({ block: "start" });
+    })
+  );
+  document.getElementById("clientsPerPage").addEventListener("change", (e) => {
+    st.perPage = Number(e.target.value);
+    st.page = 1;
+    loadPrintClientsPage();
+  });
 }
 
 // A client on its own, no order attached - needed because not every client
@@ -9454,9 +10443,50 @@ function quoteText() {
 // ---------------------------------------------------------------------------
 
 if (tabPrintClientsBtn) {
+  document.getElementById("clientsImportBtn").addEventListener("click", () => document.getElementById("clientsImportFile").click());
+  document.getElementById("clientsImportFile").addEventListener("change", async (e) => {
+    clientsStorehubFile = e.target.files[0];
+    e.target.value = "";
+    if (!clientsStorehubFile) return;
+    document.getElementById("clientsStorehubFile").textContent = clientsStorehubFile.name;
+    document.getElementById("clientsStorehubError").classList.add("hidden");
+    document.getElementById("clientsStorehubPreview").innerHTML = `<p class="text-sm text-gray-400">Reading the file&hellip;</p>`;
+    document.getElementById("clientsStorehubGo").disabled = true;
+    clientsStorehubModal(true);
+    try {
+      renderClientsStorehubPreview(await clientsStorehubSend(false));
+    } catch (err) {
+      document.getElementById("clientsStorehubPreview").innerHTML = "";
+      const el = document.getElementById("clientsStorehubError");
+      el.textContent = err.message;
+      el.classList.remove("hidden");
+    }
+  });
+  document.getElementById("clientsStorehubCancel").addEventListener("click", () => clientsStorehubModal(false));
+  document.getElementById("clientsStorehubGo").addEventListener("click", async () => {
+    const go = document.getElementById("clientsStorehubGo");
+    go.disabled = true;
+    try {
+      const data = await clientsStorehubSend(true, clientsStorehubChoices());
+      clientsStorehubModal(false);
+      await loadPrintClientsPage();
+      const added = data.created_clients ? `, ${data.created_clients} new client${data.created_clients === 1 ? "" : "s"}` : "";
+      const el = document.createElement("div");
+      el.textContent = `Imported ${data.stored} receipt${data.stored === 1 ? "" : "s"}${added}.`;
+      el.className = "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-gray-900 text-white text-sm rounded-lg px-4 py-2 shadow-lg";
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 3500);
+    } catch (err) {
+      const el = document.getElementById("clientsStorehubError");
+      el.textContent = err.message;
+      el.classList.remove("hidden");
+      go.disabled = false;
+    }
+  });
   document.getElementById("printClientSearch").addEventListener("input", () => {
     clearTimeout(printClientsSearchTimer);
-    printClientsSearchTimer = setTimeout(() => loadMorePrintClients({ reset: true }), 250);
+    printClientsState.page = 1;
+    printClientsSearchTimer = setTimeout(loadPrintClientsPage, 250);
   });
 }
 if (tabPricingBtn) {
