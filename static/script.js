@@ -9663,7 +9663,7 @@ function renderClientsDashboard(d) {
   const pct = (n, of) => (of ? Math.round((n / of) * 100) : 0);
 
   document.getElementById("clientsDashSubtitle").textContent =
-    `${t.clients} clients · ${t.ordering} have ordered · ${printMoney(t.value_12)} in the last 12 months`;
+    `${t.clients} clients · ${t.ordering} have bought · ${printMoney(t.value_12)} in the last 12 months (${printMoney(t.cup_12)} cups, ${printMoney(t.store_12)} store)`;
 
   const tile = (label, value, sub, tone) => `
     <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
@@ -9673,10 +9673,10 @@ function renderClientsDashboard(d) {
     </div>`;
   const tiles = [
     tile("Clients", t.clients.toLocaleString("en-PH"), `${t.never_ordered} never ordered`),
-    tile("Active, last 90 days", t.active_90.toLocaleString("en-PH"), `${pct(t.active_90, t.ordering)}% of clients who've ordered`),
-    tile("New this month", t.new_this_month.toLocaleString("en-PH"), "first order placed this month"),
-    tile("Repeat clients", t.repeat_rate === null ? "—" : t.repeat_rate + "%", "ordered more than once", t.repeat_rate !== null && t.repeat_rate < 40 ? "text-amber-600" : ""),
-    tile("Avg order value", t.avg_order_value === null ? "—" : printMoney(t.avg_order_value), `${t.orders_12} orders, last 12 months`),
+    tile("Active, last 90 days", t.active_90.toLocaleString("en-PH"), `${pct(t.active_90, t.ordering)}% of clients who've bought`),
+    tile("New this month", t.new_this_month.toLocaleString("en-PH"), "first purchase this month"),
+    tile("Repeat clients", t.repeat_rate === null ? "—" : t.repeat_rate + "%", "bought more than once", t.repeat_rate !== null && t.repeat_rate < 40 ? "text-amber-600" : ""),
+    tile("Avg purchase", t.avg_order_value === null ? "—" : printMoney(t.avg_order_value), `${t.orders_12} orders and receipts, last 12 months`),
     tile("Unpaid orders", printMoney(t.unpaid_total), `${t.unpaid_orders} order${t.unpaid_orders === 1 ? "" : "s"} not marked paid`, t.unpaid_total > 0 ? "text-red-600" : "text-gray-400"),
   ].join("");
 
@@ -9687,16 +9687,16 @@ function renderClientsDashboard(d) {
         .map(
           (c) => `
       <div class="flex items-center gap-2 text-xs py-1 cursor-pointer hover:bg-gray-50 rounded" data-dash-client="${c.id}"
-           title="${escapeHtml(c.name)}: ${printMoney(c.value_12)} from ${c.orders_12} order${c.orders_12 === 1 ? "" : "s"}">
+           title="${escapeHtml(c.name)}: ${printMoney(c.value_12)} — ${printMoney(c.cup_12)} cup orders, ${printMoney(c.store_12)} store purchases (${c.orders_12} in all)">
         ${clientsDashAvatar(c)}
         <span class="w-28 shrink-0 truncate text-gray-700">${escapeHtml(c.name)}</span>
-        <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden"><div style="width:${(c.value_12 / maxTop) * 100}%;background:#1e3a8a;height:100%;border-radius:0 4px 4px 0"></div></div>
+        <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden flex"><div style="width:${(c.cup_12 / maxTop) * 100}%;background:#1e3a8a;height:100%"></div><div style="width:${(c.store_12 / maxTop) * 100}%;background:#16a34a;height:100%"></div></div>
         <span class="w-24 shrink-0 text-right font-medium text-gray-800">${printMoney(c.value_12)}</span>
         <span class="w-14 shrink-0 text-right text-gray-400">${pct(c.value_12, t.value_12)}%</span>
       </div>`
         )
         .join("")
-    : `<p class="text-sm text-gray-400 py-6 text-center">No orders in the last 12 months.</p>`;
+    : `<p class="text-sm text-gray-400 py-6 text-center">No sales in the last 12 months.</p>`;
   const concentration =
     t.top5_share === null
       ? ""
@@ -9712,7 +9712,7 @@ function renderClientsDashboard(d) {
     .map((m) => {
       const returning = m.active - m.new;
       return `
-      <div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${monthName(m.month)}: ${m.active} clients ordered (${m.new} new, ${returning} returning) · ${m.orders} orders · ${printMoney(m.value)}">
+      <div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${monthName(m.month)}: ${m.active} clients bought (${m.new} new, ${returning} returning) · ${m.orders} orders and receipts · ${printMoney(m.value)}">
         <div class="flex flex-col justify-end w-full items-center" style="height:${BAR_H}px">
           <div style="width:55%;max-width:34px;height:${(m.new / maxActive) * BAR_H}px;background:#16a34a;border-radius:4px 4px 0 0;margin-bottom:${m.new && returning ? 2 : 0}px"></div>
           <div style="width:55%;max-width:34px;height:${(returning / maxActive) * BAR_H}px;background:#1e3a8a;border-radius:${m.new ? 0 : "4px 4px"} 0 0"></div>
@@ -9777,10 +9777,14 @@ function renderClientsDashboard(d) {
   host.innerHTML = `
     <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-3">${tiles}</div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-      ${card("Who brings in the sales", "Order value by client, last 12 months · share of the total", topRows + concentration)}
+      ${card(
+        "Who brings in the sales",
+        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Cup orders <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> Store purchases · last 12 months · share of the total`,
+        topRows + concentration
+      )}
       ${card(
         "New vs returning clients",
-        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Returning <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> New · clients who ordered, last 6 months`,
+        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Returning <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> New · clients who bought, last 6 months`,
         `<div class="flex gap-1 pt-1">${chart}</div>`
       )}
     </div>

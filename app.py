@@ -4583,10 +4583,12 @@ def api_print_clients_dashboard():
     and order at once - the paginated client list can't answer "who are our
     best customers" because it only ever holds a page of them.
 
-    Built from print orders only (what was ordered, and whether it is marked
-    paid), the same data the Clients list's Owed column already uses, so it
-    needs no more access than that list does. Drafts and cancelled lines
-    never count: neither is business that happened."""
+    Sales are cup orders plus the StoreHub receipts filed under the client,
+    each kept apart so a bar can show where a client's money comes from.
+    What is still owed is cup orders only (store receipts are paid at the
+    counter), the same data the Clients list's Owed column uses. Drafts,
+    cancelled lines and cancelled receipts never count: none is business that
+    happened."""
     cur = get_db().cursor()
     cur.execute(
         """SELECT c.id, c.name, c.logo_filename, c.is_discounted,
@@ -4609,7 +4611,14 @@ def api_print_clients_dashboard():
     by_client = {}
     for r in cur.fetchall():
         by_client.setdefault(r["client_id"], []).append(
-            {"date": r["order_date"], "paid": r["is_paid"], "total": float(r["total"] or 0)}
+            {"date": r["order_date"], "paid": r["is_paid"], "total": float(r["total"] or 0), "src": "cup"}
+        )
+    cur.execute(
+        """SELECT client_id, txn_time::date AS d, amount FROM client_transactions WHERE NOT is_cancelled"""
+    )
+    for r in cur.fetchall():
+        by_client.setdefault(r["client_id"], []).append(
+            {"date": r["d"], "paid": True, "total": float(r["amount"] or 0), "src": "store"}
         )
 
     today = date.today()
@@ -4626,7 +4635,7 @@ def api_print_clients_dashboard():
               for n in range(5, -1, -1)}
 
     ordering = active_90 = lapsed = repeat = new_this_month = 0
-    value_12 = 0.0
+    value_12 = cup_12 = store_12 = 0.0
     orders_12 = 0
     rows = []
     reorder = []
@@ -4648,12 +4657,17 @@ def api_print_clients_dashboard():
             new_this_month += 1
 
         lifetime = sum(o["total"] for o in orders)
-        v12 = sum(o["total"] for o in orders if o["date"] >= year_ago)
+        cup12 = sum(o["total"] for o in orders if o["date"] >= year_ago and o["src"] == "cup")
+        store12 = sum(o["total"] for o in orders if o["date"] >= year_ago and o["src"] == "store")
+        v12 = cup12 + store12
         n12 = sum(1 for o in orders if o["date"] >= year_ago)
         value_12 += v12
+        cup_12 += cup12
+        store_12 += store12
         orders_12 += n12
         rows.append({"id": cid, "name": clients[cid]["name"], "logo_filename": clients[cid]["logo_filename"],
-                     "value_12": round(v12, 2), "orders_12": n12})
+                     "value_12": round(v12, 2), "cup_12": round(cup12, 2), "store_12": round(store12, 2),
+                     "orders_12": n12})
 
         seen_months = set()
         for o in orders:
@@ -4710,6 +4724,8 @@ def api_print_clients_dashboard():
             "repeat_rate": round(repeat / ordering * 100) if ordering else None,
             "avg_order_value": round(value_12 / orders_12, 2) if orders_12 else None,
             "value_12": round(value_12, 2),
+            "cup_12": round(cup_12, 2),
+            "store_12": round(store_12, 2),
             "orders_12": orders_12,
             "top5_share": round(top5_value / value_12 * 100) if value_12 else None,
             "unpaid_total": round(sum(u["amount"] for u in unpaid), 2),
