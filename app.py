@@ -2304,6 +2304,21 @@ def is_coowner_viewer():
     return is_outside_viewer() and can_view_payroll()
 
 
+def user_has_office_app():
+    """Whether this account has the Admin app (Collections and friends): a
+    manager, a co-owner, or a staff member it was switched on for. The same
+    rule the app switcher applies, for routes that mix in Collections money."""
+    if is_manager() or is_coowner_viewer():
+        return True
+    staff_name = session.get("staff_name")
+    if not staff_name:
+        return False
+    cur = get_db().cursor()
+    cur.execute("SELECT can_access_admin_app FROM staff WHERE name=%s", (staff_name,))
+    row = cur.fetchone()
+    return bool(row and row["can_access_admin_app"])
+
+
 def payroll_view_required(view):
     """Reading payroll figures. Saving them stays superuser-only."""
 
@@ -4576,6 +4591,76 @@ def api_print_clients_storehub():
     })
 
 
+SALE_SOURCES = {"cup": "Cup order", "store": "Store receipt", "po": "Collections PO"}
+
+
+def _match_sales(entries):
+    """Find the same sale recorded in more than one place, for one client.
+
+    A cup order, a StoreHub receipt and a Collections PO can all be the one
+    sale: a PO is rung up on the till with the P.O. tender, and a printed job
+    can be rung up when it is paid for. Records are the same sale when the
+    amounts agree to the centavo-ish (50 centavos) and the dates are close:
+      PO and store receipt   within 3 days (in practice nearly always the same day)
+      cup order and either   within 7 days
+    Each record pairs with at most one other, closest dates first.
+
+    Marks the duplicate with entry["dup"] so it can be left out of every
+    total. Which one survives follows the richest record: cup order, then
+    store receipt, then PO. Returns the matches as dicts, for showing."""
+    def pairs(a_list, b_list, window):
+        cand = []
+        for i, a in enumerate(a_list):
+            for j, b in enumerate(b_list):
+                gap = abs((a["date"] - b["date"]).days)
+                diff = abs(a["total"] - b["total"])
+                if gap <= window and diff <= 0.5:
+                    cand.append((gap, diff, i, j))
+        cand.sort()
+        used_a, used_b, out = set(), set(), []
+        for gap, _, i, j in cand:
+            if i in used_a or j in used_b:
+                continue
+            used_a.add(i)
+            used_b.add(j)
+            out.append((a_list[i], b_list[j], gap))
+        return out
+
+    live = [e for e in entries if e["total"] > 0]
+    cups = [e for e in live if e["src"] == "cup"]
+    stores = [e for e in live if e["src"] == "store"]
+    pos = [e for e in live if e["src"] == "po"]
+
+    matches = []
+
+    def link(keep, drop, gap):
+        drop["dup"] = True
+        matches.append({"kept": keep["src"], "dropped": drop["src"], "amount": round(drop["total"], 2),
+                        "date": drop["date"].isoformat(), "gap": gap})
+
+    for cup, store, gap in pairs(cups, stores, 7):
+        link(cup, store, gap)
+    # a PO is matched to one record: the closest receipt or cup order not already claimed by another PO
+    claimed = set()
+    cand = []
+    for i, po in enumerate(pos):
+        for gap, diff, kind, rec in (
+            [(abs((po["date"] - r["date"]).days), abs(po["total"] - r["total"]), "store", r) for r in stores]
+            + [(abs((po["date"] - r["date"]).days), abs(po["total"] - r["total"]), "cup", r) for r in cups]
+        ):
+            if gap <= (3 if kind == "store" else 7) and diff <= 0.5:
+                cand.append((gap, diff, 0 if kind == "store" else 1, i, id(rec), rec))
+    cand.sort(key=lambda c: c[:5])
+    used_po = set()
+    for gap, _, _, i, rid, rec in cand:
+        if i in used_po or rid in claimed:
+            continue
+        used_po.add(i)
+        claimed.add(rid)
+        link(rec, pos[i], gap)
+    return matches
+
+
 @app.route("/api/print/clients/dashboard")
 @login_required
 def api_print_clients_dashboard():
@@ -4584,11 +4669,13 @@ def api_print_clients_dashboard():
     best customers" because it only ever holds a page of them.
 
     Sales are cup orders plus the StoreHub receipts filed under the client,
-    each kept apart so a bar can show where a client's money comes from.
-    What is still owed is cup orders only (store receipts are paid at the
-    counter), the same data the Clients list's Owed column uses. Drafts,
-    cancelled lines and cancelled receipts never count: none is business that
-    happened."""
+    plus Collections POs for someone who may see Collections - each kept apart
+    so a bar can show where a client's money comes from. The same sale is
+    often recorded in more than one of them, so matching records (see
+    _match_sales) are counted once. What is still owed is cup orders only
+    (store receipts are paid at the counter), the same data the Clients list's
+    Owed column uses. Drafts, cancelled lines and cancelled receipts never
+    count: none is business that happened."""
     cur = get_db().cursor()
     cur.execute(
         """SELECT c.id, c.name, c.logo_filename, c.is_discounted,
@@ -4621,6 +4708,32 @@ def api_print_clients_dashboard():
             {"date": r["d"], "paid": True, "total": float(r["amount"] or 0), "src": "store"}
         )
 
+    includes_pos = user_has_office_app()
+    if includes_pos:
+        cur.execute("SELECT client_id, po_date, amount FROM purchase_orders")
+        for r in cur.fetchall():
+            by_client.setdefault(r["client_id"], []).append(
+                {"date": r["po_date"], "paid": True, "total": float(r["amount"] or 0), "src": "po"}
+            )
+
+    # the same sale in two places counts once
+    overlap = {"count": 0, "amount": 0.0, "list": []}
+    pair_counts = {}
+    for cid, entries in by_client.items():
+        if cid not in clients:
+            continue
+        for m in _match_sales(entries):
+            overlap["count"] += 1
+            overlap["amount"] += m["amount"]
+            key = f"{m['kept']}+{m['dropped']}"
+            pair_counts[key] = pair_counts.get(key, 0) + 1
+            overlap["list"].append({**m, "client": clients[cid]["name"], "client_id": cid})
+        by_client[cid] = [e for e in entries if not e.get("dup")]
+    overlap["amount"] = round(overlap["amount"], 2)
+    overlap["pairs"] = pair_counts
+    overlap["list"].sort(key=lambda m: m["date"], reverse=True)
+    overlap["list"] = overlap["list"][:12]
+
     today = date.today()
     year_ago = today - timedelta(days=365)
     this_month = (today.year, today.month)
@@ -4635,7 +4748,7 @@ def api_print_clients_dashboard():
               for n in range(5, -1, -1)}
 
     ordering = active_90 = lapsed = repeat = new_this_month = 0
-    value_12 = cup_12 = store_12 = 0.0
+    value_12 = cup_12 = store_12 = po_12 = 0.0
     orders_12 = 0
     rows = []
     reorder = []
@@ -4659,15 +4772,17 @@ def api_print_clients_dashboard():
         lifetime = sum(o["total"] for o in orders)
         cup12 = sum(o["total"] for o in orders if o["date"] >= year_ago and o["src"] == "cup")
         store12 = sum(o["total"] for o in orders if o["date"] >= year_ago and o["src"] == "store")
-        v12 = cup12 + store12
+        po12 = sum(o["total"] for o in orders if o["date"] >= year_ago and o["src"] == "po")
+        v12 = cup12 + store12 + po12
         n12 = sum(1 for o in orders if o["date"] >= year_ago)
         value_12 += v12
         cup_12 += cup12
         store_12 += store12
+        po_12 += po12
         orders_12 += n12
         rows.append({"id": cid, "name": clients[cid]["name"], "logo_filename": clients[cid]["logo_filename"],
                      "value_12": round(v12, 2), "cup_12": round(cup12, 2), "store_12": round(store12, 2),
-                     "orders_12": n12})
+                     "po_12": round(po12, 2), "orders_12": n12})
 
         seen_months = set()
         for o in orders:
@@ -4726,6 +4841,7 @@ def api_print_clients_dashboard():
             "value_12": round(value_12, 2),
             "cup_12": round(cup_12, 2),
             "store_12": round(store_12, 2),
+            "po_12": round(po_12, 2),
             "orders_12": orders_12,
             "top5_share": round(top5_value / value_12 * 100) if value_12 else None,
             "unpaid_total": round(sum(u["amount"] for u in unpaid), 2),
@@ -4735,6 +4851,8 @@ def api_print_clients_dashboard():
             "discounted": sum(1 for c in clients.values() if c["is_discounted"]),
         },
         "months": [{**m, "value": round(m["value"], 2)} for m in months.values()],
+        "includes_pos": includes_pos,
+        "overlap": overlap,
         "top": top,
         "reorder": reorder[:8],
         "reorder_count": len(reorder),

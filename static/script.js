@@ -9663,7 +9663,7 @@ function renderClientsDashboard(d) {
   const pct = (n, of) => (of ? Math.round((n / of) * 100) : 0);
 
   document.getElementById("clientsDashSubtitle").textContent =
-    `${t.clients} clients · ${t.ordering} have bought · ${printMoney(t.value_12)} in the last 12 months (${printMoney(t.cup_12)} cups, ${printMoney(t.store_12)} store)`;
+    `${t.clients} clients · ${t.ordering} have bought · ${printMoney(t.value_12)} in the last 12 months (${printMoney(t.cup_12)} cups, ${printMoney(t.store_12)} store${d.includes_pos ? `, ${printMoney(t.po_12)} POs` : ""})`;
 
   const tile = (label, value, sub, tone) => `
     <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
@@ -9676,7 +9676,7 @@ function renderClientsDashboard(d) {
     tile("Active, last 90 days", t.active_90.toLocaleString("en-PH"), `${pct(t.active_90, t.ordering)}% of clients who've bought`),
     tile("New this month", t.new_this_month.toLocaleString("en-PH"), "first purchase this month"),
     tile("Repeat clients", t.repeat_rate === null ? "—" : t.repeat_rate + "%", "bought more than once", t.repeat_rate !== null && t.repeat_rate < 40 ? "text-amber-600" : ""),
-    tile("Avg purchase", t.avg_order_value === null ? "—" : printMoney(t.avg_order_value), `${t.orders_12} orders and receipts, last 12 months`),
+    tile("Avg purchase", t.avg_order_value === null ? "—" : printMoney(t.avg_order_value), `${t.orders_12} sales, last 12 months`),
     tile("Unpaid orders", printMoney(t.unpaid_total), `${t.unpaid_orders} order${t.unpaid_orders === 1 ? "" : "s"} not marked paid`, t.unpaid_total > 0 ? "text-red-600" : "text-gray-400"),
   ].join("");
 
@@ -9687,10 +9687,10 @@ function renderClientsDashboard(d) {
         .map(
           (c) => `
       <div class="flex items-center gap-2 text-xs py-1 cursor-pointer hover:bg-gray-50 rounded" data-dash-client="${c.id}"
-           title="${escapeHtml(c.name)}: ${printMoney(c.value_12)} — ${printMoney(c.cup_12)} cup orders, ${printMoney(c.store_12)} store purchases (${c.orders_12} in all)">
+           title="${escapeHtml(c.name)}: ${printMoney(c.value_12)} — ${printMoney(c.cup_12)} cup orders, ${printMoney(c.store_12)} store purchases${d.includes_pos ? `, ${printMoney(c.po_12 || 0)} POs` : ""} (${c.orders_12} sales)">
         ${clientsDashAvatar(c)}
         <span class="w-28 shrink-0 truncate text-gray-700">${escapeHtml(c.name)}</span>
-        <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden flex"><div style="width:${(c.cup_12 / maxTop) * 100}%;background:#1e3a8a;height:100%"></div><div style="width:${(c.store_12 / maxTop) * 100}%;background:#16a34a;height:100%"></div></div>
+        <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden flex"><div style="width:${(c.cup_12 / maxTop) * 100}%;background:#1e3a8a;height:100%"></div><div style="width:${(c.store_12 / maxTop) * 100}%;background:#16a34a;height:100%"></div><div style="width:${((c.po_12 || 0) / maxTop) * 100}%;background:#d97706;height:100%"></div></div>
         <span class="w-24 shrink-0 text-right font-medium text-gray-800">${printMoney(c.value_12)}</span>
         <span class="w-14 shrink-0 text-right text-gray-400">${pct(c.value_12, t.value_12)}%</span>
       </div>`
@@ -9703,6 +9703,28 @@ function renderClientsDashboard(d) {
       : `<p class="text-[11px] mt-2 ${t.top5_share >= 60 ? "text-amber-600" : "text-gray-500"}">Top 5 clients make up <b>${t.top5_share}%</b> of the last 12 months' sales${
           t.top5_share >= 60 ? " — a lot rides on a few accounts." : "."
         }</p>`;
+
+  const ov = d.overlap || { count: 0, amount: 0, list: [], pairs: {} };
+  const overlapNote = ov.count
+    ? `<p class="text-[11px] text-gray-500 mt-1"><b>${ov.count}</b> sale${ov.count === 1 ? "" : "s"} (${printMoney(ov.amount)}) were recorded in more than one place and are counted once — see the list below.</p>`
+    : "";
+  const SALE_LABEL = { cup: "Cup order", store: "Store receipt", po: "Collections PO" };
+  const overlapRows = ov.list
+    .map(
+      (m) => `<tr class="cursor-pointer hover:bg-gray-50" data-dash-client="${m.client_id}">
+        <td class="py-1.5 pr-2 font-medium text-gray-900 truncate max-w-[10rem]">${escapeHtml(m.client)}</td>
+        <td class="py-1.5 pr-2 text-gray-400 whitespace-nowrap">${printShortDate(m.date)}</td>
+        <td class="py-1.5 pr-2 text-right whitespace-nowrap">${printMoney(m.amount)}</td>
+        <td class="py-1.5 pr-2 text-gray-500">${SALE_LABEL[m.kept]} + ${SALE_LABEL[m.dropped]}</td>
+        <td class="py-1.5 text-right text-gray-400 whitespace-nowrap">${m.gap === 0 ? "same day" : m.gap + "d apart"}</td></tr>`
+    )
+    .join("");
+  const pairSummary = Object.entries(ov.pairs || {})
+    .map(([k, n]) => {
+      const [a, b] = k.split("+");
+      return `${n} × ${SALE_LABEL[a].toLowerCase()} = ${SALE_LABEL[b].toLowerCase()}`;
+    })
+    .join(" · ");
 
   // --- new vs returning, per month
   const maxActive = Math.max(...d.months.map((m) => m.active), 1);
@@ -9779,8 +9801,8 @@ function renderClientsDashboard(d) {
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
       ${card(
         "Who brings in the sales",
-        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Cup orders <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> Store purchases · last 12 months · share of the total`,
-        topRows + concentration
+        `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Cup orders <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> Store purchases${d.includes_pos ? ` <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#d97706"></span> Collections POs` : ""} · last 12 months · share of the total`,
+        topRows + concentration + overlapNote
       )}
       ${card(
         "New vs returning clients",
@@ -9796,7 +9818,17 @@ function renderClientsDashboard(d) {
       )}
       ${card("Unpaid orders", "Biggest amounts not marked paid", `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${unpaidRows}</tbody></table>`)}
       ${card("Client file health", "Among clients who have ordered", healthHTML)}
-    </div>`;
+    </div>
+    ${
+      ov.count
+        ? `<div class="mt-3">${card(
+            "Same sale, recorded in more than one place",
+            `Matched by client, amount and date (receipt and PO within 3 days, a cup order within 7) and counted once · ${pairSummary}`,
+            `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${overlapRows}</tbody></table>
+             ${ov.count > ov.list.length ? `<p class="text-[11px] text-gray-400">Latest ${ov.list.length} of ${ov.count}.</p>` : ""}`
+          )}</div>`
+        : ""
+    }`;
 
   host.querySelectorAll("[data-dash-client]").forEach((el) => {
     el.addEventListener("click", () => openPrintClient(el.dataset.dashClient));
