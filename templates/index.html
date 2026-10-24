@@ -2003,6 +2003,23 @@
     </div>
   </div>
 
+  {# Name who printed and checked on a day, and split a two-shift day. See the
+     cup shift block in script.js. #}
+  <div id="cupShiftModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-xl p-5 max-h-[90vh] overflow-y-auto">
+      <h3 id="cupShiftTitle" class="font-display font-semibold text-lg leading-tight"></h3>
+      <p id="cupShiftHint" class="text-xs text-gray-500 mb-4"></p>
+      <div id="cupShiftBody" class="flex flex-col gap-3"></div>
+      <button id="cupShiftAdd" type="button" class="text-sm text-brand-blue hover:underline mt-3">+ Add another shift</button>
+      <p id="cupShiftError" class="text-xs text-red-600 mt-2 hidden"></p>
+      <div class="flex items-center gap-2 mt-4 pt-3 border-t border-gray-100">
+        <button id="cupShiftReset" type="button" class="text-xs text-gray-500 hover:text-red-600 mr-auto" title="Pay this day the usual way: the day's total, shared by whoever the schedule made Printer and Checker">Use the schedule's roles</button>
+        <button id="cupShiftCancel" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Cancel</button>
+        <button id="cupShiftApply" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Apply</button>
+      </div>
+    </div>
+  </div>
+
   <div id="payrollView" style="display:none">
     <p id="payrollPeriodLabel" class="text-sm text-gray-600 mb-5"></p>
 
@@ -2017,6 +2034,16 @@
         <span id="cupQuotaStatus" class="text-xs text-gray-500"></span>
       </div>
       <p id="cupQuotaHistory" class="text-xs text-gray-500 mb-2"></p>
+      <div id="cupRateEditor" class="hidden mb-3 border border-gray-200 rounded-lg p-3 bg-gray-50">
+        <div class="flex flex-wrap items-center gap-2 text-sm mb-2">
+          <span class="font-medium">Bonus per cup, for each operator</span>
+          <span class="text-gray-500">starting</span>
+          <input id="cupRateFrom" type="date" class="border border-gray-300 rounded-md px-2 py-1" />
+          <span id="cupRateStatus" class="text-xs text-gray-500"></span>
+        </div>
+        <div id="cupRateRows" class="grid gap-1.5"></div>
+        <p id="cupRateHistory" class="text-[11px] text-gray-500 mt-2"></p>
+      </div>
       <p id="cupCountsHint" class="text-xs text-gray-500 mb-3">
         Store-wide printed-cup total for every day in this cutoff,
         including weekends. The Printer earns ₱0.15/cup and the Checker

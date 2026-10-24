@@ -137,6 +137,30 @@ def cup_quota_on(changes, day_iso):
         quota = q
     return quota
 
+def fetch_cup_rate_changes(cur):
+    """{staff_id: [(effective_from ISO, printer, checker)]}, oldest first."""
+    cur.execute(
+        "SELECT staff_id, effective_from, printer_rate, checker_rate FROM cup_rate_changes ORDER BY effective_from"
+    )
+    out = {}
+    for r in cur.fetchall():
+        out.setdefault(r["staff_id"], []).append(
+            (r["effective_from"].isoformat(), float(r["printer_rate"]), float(r["checker_rate"]))
+        )
+    return out
+
+
+def cup_rate_on(changes, staff_id, day_iso, role):
+    """Per-cup bonus this person earns in `role` on a day: the latest change
+    of theirs that has started, else the standing CUP_BONUS_RATE."""
+    rate = CUP_BONUS_RATE[role]
+    for effective_from, printer, checker in changes.get(staff_id, []):
+        if effective_from > day_iso:
+            break
+        rate = printer if role == "Printer" else checker
+    return rate
+
+
 # Fraction of a full day's rate a shift counts for in payroll. Half Day
 # is the generator's standing Friday shift for a part-timer, and is also
 # assignable by hand to anyone (see EDITABLE_OPTIONS). Everything else
@@ -380,6 +404,29 @@ def init_db():
             quantity INTEGER NOT NULL DEFAULT 0
         )"""
     )
+    # A day that needs more than "everyone on the schedule shares the day's
+    # count": the cups printed per shift and exactly who printed / checked in
+    # each. A date with rows here is paid from these and nothing else; a date
+    # without keeps the original rule (the day's count, whoever the schedule
+    # made Printer and Checker). Additive - old days are never touched.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS cup_day_shifts (
+            date TEXT NOT NULL,
+            shift_no INTEGER NOT NULL CHECK (shift_no BETWEEN 1 AND 3),
+            quantity INTEGER NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+            PRIMARY KEY (date, shift_no)
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS cup_day_shift_staff (
+            date TEXT NOT NULL,
+            shift_no INTEGER NOT NULL,
+            staff_id INTEGER NOT NULL REFERENCES staff(id),
+            role TEXT NOT NULL CHECK (role IN ('Printer', 'Checker')),
+            PRIMARY KEY (date, shift_no, staff_id),
+            FOREIGN KEY (date, shift_no) REFERENCES cup_day_shifts(date, shift_no) ON DELETE CASCADE
+        )"""
+    )
     # changes to the daily cup quota, each from a date onward - so raising it
     # never rewrites the bonus of a cutoff that was already worked out
     cur.execute(
@@ -388,6 +435,21 @@ def init_db():
             quota INTEGER NOT NULL CHECK (quota >= 0),
             set_by TEXT,
             set_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    # What each operator earns per cup as Printer and as Checker, from a date
+    # onward - the same idea as the quota, so changing someone's rate never
+    # rewrites a cutoff that was already worked out. Someone with no row uses
+    # CUP_BONUS_RATE.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS cup_rate_changes (
+            staff_id INTEGER NOT NULL REFERENCES staff(id),
+            effective_from DATE NOT NULL,
+            printer_rate NUMERIC(6,3) NOT NULL CHECK (printer_rate >= 0),
+            checker_rate NUMERIC(6,3) NOT NULL CHECK (checker_rate >= 0),
+            set_by TEXT,
+            set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (staff_id, effective_from)
         )"""
     )
     # per-staff, per-payday manual payroll inputs (OT hours + benefit
@@ -1767,6 +1829,31 @@ def payroll_order(row):
     return (rank, category_rank, row["id"])
 
 
+def fetch_cup_day_shifts(cur, start_iso, end_iso):
+    """{date: [{shift_no, quantity, staff: {"Printer": {ids}, "Checker": {ids}}}]}
+    for the days in range that were given their own shifts."""
+    cur.execute(
+        "SELECT date, shift_no, quantity FROM cup_day_shifts WHERE date BETWEEN %s AND %s ORDER BY date, shift_no",
+        (start_iso, end_iso),
+    )
+    days = {}
+    index = {}
+    for r in cur.fetchall():
+        shift = {"shift_no": r["shift_no"], "quantity": r["quantity"], "staff": {"Printer": set(), "Checker": set()}}
+        days.setdefault(r["date"], []).append(shift)
+        index[(r["date"], r["shift_no"])] = shift
+    if index:
+        cur.execute(
+            "SELECT date, shift_no, staff_id, role FROM cup_day_shift_staff WHERE date BETWEEN %s AND %s",
+            (start_iso, end_iso),
+        )
+        for r in cur.fetchall():
+            shift = index.get((r["date"], r["shift_no"]))
+            if shift is not None:
+                shift["staff"][r["role"]].add(r["staff_id"])
+    return days
+
+
 def compute_payroll(db, start, end, pay_date):
     """Days worked and cup-bonus come from the generated schedule + saved
     cup counts; OT hours and benefit deductions are manually entered per
@@ -1805,6 +1892,20 @@ def compute_payroll(db, start, end, pay_date):
     )
     cup_counts = {r["date"]: r["quantity"] for r in cur.fetchall()}
     quota_changes = fetch_cup_quota_changes(cur)
+    rate_changes = fetch_cup_rate_changes(cur)
+
+    # days with their own shifts and named operators (see cup_day_shifts)
+    custom_days = fetch_cup_day_shifts(cur, start.isoformat(), end.isoformat())
+    id_by_name = {s["name"]: s["id"] for s in staff_rows}
+    name_by_id = {s["id"]: s["name"] for s in staff_rows}
+    # who the schedule made Printer / Checker each day: what an assignment is
+    # offered against, and what a day without one is paid on
+    scheduled_roles = {}
+    for r in schedule_rows:
+        if r["shift_label"] in CUP_BONUS_RATE and r["staff_id"] in name_by_id:
+            scheduled_roles.setdefault(r["date"], {"Printer": [], "Checker": []})[r["shift_label"]].append(
+                name_by_id[r["staff_id"]]
+            )
 
     cur.execute(
         "SELECT staff_id, ot_hours, undertime_hours, sss, pagibig, philhealth, hmo, "
@@ -1840,9 +1941,20 @@ def compute_payroll(db, start, end, pay_date):
             absence_deduction = 0
 
         bonus = sum(
-            max(0, cup_counts.get(d_iso, 0) - cup_quota_on(quota_changes, d_iso)) * CUP_BONUS_RATE[label]
+            max(0, cup_counts.get(d_iso, 0) - cup_quota_on(quota_changes, d_iso))
+            * cup_rate_on(rate_changes, sid, d_iso, label)
             for d_iso, label in cup_shifts[sid]
+            if d_iso not in custom_days  # those days are paid from their shifts, below
         )
+        # a day with named shifts: each shift has its own quota, and only the
+        # people named on it earn from its cups
+        for d_iso, shifts in custom_days.items():
+            quota = cup_quota_on(quota_changes, d_iso)
+            for shift in shifts:
+                excess = max(0, shift["quantity"] - quota)
+                for role in ("Printer", "Checker"):
+                    if sid in shift["staff"][role]:
+                        bonus += excess * cup_rate_on(rate_changes, sid, d_iso, role)
 
         # once a cutoff has been saved (a payroll_extras row exists), its
         # values are the source of truth; before that, prefill deductions
@@ -1897,7 +2009,9 @@ def compute_payroll(db, start, end, pay_date):
                 "monthly_salary": s.get("monthly_salary"),
                 "days_worked": worked_display,
                 "base_pay": round(base_pay, 2),
-                "has_bonus": s["category"] == "machine",  # cup bonus - machine operators only
+                # cup bonus - the machine operators, which includes anyone on the
+                # printing side by role (James), so he can be named on a shift
+                "has_bonus": schedule_group(s) == "printing",
                 "bonus": round(bonus, 2),
                 "manual_bonus": manual_bonus,
                 "ot_hours": ot_hours,
@@ -1926,10 +2040,21 @@ def compute_payroll(db, start, end, pay_date):
     d = start
     while d <= end:
         d_iso = d.isoformat()
+        shifts = custom_days.get(d_iso, [])
         cup_rows.append(
             {
                 "date": d_iso,
-                "quantity": cup_counts.get(d_iso, 0),
+                "quantity": sum(sh["quantity"] for sh in shifts) if shifts else cup_counts.get(d_iso, 0),
+                "shifts": [
+                    {
+                        "shift_no": sh["shift_no"],
+                        "quantity": sh["quantity"],
+                        "printers": [name_by_id[i] for i in sh["staff"]["Printer"] if i in name_by_id],
+                        "checkers": [name_by_id[i] for i in sh["staff"]["Checker"] if i in name_by_id],
+                    }
+                    for sh in shifts
+                ],
+                "scheduled": scheduled_roles.get(d_iso, {"Printer": [], "Checker": []}),
                 "quota": cup_quota_on(quota_changes, d_iso),
                 "weekday_short": d.strftime("%a"),
                 "is_weekend": d.weekday() >= 5,
@@ -1943,6 +2068,20 @@ def compute_payroll(db, start, end, pay_date):
         "pay_date": pay_date.isoformat(),
         "staff": results,
         "cup_counts": cup_rows,
+        "cup_operators": [s["name"] for s in staff_rows if schedule_group(s) == "printing"],
+        # each operator's rates: what applies at the end of this cutoff, and
+        # the dated changes behind it
+        "cup_rates": {
+            s["name"]: {
+                "printer": cup_rate_on(rate_changes, s["id"], end.isoformat(), "Printer"),
+                "checker": cup_rate_on(rate_changes, s["id"], end.isoformat(), "Checker"),
+                "changes": [
+                    {"effective_from": d, "printer": pr, "checker": ck} for d, pr, ck in rate_changes.get(s["id"], [])
+                ],
+            }
+            for s in staff_rows
+            if schedule_group(s) == "printing"
+        },
         "ot_rate": OT_HOURLY_RATE,
         "cup_bonus_rate": CUP_BONUS_RATE,
         "cup_daily_quota": cup_quota_on(quota_changes, end.isoformat()),
@@ -8198,6 +8337,81 @@ def api_payroll_cup_quota_delete(effective_from):
     return jsonify({"status": "ok"})
 
 
+def _cup_rate_value(raw, label):
+    try:
+        value = round(float(str(raw).strip()), 3)
+    except (TypeError, ValueError):
+        raise ValueError(f"{label} rate needs to be an amount per cup, like 0.15.")
+    if not 0 <= value <= 100:
+        raise ValueError(f"{label} rate looks wrong - it is pesos per cup.")
+    return value
+
+
+@app.route("/api/payroll/cup-rate", methods=["POST"])
+@superuser_required
+def api_payroll_cup_rate_set():
+    """Set one operator's Printer and Checker bonus per cup from a date
+    onward. Cutoffs before that date keep the rates they had."""
+    data = request.get_json(force=True)
+    try:
+        printer = _cup_rate_value(data.get("printer"), "Printer")
+        checker = _cup_rate_value(data.get("checker"), "Checker")
+        effective_from = (data.get("effective_from") or "").strip()
+        date.fromisoformat(effective_from)
+    except ValueError as exc:
+        message = str(exc) if "rate" in str(exc) else "Pick the date the new rates start."
+        return jsonify({"status": "error", "message": message}), 400
+    person = roster_by_name(False).get(data.get("name"))
+    if person is None or schedule_group(person) != "printing":
+        return jsonify({"status": "error", "message": "Pick a machine operator."}), 400
+    db = get_db()
+    cur = db.cursor()
+    before = fetch_cup_rate_changes(cur)
+    was = (cup_rate_on(before, person["id"], effective_from, "Printer"), cup_rate_on(before, person["id"], effective_from, "Checker"))
+    cur.execute(
+        """INSERT INTO cup_rate_changes (staff_id, effective_from, printer_rate, checker_rate, set_by)
+           VALUES (%s,%s,%s,%s,%s)
+           ON CONFLICT (staff_id, effective_from) DO UPDATE SET
+             printer_rate=EXCLUDED.printer_rate, checker_rate=EXCLUDED.checker_rate,
+             set_by=EXCLUDED.set_by, set_at=NOW()""",
+        (person["id"], effective_from, printer, checker, session.get("display_name") or "Unknown"),
+    )
+    record_audit(
+        cur, "Set cup bonus rates", f"{person['name']} from {effective_from}",
+        {"printer": {"from": was[0], "to": printer}, "checker": {"from": was[1], "to": checker}},
+    )
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/payroll/cup-rate/<name>/<effective_from>", methods=["DELETE"])
+@superuser_required
+def api_payroll_cup_rate_delete(name, effective_from):
+    """Take a rate change back out, so those days use the rates before it."""
+    try:
+        date.fromisoformat(effective_from)
+    except ValueError:
+        return jsonify({"status": "error", "message": "That is not a date."}), 400
+    person = roster_by_name().get(name)
+    if person is None:
+        return jsonify({"status": "error", "message": "No such person."}), 404
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "DELETE FROM cup_rate_changes WHERE staff_id=%s AND effective_from=%s RETURNING printer_rate, checker_rate",
+        (person["id"], effective_from),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such rate change."}), 404
+    record_audit(
+        cur, "Removed a cup bonus rate change", f"{name} from {effective_from}",
+        {"printer": float(row["printer_rate"]), "checker": float(row["checker_rate"])},
+    )
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
 @app.route("/api/payroll/mine")
 @login_required
 def api_my_payroll():
@@ -8254,6 +8468,61 @@ def api_thirteenth_month():
     return jsonify(compute_thirteenth_month(db, year))
 
 
+def _save_cup_day_shifts(cur, days):
+    """Replace the shifts of each day sent: [{date, shifts: [{shift_no,
+    quantity, printers: [name], checkers: [name]}]}]. An empty shifts list
+    puts a day back on the original rule. Only machine operators can be
+    named, and nobody can be both Printer and Checker in the same shift.
+    Returns {date: summary} of what changed, for the audit trail."""
+    summary = {}
+    machine = {s["name"]: s["id"] for s in roster(False) if schedule_group(s) == "printing"}
+    for day in days:
+        d_iso = day.get("date")
+        try:
+            date.fromisoformat(d_iso)
+        except (TypeError, ValueError):
+            continue
+        shifts = day.get("shifts") or []
+        if len(shifts) > 3:
+            raise ValueError("A day can have at most 3 shifts.")
+        cur.execute("DELETE FROM cup_day_shifts WHERE date=%s", (d_iso,))  # cascades the names
+        if not shifts:
+            summary[d_iso] = "back to the schedule's roles"
+            continue
+        total = 0
+        parts = []
+        for n, sh in enumerate(shifts, 1):
+            qty = max(0, int(sh.get("quantity") or 0))
+            printers = list(dict.fromkeys(sh.get("printers") or []))
+            checkers = list(dict.fromkeys(sh.get("checkers") or []))
+            if set(printers) & set(checkers):
+                raise ValueError("Someone can't be both Printer and Checker in the same shift.")
+            for name in printers + checkers:
+                if name not in machine:
+                    raise ValueError(f"{name} isn't a machine operator.")
+            cur.execute("INSERT INTO cup_day_shifts (date, shift_no, quantity) VALUES (%s,%s,%s)", (d_iso, n, qty))
+            for name in printers:
+                cur.execute(
+                    "INSERT INTO cup_day_shift_staff (date, shift_no, staff_id, role) VALUES (%s,%s,%s,'Printer')",
+                    (d_iso, n, machine[name]),
+                )
+            for name in checkers:
+                cur.execute(
+                    "INSERT INTO cup_day_shift_staff (date, shift_no, staff_id, role) VALUES (%s,%s,%s,'Checker')",
+                    (d_iso, n, machine[name]),
+                )
+            total += qty
+            parts.append({"shift": n, "cups": qty, "printers": printers, "checkers": checkers})
+        # the day's total keeps cup_counts in step, for anything that reads it
+        cur.execute(
+            "INSERT INTO cup_counts (date, quantity) VALUES (%s, %s) "
+            "ON CONFLICT(date) DO UPDATE SET quantity=excluded.quantity",
+            (d_iso, total),
+        )
+        summary[d_iso] = parts
+    return summary
+
+
 @app.route("/api/payroll/save", methods=["POST"])
 @superuser_required
 def api_payroll_save():
@@ -8285,6 +8554,12 @@ def api_payroll_save():
             "ON CONFLICT(date) DO UPDATE SET quantity=excluded.quantity",
             (row.get("date"), int(row.get("quantity") or 0)),
         )
+
+    try:
+        shift_days = _save_cup_day_shifts(cur, data.get("cup_shifts") or [])
+    except ValueError as exc:
+        db.rollback()
+        return jsonify({"status": "error", "message": str(exc)}), 400
 
     PAYROLL_FIELDS = (
         "ot_hours", "undertime_hours", "sss", "pagibig", "philhealth", "hmo",
@@ -8332,6 +8607,8 @@ def api_payroll_save():
             ),
         )
 
+    if shift_days:
+        changes["cup_shifts"] = shift_days
     record_audit(
         cur,
         "Saved payroll",

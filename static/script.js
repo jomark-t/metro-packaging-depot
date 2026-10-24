@@ -1774,10 +1774,14 @@ async function loadPayroll() {
   cupCountsHint.textContent =
     `Store-wide printed-cup total for every day in this cutoff, including weekends. ` +
     `Cups up to the daily quota (${quota.toLocaleString()} for this cutoff) don't qualify for a bonus - only cups above it earn the Printer ` +
-    `₱${printerRate}/cup and the Checker ₱${checkerRate}/cup, based on whoever held each role that day.`;
+    `and Checker rate (₱${printerRate} and ₱${checkerRate} per cup unless an operator has their own, set below), based on whoever held each role that day. ` +
+    `A day with two shifts: use Assign to enter each shift's cups and name who printed and checked it - ` +
+    `each shift has its own quota, and only the people named on it earn from its cups.`;
 
   renderCupQuota(data);
-  renderCupCounts(data.cup_counts);
+  cupRates = data.cup_rates || {};
+  renderCupRates(data);
+  renderCupCounts(data.cup_counts, data.cup_operators, data.cup_daily_quota);
   renderPayrollTable(data.staff);
   refreshCreditedState();
 }
@@ -1849,6 +1853,118 @@ const cupQuotaInput = document.getElementById("cupQuotaInput");
 const cupQuotaFrom = document.getElementById("cupQuotaFrom");
 const cupQuotaStatus = document.getElementById("cupQuotaStatus");
 const cupQuotaHistory = document.getElementById("cupQuotaHistory");
+
+// Each operator's own Printer and Checker bonus per cup, from a date onward.
+let cupRates = {};
+
+// 0.15, 0.10, 0.125 - two decimals, a third only when it is needed
+function cupRateText(rate) {
+  return Number(rate).toFixed(3).replace(/0$/, "");
+}
+
+function cupRateOn(name, role, dateIso) {
+  const r = cupRates[name];
+  let rate = role === "Printer" ? 0.15 : 0.1;
+  (r?.changes || []).forEach((c) => {
+    if (c.effective_from <= dateIso) rate = role === "Printer" ? c.printer : c.checker;
+  });
+  return rate;
+}
+
+function renderCupRates(data) {
+  const editor = document.getElementById("cupRateEditor");
+  if (!IS_SUPERUSER) return;
+  const names = Object.keys(data.cup_rates || {});
+  if (!names.length) return;
+  editor.classList.remove("hidden");
+  const from = document.getElementById("cupRateFrom");
+  if (!from.value) from.value = isoDate(new Date());
+  const dateLabel = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+  const rows = document.getElementById("cupRateRows");
+  // keep what is being typed across a reload of the cutoff
+  const typed = {};
+  rows.querySelectorAll("[data-person]").forEach((row) => {
+    if (row.contains(document.activeElement)) {
+      typed[row.dataset.person] = [row.querySelector(".cup-rate-printer").value, row.querySelector(".cup-rate-checker").value];
+    }
+  });
+  rows.innerHTML = names
+    .map((name) => {
+      const r = data.cup_rates[name];
+      const [pv, cv] = typed[name] || [r.printer, r.checker];
+      return `<div class="flex flex-wrap items-center gap-2 text-sm" data-person="${escapeHtml(name)}">
+        <span class="w-24 font-medium truncate">${escapeHtml(name)}</span>
+        <label class="flex items-center gap-1 text-gray-500">Printer ₱<input type="number" step="0.01" min="0" class="cup-rate-printer w-20 border border-gray-300 rounded-md px-2 py-1 text-gray-900" value="${cupRateText(pv)}" /></label>
+        <label class="flex items-center gap-1 text-gray-500">Checker ₱<input type="number" step="0.01" min="0" class="cup-rate-checker w-20 border border-gray-300 rounded-md px-2 py-1 text-gray-900" value="${cupRateText(cv)}" /></label>
+        <button type="button" class="cup-rate-set bg-brand-green text-white text-xs font-semibold rounded-md px-3 py-1 hover:opacity-90 transition">Set</button>
+      </div>`;
+    })
+    .join("");
+
+  const history = names
+    .filter((n) => data.cup_rates[n].changes.length)
+    .map((n) =>
+      `<b>${escapeHtml(n)}</b>: ` +
+      data.cup_rates[n].changes
+        .map(
+          (c) => `₱${cupRateText(c.printer)} / ₱${cupRateText(c.checker)} from ${dateLabel(c.effective_from)} ` +
+            `<button type="button" class="cup-rate-remove text-gray-400 hover:text-red-600" data-name="${escapeHtml(n)}" data-from="${c.effective_from}" title="Remove this change" aria-label="Remove this change">&times;</button>`
+        )
+        .join(" &rarr; ")
+    );
+  document.getElementById("cupRateHistory").innerHTML = history.length
+    ? `Changes (Printer / Checker): ${history.join(" · ")}. Anyone without a change earns ₱0.15 as Printer and ₱0.10 as Checker.`
+    : "Everyone earns ₱0.15 per cup as Printer and ₱0.10 as Checker until you set their own. A change only applies from the date you pick; earlier cutoffs keep their rates.";
+
+  const status = document.getElementById("cupRateStatus");
+  rows.querySelectorAll(".cup-rate-set").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const row = btn.closest("[data-person]");
+      const name = row.dataset.person;
+      const printer = row.querySelector(".cup-rate-printer").value;
+      const checker = row.querySelector(".cup-rate-checker").value;
+      if (!from.value) {
+        status.textContent = "Pick the date it starts.";
+        return;
+      }
+      const ok = await confirmDialog(
+        `${name} earns ₱${printer} per cup as Printer and ₱${checker} as Checker from ${dateLabel(from.value)}. Days before that keep their old rates.`,
+        { title: "Set these bonus rates?", confirmLabel: "Set rates" }
+      );
+      if (!ok) return;
+      status.textContent = "";
+      const res = await fetch("/api/payroll/cup-rate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, printer, checker, effective_from: from.value }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        status.textContent = out.message || "Could not set the rates.";
+        return;
+      }
+      status.textContent = `Saved for ${name}.`;
+      setTimeout(() => (status.textContent = ""), 2500);
+      loadPayroll();
+    })
+  );
+  document.querySelectorAll(".cup-rate-remove").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const ok = await confirmDialog("Those days go back to the rates before it, and the bonus on any cutoff they fall in is worked out again.", {
+        title: "Remove this rate change?",
+        confirmLabel: "Remove",
+      });
+      if (!ok) return;
+      const res = await fetch(`/api/payroll/cup-rate/${encodeURIComponent(btn.dataset.name)}/${btn.dataset.from}`, { method: "DELETE" });
+      if (!res.ok) {
+        status.textContent = (await res.json().catch(() => ({}))).message || "Could not remove it.";
+        return;
+      }
+      loadPayroll();
+    })
+  );
+}
 
 function renderCupQuota(data) {
   const q = data.cup_quota || { baseline: data.cup_daily_quota, changes: [] };
@@ -1924,7 +2040,31 @@ if (document.getElementById("cupQuotaSave")) {
   });
 }
 
-function renderCupCounts(cupRows) {
+// Days given their own shifts and named operators this session but not saved
+// yet: date -> [{quantity, printers, checkers}], or [] to go back to the
+// schedule's roles. Sent with the rest of the payroll on Save.
+const cupShiftDraft = new Map();
+let cupRowsByDate = {};
+let cupOperators = [];
+let cupQuotaNow = 1000;
+let cupShiftDate = null;
+
+// the shifts a day currently has: what's been staged, else what's saved
+function cupShiftsFor(date) {
+  if (cupShiftDraft.has(date)) return cupShiftDraft.get(date);
+  return (cupRowsByDate[date]?.shifts || []).map((sh) => ({
+    quantity: sh.quantity, printers: [...sh.printers], checkers: [...sh.checkers],
+  }));
+}
+
+function renderCupCounts(cupRows, operators, quota) {
+  cupOperators = operators || [];
+  cupQuotaNow = quota ?? cupQuotaNow;
+  cupRowsByDate = Object.fromEntries((cupRows || []).map((r) => [r.date, r]));
+  // anything staged for a cutoff that is no longer on screen is dropped
+  [...cupShiftDraft.keys()].forEach((d) => {
+    if (!cupRowsByDate[d]) cupShiftDraft.delete(d);
+  });
   if (!cupRows || cupRows.length === 0) {
     cupCountsContainer.innerHTML = "";
     noCupDays.style.display = "block";
@@ -1936,9 +2076,13 @@ function renderCupCounts(cupRows) {
   table.className = "border-collapse";
   const headRow = document.createElement("tr");
   const qtyRow = document.createElement("tr");
+  const shiftRow = document.createElement("tr");
 
   cupRows.forEach((row) => {
     const weekendClass = row.is_weekend ? "bg-green-50" : "";
+    const shifts = cupShiftsFor(row.date);
+    const custom = shifts.length > 0;
+    const staged = cupShiftDraft.has(row.date);
 
     const th = document.createElement("th");
     th.className = `text-[10px] font-mono uppercase tracking-wide text-gray-500 font-medium px-2 py-1 text-left whitespace-nowrap ${weekendClass}`;
@@ -1950,19 +2094,182 @@ function renderCupCounts(cupRows) {
     const input = document.createElement("input");
     input.type = "number";
     input.min = "0";
-    input.value = row.quantity;
+    // a day with its own shifts shows the total; the shifts hold the figures
+    input.value = custom ? shifts.reduce((n, sh) => n + Number(sh.quantity || 0), 0) : row.quantity;
     input.dataset.date = row.date;
-    input.disabled = !IS_SUPERUSER;
+    input.disabled = !IS_SUPERUSER || custom;
+    input.title = custom ? "This day's cups are entered per shift - use Assign to change them" : "";
     input.className =
       "cup-input w-20 text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-brand-blue disabled:bg-gray-50 disabled:text-gray-500";
     td.appendChild(input);
     qtyRow.appendChild(td);
+
+    // under each day: who it is paid to, and the way to change it
+    const sd = document.createElement("td");
+    sd.className = `px-2 pb-1 align-top ${weekendClass}`;
+    const names = (list) => (list.length ? list.join(", ") : "—");
+    const lines = custom
+      ? shifts
+          .map(
+            (sh, i) => `<span class="block text-[10px] leading-tight text-gray-500 whitespace-nowrap" title="Printer: ${escapeHtml(names(sh.printers))} · Checker: ${escapeHtml(names(sh.checkers))}">` +
+              `<b class="text-gray-700">S${i + 1}</b> ${Number(sh.quantity || 0).toLocaleString()} · ${escapeHtml(names(sh.printers))} / ${escapeHtml(names(sh.checkers))}</span>`
+          )
+          .join("")
+      : "";
+    const label = custom ? "Edit" : "Assign";
+    sd.innerHTML =
+      lines +
+      (IS_SUPERUSER
+        ? `<button type="button" class="cup-shift-btn text-[10px] ${staged ? "text-amber-600" : "text-brand-blue"} hover:underline" data-date="${row.date}">${label}${staged ? " · unsaved" : ""}</button>`
+        : "");
+    shiftRow.appendChild(sd);
   });
 
   table.appendChild(headRow);
   table.appendChild(qtyRow);
+  table.appendChild(shiftRow);
   cupCountsContainer.innerHTML = "";
   cupCountsContainer.appendChild(table);
+  cupCountsContainer.querySelectorAll(".cup-shift-btn").forEach((b) =>
+    b.addEventListener("click", () => openCupShiftModal(b.dataset.date))
+  );
+}
+
+// ---- the shift editor ------------------------------------------------------
+
+let cupShiftEditing = []; // [{quantity, printers, checkers}] being edited
+
+function cupShiftChips(role, shiftIndex, picked) {
+  return cupOperators
+    .map(
+      (name) => `<label class="inline-flex items-center gap-1.5 text-sm border rounded-full px-2.5 py-1 cursor-pointer ${picked.includes(name) ? "bg-blue-50 border-brand-blue text-brand-blue" : "border-gray-300 text-gray-600"}">
+        <input type="checkbox" class="cup-shift-pick" data-shift="${shiftIndex}" data-role="${role}" value="${escapeHtml(name)}" ${picked.includes(name) ? "checked" : ""} />${escapeHtml(name)}<span class="text-[10px] text-gray-400">₱${cupRateText(cupRateOn(name, role === "printers" ? "Printer" : "Checker", cupShiftDate))}</span></label>`
+    )
+    .join("");
+}
+
+function renderCupShiftEditor() {
+  document.getElementById("cupShiftBody").innerHTML = cupShiftEditing
+    .map(
+      (sh, i) => `
+    <div class="border border-gray-200 rounded-xl p-3">
+      <div class="flex items-center gap-3 mb-2">
+        <span class="font-semibold text-sm">Shift ${i + 1}</span>
+        <label class="text-sm flex items-center gap-2 ml-auto">Cups printed
+          <input type="number" min="0" class="cup-shift-qty w-24 border border-gray-300 rounded-md px-2 py-1 text-right" data-shift="${i}" value="${sh.quantity || 0}" /></label>
+        ${cupShiftEditing.length > 1 ? `<button type="button" class="cup-shift-remove text-gray-400 hover:text-red-600" data-shift="${i}" aria-label="Remove this shift" title="Remove this shift">&#10005;</button>` : ""}
+      </div>
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1">Printer · per cup above the quota</p>
+      <div class="flex flex-wrap gap-1.5 mb-2">${cupShiftChips("printers", i, sh.printers)}</div>
+      <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1">Checker · per cup above the quota</p>
+      <div class="flex flex-wrap gap-1.5">${cupShiftChips("checkers", i, sh.checkers)}</div>
+      <p class="text-[11px] mt-2 ${Number(sh.quantity) > cupQuotaNow ? "text-gray-500" : "text-gray-400"}">${
+        Number(sh.quantity) > cupQuotaNow
+          ? `${(Number(sh.quantity) - cupQuotaNow).toLocaleString()} cups above this shift's ${cupQuotaNow.toLocaleString()} quota earn the bonus.`
+          : `Under this shift's ${cupQuotaNow.toLocaleString()} quota - no bonus.`
+      }</p>
+    </div>`
+    )
+    .join("");
+  document.getElementById("cupShiftAdd").classList.toggle("hidden", cupShiftEditing.length >= 3);
+}
+
+// copy what is typed/ticked back into the editing state before it is redrawn
+function syncCupShiftEditor() {
+  document.querySelectorAll("#cupShiftBody .cup-shift-qty").forEach((el) => {
+    cupShiftEditing[Number(el.dataset.shift)].quantity = Number(el.value) || 0;
+  });
+  cupShiftEditing.forEach((sh) => {
+    sh.printers = [];
+    sh.checkers = [];
+  });
+  document.querySelectorAll("#cupShiftBody .cup-shift-pick:checked").forEach((el) => {
+    cupShiftEditing[Number(el.dataset.shift)][el.dataset.role].push(el.value);
+  });
+}
+
+function openCupShiftModal(date) {
+  const row = cupRowsByDate[date];
+  if (!row) return;
+  cupShiftDate = date;
+  const existing = cupShiftsFor(date);
+  const inputNow = Number(cupCountsContainer.querySelector(`.cup-input[data-date="${date}"]`)?.value) || 0;
+  // a day that has none yet starts as one shift: the count typed so far, and
+  // the people the schedule made Printer and Checker - so the usual case is a
+  // tick or two away rather than a form to fill in
+  cupShiftEditing = existing.length
+    ? existing.map((sh) => ({ ...sh, printers: [...sh.printers], checkers: [...sh.checkers] }))
+    : [{ quantity: inputNow, printers: [...row.scheduled.Printer], checkers: [...row.scheduled.Checker] }];
+  const nice = new Date(`${date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  document.getElementById("cupShiftTitle").textContent = `Cup bonus · ${nice}`;
+  const sched = row.scheduled;
+  document.getElementById("cupShiftHint").textContent =
+    `On the schedule: Printer ${sched.Printer.join(", ") || "—"}; Checker ${sched.Checker.join(", ") || "—"}. ` +
+    `Add a second shift when two crews worked: enter each shift's cups and tick who printed and checked it. ` +
+    `Only the people ticked earn from that shift's cups.`;
+  document.getElementById("cupShiftError").classList.add("hidden");
+  renderCupShiftEditor();
+  const modal = document.getElementById("cupShiftModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+}
+
+function closeCupShiftModal() {
+  const modal = document.getElementById("cupShiftModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+  cupShiftDate = null;
+}
+
+if (document.getElementById("cupShiftModal")) {
+  const body = document.getElementById("cupShiftBody");
+  // ticking or typing redraws the chips/notes so the hints stay true
+  body.addEventListener("change", () => {
+    syncCupShiftEditor();
+    renderCupShiftEditor();
+  });
+  body.addEventListener("click", (e) => {
+    const rm = e.target.closest(".cup-shift-remove");
+    if (!rm) return;
+    syncCupShiftEditor();
+    cupShiftEditing.splice(Number(rm.dataset.shift), 1);
+    renderCupShiftEditor();
+  });
+  document.getElementById("cupShiftAdd").addEventListener("click", () => {
+    syncCupShiftEditor();
+    cupShiftEditing.push({ quantity: 0, printers: [], checkers: [] });
+    renderCupShiftEditor();
+  });
+  document.getElementById("cupShiftCancel").addEventListener("click", closeCupShiftModal);
+  document.getElementById("cupShiftReset").addEventListener("click", () => {
+    cupShiftDraft.set(cupShiftDate, []);
+    closeCupShiftModal();
+    renderCupCounts(Object.values(cupRowsByDate), cupOperators, cupQuotaNow);
+  });
+  document.getElementById("cupShiftApply").addEventListener("click", () => {
+    syncCupShiftEditor();
+    const err = document.getElementById("cupShiftError");
+    const clash = cupShiftEditing.findIndex((sh) => sh.printers.some((n) => sh.checkers.includes(n)));
+    if (clash >= 0) {
+      err.textContent = `Shift ${clash + 1}: someone can't be both Printer and Checker.`;
+      err.classList.remove("hidden");
+      return;
+    }
+    const idle = cupShiftEditing.findIndex(
+      (sh) => Number(sh.quantity) > cupQuotaNow && !sh.printers.length && !sh.checkers.length
+    );
+    if (idle >= 0) {
+      err.textContent = `Shift ${idle + 1} is over the quota but nobody is ticked, so nobody would earn the bonus.`;
+      err.classList.remove("hidden");
+      return;
+    }
+    cupShiftDraft.set(cupShiftDate, cupShiftEditing.map((sh) => ({ ...sh })));
+    closeCupShiftModal();
+    renderCupCounts(Object.values(cupRowsByDate), cupOperators, cupQuotaNow);
+  });
+  document.getElementById("cupShiftModal").addEventListener("click", (e) => {
+    if (e.target.id === "cupShiftModal") closeCupShiftModal();
+  });
 }
 
 function computeRowTotals(row) {
@@ -2315,6 +2622,12 @@ async function savePayrollData() {
       date: input.dataset.date,
       quantity: input.value,
     }));
+    // days whose shifts or named operators were changed (an empty list puts a
+    // day back on the schedule's roles)
+    const cupShifts = [...cupShiftDraft.entries()].map(([date, shifts]) => ({
+      date,
+      shifts: shifts.map((sh) => ({ quantity: Number(sh.quantity) || 0, printers: sh.printers, checkers: sh.checkers })),
+    }));
 
     const staff = Array.from(payrollBody.querySelectorAll("tr")).map((tr) => ({
       name: tr.dataset.name,
@@ -2336,15 +2649,16 @@ async function savePayrollData() {
     const res = await fetch("/api/payroll/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pay_date, cup_counts: cupCounts, staff }),
+      body: JSON.stringify({ pay_date, cup_counts: cupCounts, cup_shifts: cupShifts, staff }),
     });
-    if (!res.ok) throw new Error("Save failed");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message || "Save failed");
 
+    cupShiftDraft.clear();
     await loadPayroll();
     payrollSaveStatus.textContent = "Saved.";
     setTimeout(() => (payrollSaveStatus.textContent = ""), 3000);
   } catch (err) {
-    payrollSaveStatus.textContent = "Could not save. Please try again.";
+    payrollSaveStatus.textContent = err.message && err.message !== "Save failed" ? err.message : "Could not save. Please try again.";
   } finally {
     savePayrollBtn.disabled = !IS_SUPERUSER;
     savePayrollBtn.textContent = original;
