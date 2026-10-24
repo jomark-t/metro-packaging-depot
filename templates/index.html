@@ -423,6 +423,7 @@
          superuser, and the API enforces the same rule. #}
       {% if current_user.can_view_payroll %}
       <button id="tabPayrollBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
+      <button id="tabCupBonusBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Bonus</button>
       {% endif %}
       {# Anyone on the payroll also gets their own payslip on its own tab,
          managers included - Clare asked for the same one-page view of her
@@ -2001,6 +2002,15 @@
         <button id="bankModalClose" type="button" class="border border-gray-300 rounded-lg px-4 py-2 text-sm">Close</button>
       </div>
     </div>
+  </div>
+
+  {# Where every peso of the cup bonus comes from - see renderCupBonus in script.js #}
+  <div id="cupBonusView" style="display:none">
+    <div class="mb-4">
+      <h2 class="font-display font-semibold text-xl leading-tight">Cup bonus</h2>
+      <p id="cupBonusPeriod" class="text-sm text-gray-500"></p>
+    </div>
+    <div id="cupBonusBody"><p class="text-sm text-gray-400 py-8 text-center">Loading…</p></div>
   </div>
 
   {# Name who printed and checked on a day, and split a two-shift day. See the

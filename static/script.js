@@ -482,6 +482,8 @@ const tabScheduleBtn = document.getElementById("tabScheduleBtn");
 const tabLeaveBtn = document.getElementById("tabLeaveBtn");
 const leaveView = document.getElementById("leaveView");
 const tabPayrollBtn = document.getElementById("tabPayrollBtn");
+const tabCupBonusBtn = document.getElementById("tabCupBonusBtn");
+const cupBonusView = document.getElementById("cupBonusView");
 const tabEmployeesBtn = document.getElementById("tabEmployeesBtn");
 const tabActivityBtn = document.getElementById("tabActivityBtn");
 const activityView = document.getElementById("activityView");
@@ -537,6 +539,8 @@ const TABS = {
 // Time Off only exists for people who take leave or approve it.
 if (tabLeaveBtn) TABS.leave = { btn: tabLeaveBtn, view: leaveView, controls: null };
 if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, controls: payrollControls };
+// shares the Payroll tab's month / year / 10th-25th selectors
+if (tabCupBonusBtn) TABS.cupbonus = { btn: tabCupBonusBtn, view: cupBonusView, controls: payrollControls };
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
 if (tabStatusBtn) TABS.status = { btn: tabStatusBtn, view: statusView, controls: null };
@@ -567,6 +571,9 @@ function showTab(tab) {
     t.view.style.display = active ? "block" : "none";
     if (t.controls) t.controls.style.display = active ? "flex" : "none";
   });
+  // two tabs share the payroll controls, so whichever of them is open keeps them
+  if ((tab === "payroll" || tab === "cupbonus") && payrollControls) payrollControls.style.display = "flex";
+  if (tab === "cupbonus") loadPayroll();
   if (tab === "payroll" && !loadedOnce.payroll) {
     loadedOnce.payroll = true;
     loadPayroll();
@@ -646,6 +653,7 @@ tabDashboardBtn.addEventListener("click", () => showTab("dashboard"));
 tabScheduleBtn.addEventListener("click", () => showTab("schedule"));
 if (tabLeaveBtn) tabLeaveBtn.addEventListener("click", () => showTab("leave"));
 if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payroll"));
+if (tabCupBonusBtn) tabCupBonusBtn.addEventListener("click", () => showTab("cupbonus"));
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
 if (tabStatusBtn) tabStatusBtn.addEventListener("click", () => showTab("status"));
@@ -1783,6 +1791,7 @@ async function loadPayroll() {
   renderCupRates(data);
   renderCupCounts(data.cup_counts, data.cup_operators, data.cup_daily_quota);
   renderPayrollTable(data.staff);
+  renderCupBonus(data);
   refreshCreditedState();
 }
 
@@ -1962,6 +1971,165 @@ function renderCupRates(data) {
         return;
       }
       loadPayroll();
+    })
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Cup Bonus page - every peso of the cutoff's cup bonus, line by line. The
+// lines come from the same function the payroll adds up (cup_bonus_lines), so
+// what is shown here is exactly what is paid. Flags call out anything out of
+// the ordinary - a rate far above the standard, a changed quota - since a
+// total alone can't tell you why it is large.
+// ---------------------------------------------------------------------------
+
+let cupBonusFilter = "all";
+let cupBonusData = null;
+
+function renderCupBonus(data) {
+  cupBonusData = data;
+  const host = document.getElementById("cupBonusBody");
+  if (!host) return;
+  const std = data.cup_bonus_rate || { Printer: 0.15, Checker: 0.1 };
+  const people = data.staff.filter((p) => p.has_bonus);
+  document.getElementById("cupBonusPeriod").textContent = payrollPeriodLabel.textContent;
+
+  const rate = (r) => `₱${cupRateText(r)}`;
+  const first = (name) => name.split(" ")[0];
+  const fmt = (n) => Number(n).toLocaleString("en-PH");
+  const dateLabel = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", weekday: "short" });
+
+  // ---- per person
+  const stats = people.map((p) => {
+    const lines = p.bonus_lines || [];
+    const by = (role) => {
+      const ls = lines.filter((l) => l.role === role);
+      return { n: ls.length, cups: ls.reduce((n, l) => n + l.qualifying, 0), amount: ls.reduce((n, l) => n + l.amount, 0) };
+    };
+    return { p, lines, printer: by("Printer"), checker: by("Checker"), paid: lines.filter((l) => l.amount > 0).length };
+  });
+  const grand = stats.reduce((n, x) => n + x.p.bonus, 0);
+
+  // ---- flags: why a figure might be bigger than expected
+  const flags = [];
+  stats.forEach(({ p, lines }) => {
+    ["Printer", "Checker"].forEach((role) => {
+      const hot = lines.filter((l) => l.role === role && l.amount > 0 && l.rate > std[role] * 2);
+      if (!hot.length) return;
+      const amount = hot.reduce((n, l) => n + l.amount, 0);
+      const rates = [...new Set(hot.map((l) => l.rate))].map(rate).join(" / ");
+      const times = Math.round((Math.max(...hot.map((l) => l.rate)) / std[role]) * 10) / 10;
+      flags.push(
+        `<b>${escapeHtml(first(p.name))}'s ${role} rate is ${rates} per cup</b> — ${times}× the standard ${rate(std[role])}. ` +
+          `It makes up ${formatMoney(amount)} of ${formatMoney(p.bonus)} (${Math.round((amount / (p.bonus || 1)) * 100)}%). Rates are set under Payroll → Printed cup counts.`
+      );
+    });
+  });
+  const quotas = [...new Set(stats.flatMap((x) => x.lines.map((l) => l.quota)))];
+  const baseline = data.cup_quota?.baseline;
+  if (quotas.length && baseline && quotas.some((q) => q !== baseline)) {
+    flags.push(
+      `The daily quota in force is <b>${quotas.map(fmt).join(" then ")}</b> cups (it started at ${fmt(baseline)}). Only cups above it earn a bonus.`
+    );
+  }
+  const sorted = [...stats].sort((a, b) => b.p.bonus - a.p.bonus);
+  if (sorted.length > 1 && sorted[0].p.bonus > 0 && sorted[0].p.bonus > sorted[1].p.bonus * 2) {
+    flags.push(
+      `<b>${escapeHtml(first(sorted[0].p.name))}</b> has the highest bonus, ${(sorted[0].p.bonus / (sorted[1].p.bonus || 1)).toFixed(1)}× the next (${escapeHtml(first(sorted[1].p.name))}).`
+    );
+  }
+
+  // ---- cards
+  const cards = stats
+    .map(({ p, lines, printer, checker, paid }) => {
+      const rates = data.cup_rates?.[p.name];
+      // out of the ordinary only if a rate that was actually paid this cutoff is
+      const odd = lines.some((l) => l.amount > 0 && l.rate > std[l.role] * 2);
+      const ratesOdd = rates && (rates.printer > std.Printer * 2 || rates.checker > std.Checker * 2);
+      return `
+      <div class="bg-white border ${odd ? "border-amber-300" : "border-gray-200"} rounded-xl px-4 py-3 shadow-sm min-w-0">
+        <div class="flex items-baseline justify-between gap-2">
+          <p class="font-semibold text-gray-900 truncate">${escapeHtml(first(p.name))}</p>
+          <p class="text-[10px] uppercase tracking-wide font-mono text-gray-400">${paid} paid day${paid === 1 ? "" : "s"}</p>
+        </div>
+        <p class="text-2xl font-semibold mt-0.5">${formatMoney(p.bonus)}</p>
+        <p class="text-[11px] text-gray-500 mt-1">As Printer <b>${formatMoney(printer.amount)}</b> · ${fmt(printer.cups)} cups</p>
+        <p class="text-[11px] text-gray-500">As Checker <b>${formatMoney(checker.amount)}</b> · ${fmt(checker.cups)} cups</p>
+        <p class="text-[11px] mt-1.5 ${odd ? "text-amber-600 font-medium" : "text-gray-400"}" ${ratesOdd && !odd ? `title="Set higher than standard, but it starts after the days in this cutoff"` : ""}>Rates at the end of the cutoff: ${rates ? `${rate(rates.printer)} Printer · ${rate(rates.checker)} Checker` : "—"}${odd ? " ⚠" : ""}</p>
+      </div>`;
+    })
+    .join("");
+
+  // ---- the lines
+  const all = stats
+    .flatMap(({ p, lines }) => lines.map((l) => ({ ...l, name: p.name })))
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.shift || 0) - (b.shift || 0) || a.name.localeCompare(b.name));
+  const shown = cupBonusFilter === "all" ? all : all.filter((l) => l.name === cupBonusFilter);
+  const total = shown.reduce((n, l) => n + l.amount, 0);
+
+  const chips = ["all", ...stats.map((x) => x.p.name)]
+    .map(
+      (n) => `<button type="button" data-bonus-filter="${escapeHtml(n)}" class="text-xs rounded-full border px-3 py-1 transition ${
+        cupBonusFilter === n ? "bg-brand-blue border-brand-blue text-white" : "bg-white border-gray-300 text-gray-600 hover:border-brand-blue"
+      }">${n === "all" ? "Everyone" : escapeHtml(first(n))}</button>`
+    )
+    .join("");
+
+  const rows = shown.length
+    ? shown
+        .map((l) => {
+          const hot = l.rate > std[l.role] * 2;
+          return `<tr class="${l.amount > 0 ? "" : "text-gray-400"}">
+          <td class="px-3 py-1.5 whitespace-nowrap">${dateLabel(l.date)}</td>
+          <td class="px-3 py-1.5">${escapeHtml(first(l.name))}</td>
+          <td class="px-3 py-1.5 text-gray-500">${l.shift ? "Shift " + l.shift : "—"}</td>
+          <td class="px-3 py-1.5"><span class="text-[10px] rounded px-1.5 py-px ${l.role === "Printer" ? "bg-[#f1e7d8] text-[#8a6a3e]" : "bg-gray-100 text-gray-700"}">${l.role}</span></td>
+          <td class="px-3 py-1.5 text-right">${fmt(l.cups)}</td>
+          <td class="px-3 py-1.5 text-right text-gray-500">${fmt(l.quota)}</td>
+          <td class="px-3 py-1.5 text-right">${fmt(l.qualifying)}</td>
+          <td class="px-3 py-1.5 text-right ${hot ? "text-amber-600 font-semibold" : ""}" ${hot ? `title="More than twice the standard ${rate(std[l.role])}"` : ""}>${rate(l.rate)}</td>
+          <td class="px-3 py-1.5 text-right font-medium">${l.amount > 0 ? formatMoney(l.amount) : "—"}</td>
+          <td class="px-3 py-1.5 text-[11px] text-gray-400">${l.source === "assigned" ? "named" : "schedule"}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="10" class="px-3 py-6 text-center text-gray-400 italic">No bonus days in this cutoff.</td></tr>`;
+
+  host.innerHTML = `
+    ${
+      flags.length
+        ? `<div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4 text-sm text-amber-900">
+             <p class="text-[11px] uppercase tracking-wide font-mono text-amber-700 mb-1">Worth a look</p>
+             <ul class="list-disc pl-5 flex flex-col gap-1">${flags.map((f) => `<li>${f}</li>`).join("")}</ul>
+           </div>`
+        : ""
+    }
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">${cards}</div>
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div class="px-4 py-3 border-b border-gray-100 flex flex-wrap items-center gap-2">
+        <h3 class="text-sm font-semibold text-gray-900 mr-2">Every bonus line <span class="font-normal text-gray-400">· (cups − quota) × rate, per shift · total ${formatMoney(grand)}</span></h3>
+        <div class="flex flex-wrap gap-1.5 ml-auto">${chips}</div>
+      </div>
+      <div class="overflow-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+            <th class="text-left px-3 py-2">Day</th><th class="text-left px-3 py-2">Who</th><th class="text-left px-3 py-2">Shift</th><th class="text-left px-3 py-2">Role</th>
+            <th class="text-right px-3 py-2">Cups</th><th class="text-right px-3 py-2">Quota</th><th class="text-right px-3 py-2">Over quota</th>
+            <th class="text-right px-3 py-2">Rate / cup</th><th class="text-right px-3 py-2">Bonus</th><th class="text-left px-3 py-2">Paid from</th>
+          </tr></thead>
+          <tbody class="divide-y divide-gray-100">${rows}</tbody>
+          <tfoot><tr class="bg-gray-50 border-t border-gray-200 font-semibold">
+            <td class="px-3 py-2" colspan="6">${cupBonusFilter === "all" ? "Total" : "Total for " + escapeHtml(first(cupBonusFilter))}</td>
+            <td class="px-3 py-2 text-right">${fmt(shown.reduce((n, l) => n + l.qualifying, 0))}</td><td></td>
+            <td class="px-3 py-2 text-right">${formatMoney(total)}</td><td></td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+    <p class="text-[11px] text-gray-400 mt-2">"Named" days are paid from the shifts and people assigned on the Payroll tab; "schedule" days are shared by whoever the schedule made Printer and Checker. A bonus here is the one in the Payroll table and on the payslip.</p>`;
+
+  host.querySelectorAll("[data-bonus-filter]").forEach((b) =>
+    b.addEventListener("click", () => {
+      cupBonusFilter = b.dataset.bonusFilter;
+      renderCupBonus(cupBonusData);
     })
   );
 }

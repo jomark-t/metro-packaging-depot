@@ -1854,6 +1854,38 @@ def fetch_cup_day_shifts(cur, start_iso, end_iso):
     return days
 
 
+def cup_bonus_lines(sid, role_days, cup_counts, custom_days, quota_changes, rate_changes):
+    """Every peso of one person's cup bonus, one line per day (or per shift on
+    a day with named shifts): the cups, the quota, what is left over, the rate
+    and the amount. The payroll adds these up and the Cup Bonus page shows
+    them, so the two can never disagree.
+
+    role_days: [(date, "Printer"/"Checker")] from the schedule. A day with
+    named shifts ignores that and is paid from the shifts instead."""
+    lines = []
+
+    def add(d_iso, shift_no, role, cups, source):
+        quota = cup_quota_on(quota_changes, d_iso)
+        qualifying = max(0, cups - quota)
+        rate = cup_rate_on(rate_changes, sid, d_iso, role)
+        lines.append({
+            "date": d_iso, "shift": shift_no, "role": role, "cups": cups, "quota": quota,
+            "qualifying": qualifying, "rate": rate, "amount": round(qualifying * rate, 2), "source": source,
+        })
+
+    for d_iso, role in role_days:
+        if d_iso not in custom_days:  # those days are paid from their shifts
+            add(d_iso, None, role, cup_counts.get(d_iso, 0), "schedule")
+    for d_iso, shifts in custom_days.items():
+        multi = len(shifts) > 1
+        for shift in shifts:
+            for role in ("Printer", "Checker"):
+                if sid in shift["staff"][role]:
+                    add(d_iso, shift["shift_no"] if multi else None, role, shift["quantity"], "assigned")
+    lines.sort(key=lambda l: (l["date"], l["shift"] or 0))
+    return lines
+
+
 def compute_payroll(db, start, end, pay_date):
     """Days worked and cup-bonus come from the generated schedule + saved
     cup counts; OT hours and benefit deductions are manually entered per
@@ -1940,21 +1972,8 @@ def compute_payroll(db, start, end, pay_date):
             base_pay = worked * (s["daily_rate"] or 0)
             absence_deduction = 0
 
-        bonus = sum(
-            max(0, cup_counts.get(d_iso, 0) - cup_quota_on(quota_changes, d_iso))
-            * cup_rate_on(rate_changes, sid, d_iso, label)
-            for d_iso, label in cup_shifts[sid]
-            if d_iso not in custom_days  # those days are paid from their shifts, below
-        )
-        # a day with named shifts: each shift has its own quota, and only the
-        # people named on it earn from its cups
-        for d_iso, shifts in custom_days.items():
-            quota = cup_quota_on(quota_changes, d_iso)
-            for shift in shifts:
-                excess = max(0, shift["quantity"] - quota)
-                for role in ("Printer", "Checker"):
-                    if sid in shift["staff"][role]:
-                        bonus += excess * cup_rate_on(rate_changes, sid, d_iso, role)
+        bonus_lines = cup_bonus_lines(sid, cup_shifts[sid], cup_counts, custom_days, quota_changes, rate_changes)
+        bonus = sum(l["amount"] for l in bonus_lines)
 
         # once a cutoff has been saved (a payroll_extras row exists), its
         # values are the source of truth; before that, prefill deductions
@@ -2013,6 +2032,8 @@ def compute_payroll(db, start, end, pay_date):
                 # printing side by role (James), so he can be named on a shift
                 "has_bonus": schedule_group(s) == "printing",
                 "bonus": round(bonus, 2),
+                # the lines behind it, for the Cup Bonus page - printing side only
+                "bonus_lines": bonus_lines if schedule_group(s) == "printing" else [],
                 "manual_bonus": manual_bonus,
                 "ot_hours": ot_hours,
                 "ot_pay": round(ot_pay, 2),
