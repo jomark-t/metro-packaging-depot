@@ -4821,6 +4821,141 @@ def _match_sales(entries):
     return matches
 
 
+@app.route("/api/print/dashboard")
+@login_required
+def api_print_dashboard():
+    """The Cup Printing dashboard. Two different questions, kept apart:
+
+    - how much we PRINTED: the daily printed-cup totals entered for payroll
+      (cup_counts) - the real output, whatever was ordered;
+    - how much was ORDERED, what is still in the queue, and what the orders
+      are made of: print orders and their lines.
+
+    Drafts and cancelled lines never count. Only cup counts, never money or
+    anyone's pay, so it needs no more access than the rest of Cup Printing."""
+    cur = get_db().cursor()
+    today = date.today()
+
+    def month_back(n):
+        y, m = today.year, today.month - n
+        while m <= 0:
+            y, m = y - 1, m + 12
+        return y, m
+
+    months = {month_back(n): {"month": "%04d-%02d" % month_back(n), "printed": 0, "print_days": 0, "ordered": 0, "orders": 0,
+                              "delivered": 0, "estimated": False}
+              for n in range(11, -1, -1)}
+
+    # ---- printed: one total per day
+    cur.execute("SELECT date, quantity FROM cup_counts WHERE quantity > 0 ORDER BY date")
+    daily = {}
+    for r in cur.fetchall():
+        try:
+            d = date.fromisoformat(r["date"])
+        except (TypeError, ValueError):
+            continue
+        daily[d] = r["quantity"]
+        m = months.get((d.year, d.month))
+        if m:
+            m["printed"] += r["quantity"]
+            m["print_days"] += 1
+
+    last_30 = [{"date": (today - timedelta(days=n)).isoformat(), "qty": daily.get(today - timedelta(days=n), 0)}
+               for n in range(29, -1, -1)]
+    last_30_days = [x["qty"] for x in last_30 if x["qty"] > 0]
+    weekday = []
+    ninety = [(d, q) for d, q in daily.items() if d >= today - timedelta(days=90)]
+    for wd, name in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
+        qs = [q for d, q in ninety if d.weekday() == wd]
+        weekday.append({"day": name, "avg": round(sum(qs) / len(qs)) if qs else 0, "days": len(qs)})
+    best = max(daily.items(), key=lambda kv: kv[1]) if daily else None
+
+    # ---- ordered: every live (non-draft, non-cancelled) line
+    cur.execute(
+        """SELECT o.id AS order_id, o.client_id, c.name AS client, o.order_date, o.is_rush, o.needs_new_frame,
+                  i.quantity, i.qty_delivered, i.status, i.ink_color, i.lid_product_id, i.lid_text,
+                  COALESCE(NULLIF(TRIM(CONCAT_WS(' ', p.family, p.size)), ''), i.item_text) AS label
+           FROM print_orders o
+           JOIN print_clients c ON c.id = o.client_id
+           JOIN print_order_items i ON i.order_id = o.id
+           LEFT JOIN print_products p ON p.id = i.product_id
+           WHERE NOT o.is_draft AND i.status <> 'cancelled'"""
+    )
+    lines = [dict(r) for r in cur.fetchall()]
+
+    seen_orders = {}
+    for l in lines:
+        key = (l["order_date"].year, l["order_date"].month)
+        if key in months:
+            months[key]["ordered"] += l["quantity"]
+            # what came out of the machines for that order: all of it once done
+            months[key]["delivered"] += l["quantity"] if l["status"] == "done" else (l["qty_delivered"] or 0)
+            seen_orders.setdefault(key, set()).add(l["order_id"])
+    for key, ids in seen_orders.items():
+        months[key]["orders"] = len(ids)
+    # Before daily counts were kept there is no printed total, so a month
+    # without one is taken as what its orders delivered - an estimate, and
+    # marked as one so it is not read as a counted figure.
+    for m in months.values():
+        if m["print_days"] == 0:
+            m["printed"] = m["delivered"]
+            m["estimated"] = m["delivered"] > 0
+
+    # what is still to do: lines not finished
+    open_lines = [l for l in lines if l["status"] in ("not_started", "ongoing", "partial")]
+    open_orders = {l["order_id"]: l for l in open_lines}
+    queue_cups = sum(max(0, l["quantity"] - (l["qty_delivered"] or 0)) for l in open_lines)
+    oldest = min((l["order_date"] for l in open_lines), default=None)
+
+    def top(rows, keyfn, n):
+        agg = {}
+        for l in rows:
+            k = keyfn(l)
+            if not k:
+                continue
+            agg[k] = agg.get(k, 0) + l["quantity"]
+        total = sum(agg.values()) or 1
+        return [{"label": k, "cups": v, "share": round(v / total * 100)}
+                for k, v in sorted(agg.items(), key=lambda kv: -kv[1])[:n]]
+
+    recent = [l for l in lines if l["order_date"] >= today - timedelta(days=90)]
+    year = [l for l in lines if l["order_date"] >= today - timedelta(days=365)]
+    clients = {}
+    for l in year:
+        c = clients.setdefault(l["client_id"], {"id": l["client_id"], "name": l["client"], "cups": 0, "orders": set()})
+        c["cups"] += l["quantity"]
+        c["orders"].add(l["order_id"])
+    top_clients = sorted(clients.values(), key=lambda c: -c["cups"])[:6]
+
+    this_m, last_m = months[month_back(0)], months[month_back(1)]
+    return jsonify({
+        "months": list(months.values()),
+        "totals": {
+            "printed_this_month": this_m["printed"], "print_days_this_month": this_m["print_days"],
+            "printed_last_month": last_m["printed"],
+            "ordered_this_month": this_m["ordered"], "orders_this_month": this_m["orders"],
+            "ordered_last_month": last_m["ordered"],
+            "avg_daily_30": round(sum(last_30_days) / len(last_30_days)) if last_30_days else 0,
+            "best_day": {"date": best[0].isoformat(), "qty": best[1]} if best else None,
+            "printed_12": sum(m["printed"] for m in months.values()),
+            "printed_12_estimated": sum(m["printed"] for m in months.values() if m["estimated"]),
+            "ordered_12": sum(m["ordered"] for m in months.values()),
+            "queue_cups": queue_cups, "queue_lines": len(open_lines), "queue_orders": len(open_orders),
+            "oldest_open_days": (today - oldest).days if oldest else None,
+            "rush_open": len({l["order_id"] for l in open_lines if l["is_rush"]}),
+            "frame_open": len({l["order_id"] for l in open_lines if l["needs_new_frame"]}),
+            "lid_rate": round(sum(1 for l in recent if l["lid_product_id"] or l["lid_text"]) / len(recent) * 100) if recent else None,
+            "has_counts": bool(daily),
+        },
+        "daily": last_30,
+        "weekday": weekday,
+        "products": top(recent, lambda l: l["label"], 8),
+        "inks": top(recent, lambda l: " ".join((l["ink_color"] or "").split()).title(), 6),
+        "lids": top([l for l in recent if l["lid_text"] or l["lid_product_id"]], lambda l: (l["lid_text"] or "").strip() or "Lid", 5),
+        "clients": [{"id": c["id"], "name": c["name"], "cups": c["cups"], "orders": len(c["orders"])} for c in top_clients],
+    })
+
+
 @app.route("/api/print/clients/dashboard")
 @login_required
 def api_print_clients_dashboard():

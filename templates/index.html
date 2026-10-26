@@ -445,6 +445,7 @@
          everyone by default; a staff account can be switched off from the
          Employees tab, a manager always has it. #}
       {% if current_user.has_cup_printing_app %}
+      <button id="tabCupDashBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
       <button id="tabStatusBtn" data-app="admin" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Status</button>
       {# Archived, not deleted: Status + Cup Prints cover what Print Queue
          (Board and Week both) used to. The tab is just this one button -
@@ -868,6 +869,14 @@
 
   {# Cup Prints - a spreadsheet over every order, the way the sheet this
      app replaced used to read. #}
+  <div id="cupDashView" style="display:none">
+    <div class="mb-4">
+      <h2 class="font-display font-semibold text-xl leading-tight">Cup printing dashboard</h2>
+      <p id="cupDashSubtitle" class="text-sm text-gray-500">How much we print, what is ordered, and what is waiting.</p>
+    </div>
+    <div id="cupDashBody"><p class="text-sm text-gray-400 py-8 text-center">Loading…</p></div>
+  </div>
+
   <div id="cupPrintsView" style="display:none">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>

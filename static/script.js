@@ -488,6 +488,8 @@ const tabEmployeesBtn = document.getElementById("tabEmployeesBtn");
 const tabActivityBtn = document.getElementById("tabActivityBtn");
 const activityView = document.getElementById("activityView");
 const tabStatusBtn = document.getElementById("tabStatusBtn");
+const tabCupDashBtn = document.getElementById("tabCupDashBtn");
+const cupDashView = document.getElementById("cupDashView");
 const statusView = document.getElementById("statusView");
 const tabPrintBtn = document.getElementById("tabPrintBtn");
 const printView = document.getElementById("printView");
@@ -543,6 +545,7 @@ if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, contr
 if (tabCupBonusBtn) TABS.cupbonus = { btn: tabCupBonusBtn, view: cupBonusView, controls: payrollControls };
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
+if (tabCupDashBtn) TABS.cupdash = { btn: tabCupDashBtn, view: cupDashView, controls: null };
 if (tabStatusBtn) TABS.status = { btn: tabStatusBtn, view: statusView, controls: null };
 if (tabPrintBtn) TABS.print = { btn: tabPrintBtn, view: printView, controls: null };
 if (tabCupPrintsBtn) TABS.cupprints = { btn: tabCupPrintsBtn, view: cupPrintsView, controls: null };
@@ -595,6 +598,9 @@ function showTab(tab) {
   }
   if (tab === "status") {
     loadStatusBoard();
+  }
+  if (tab === "cupdash") {
+    loadCupDashboard(); // always fresh - it's a "right now" view
   }
   if (tab === "print") {
     loadPrintQueue();
@@ -656,6 +662,7 @@ if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payrol
 if (tabCupBonusBtn) tabCupBonusBtn.addEventListener("click", () => showTab("cupbonus"));
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
+if (tabCupDashBtn) tabCupDashBtn.addEventListener("click", () => showTab("cupdash"));
 if (tabStatusBtn) tabStatusBtn.addEventListener("click", () => showTab("status"));
 if (tabPrintBtn) tabPrintBtn.addEventListener("click", () => showTab("print"));
 if (tabCupPrintsBtn) tabCupPrintsBtn.addEventListener("click", () => showTab("cupprints"));
@@ -10125,6 +10132,167 @@ function priceFor(cup, lid, qty) {
 
 function clientsDashAvatar(c) {
   return printLogo(c.name, false, c.logo_filename).replace("w-9 h-9 text-sm", "w-5 h-5 text-[9px]");
+}
+
+// ---------------------------------------------------------------------------
+// Cup printing dashboard. "Printed" is the daily total entered for payroll
+// (the real output); "ordered" is what clients asked for. They are different
+// numbers on purpose - the gap between them is the story - so each keeps its
+// own colour. Months before anyone entered daily counts say so rather than
+// showing a zero that looks like a bad month.
+// ---------------------------------------------------------------------------
+
+async function loadCupDashboard() {
+  const host = document.getElementById("cupDashBody");
+  let data;
+  try {
+    const res = await fetch("/api/print/dashboard");
+    if (!res.ok) throw new Error("Could not load the dashboard.");
+    data = await res.json();
+  } catch (err) {
+    host.innerHTML = `<p class="text-sm text-gray-500 py-8 text-center">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  renderCupDashboard(data);
+}
+
+function renderCupDashboard(d) {
+  const host = document.getElementById("cupDashBody");
+  const t = d.totals;
+  const fmt = (n) => Number(n || 0).toLocaleString("en-PH");
+  const monthLong = (key) => new Date(key + "-01T00:00:00").toLocaleString("en-US", { month: "long" });
+  const monthShort = (key) => new Date(key + "-01T00:00:00").toLocaleString("en-US", { month: "short" });
+  const change = (now, before) => (before ? Math.round(((now - before) / before) * 100) : null);
+  const arrow = (pct) => (pct === null ? "" : `<span class="${pct >= 0 ? "text-green-700" : "text-red-600"}">${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct)}%</span>`);
+
+  // when daily counts began, so earlier months read "no count"
+  const counted = d.months.filter((m) => m.print_days > 0);
+  const countsFrom = counted.length ? counted[0].month : null;
+  document.getElementById("cupDashSubtitle").textContent = countsFrom
+    ? `${fmt(t.printed_12)} cups printed in the last 12 months - ${fmt(t.printed_12 - t.printed_12_estimated)} counted daily since ${monthLong(countsFrom)}` +
+      `${t.printed_12_estimated ? `, ${fmt(t.printed_12_estimated)} estimated from delivered orders before that` : ""} · ${fmt(t.ordered_12)} ordered`
+    : "No daily printed counts have been entered yet - add them on the Payroll tab.";
+
+  const tile = (label, value, sub, tone) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0">
+      <p class="text-[10px] uppercase tracking-wide font-mono text-gray-400">${label}</p>
+      <p class="text-xl font-semibold mt-0.5 truncate ${tone || "text-gray-900"}">${value}</p>
+      <p class="text-[11px] text-gray-500 mt-0.5 leading-snug">${sub}</p>
+    </div>`;
+  const thisKey = d.months[d.months.length - 1].month;
+  const lastKey = d.months[d.months.length - 2].month;
+  const tiles = [
+    tile("Printed this month", fmt(t.printed_this_month), `${t.print_days_this_month} print days · ${monthShort(lastKey)} ${fmt(t.printed_last_month)} ${arrow(change(t.printed_this_month, t.printed_last_month))}`),
+    tile("Ordered this month", fmt(t.ordered_this_month), `${t.orders_this_month} orders · ${monthShort(lastKey)} ${fmt(t.ordered_last_month)}`),
+    tile("Avg per print day", fmt(t.avg_daily_30), "last 30 days, days we printed"),
+    tile("Best day", t.best_day ? fmt(t.best_day.qty) : "—", t.best_day ? printShortDate(t.best_day.date) : "no counts yet"),
+    tile("Still to do", fmt(t.queue_cups), `${t.queue_lines} line${t.queue_lines === 1 ? "" : "s"} in ${t.queue_orders} order${t.queue_orders === 1 ? "" : "s"}${t.oldest_open_days !== null ? ` · oldest ${t.oldest_open_days}d` : ""}`, t.queue_cups > 0 ? "text-brand-blue" : "text-gray-400"),
+    tile("Rush · new frame", `${t.rush_open} · ${t.frame_open}`, "open orders marked rush · needing a new frame", t.rush_open ? "text-amber-600" : ""),
+  ].join("");
+
+  // ---- printed vs ordered, by month (bars are a share of the card's height)
+  const maxMonth = Math.max(...d.months.map((m) => Math.max(m.printed, m.ordered)), 1);
+  const monthly = d.months
+    .map((m) => {
+      const est = m.estimated;
+      const k = (m.printed / 1000).toFixed(m.printed >= 100000 ? 0 : 1) + "k";
+      return `<div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${monthLong(m.month)}: ${est ? fmt(m.printed) + " printed (estimated - no daily counts that month, so taken as what its orders delivered)" : m.print_days ? fmt(m.printed) + " printed over " + m.print_days + " days" : "nothing printed"} · ${fmt(m.ordered)} ordered in ${m.orders} orders">
+        <div class="relative w-full flex-1" style="min-height:130px">
+          <div class="absolute inset-0 flex items-end gap-[2px] justify-center">
+            <div style="width:42%;max-width:20px;height:${(m.printed / maxMonth) * 100}%;min-height:${m.printed ? 2 : 0}px;background:${est ? "repeating-linear-gradient(135deg,#1e3a8a 0 3px,#9fb0de 3px 6px)" : "#1e3a8a"};border-radius:4px 4px 0 0"></div>
+            <div style="width:42%;max-width:20px;height:${(m.ordered / maxMonth) * 100}%;min-height:${m.ordered ? 2 : 0}px;background:#16a34a;border-radius:4px 4px 0 0"></div>
+          </div>
+        </div>
+        <span class="text-[10px] text-gray-500">${monthShort(m.month)}</span>
+        <span class="text-[9px] leading-none ${est ? "text-gray-400" : "text-gray-500"}">${m.printed ? k : "—"}</span>
+      </div>`;
+    })
+    .join("");
+
+  // ---- last 30 days
+  const maxDay = Math.max(...d.daily.map((x) => x.qty), 1);
+  const daily = d.daily
+    .map(
+      (x) => `<div class="flex-1 min-w-0 flex flex-col items-center" title="${printShortDate(x.date)}: ${x.qty ? fmt(x.qty) + " printed" : "nothing counted"}">
+        <div class="relative w-full flex-1" style="min-height:130px"><div class="absolute inset-0 flex items-end justify-center">
+          <div style="width:70%;height:${(x.qty / maxDay) * 100}%;min-height:${x.qty ? 2 : 0}px;background:#1e3a8a;border-radius:3px 3px 0 0"></div></div></div>
+      </div>`
+    )
+    .join("");
+
+  // ---- horizontal bar lists
+  const bars = (rows, color, empty) =>
+    rows.length
+      ? rows
+          .map((r) => {
+            const max = Math.max(...rows.map((x) => x.cups), 1);
+            return `<div class="flex items-center gap-2 text-xs py-1" title="${escapeHtml(r.label)}: ${fmt(r.cups)} cups (${r.share}%)">
+              <span class="w-32 shrink-0 truncate text-gray-700">${escapeHtml(r.label)}</span>
+              <div class="flex-1 h-3 bg-gray-50 rounded-sm overflow-hidden"><div style="width:${(r.cups / max) * 100}%;background:${color};height:100%;border-radius:0 4px 4px 0"></div></div>
+              <span class="w-16 shrink-0 text-right font-medium text-gray-800">${fmt(r.cups)}</span>
+              <span class="w-9 shrink-0 text-right text-gray-400">${r.share}%</span></div>`;
+          })
+          .join("")
+      : `<p class="text-sm text-gray-400 py-4 text-center">${empty}</p>`;
+
+  // a weekday with only a day or two of data (a one-off Sunday) is shown, but
+  // doesn't set the scale for the rest
+  const maxWd = Math.max(...d.weekday.filter((w) => w.days >= 3).map((w) => w.avg), 1);
+  const weekday = d.weekday
+    .map(
+      (w) => `<div class="flex-1 min-w-0 flex flex-col items-center gap-1" title="${w.day}: ${fmt(w.avg)} on average over ${w.days} day${w.days === 1 ? "" : "s"}${w.days < 3 ? " (too few days to compare)" : ""}">
+        <div class="relative w-full flex-1" style="min-height:90px"><div class="absolute inset-0 flex items-end justify-center">
+          <div style="width:55%;max-width:30px;height:${Math.min(100, (w.avg / maxWd) * 100)}%;min-height:${w.avg ? 2 : 0}px;background:${w.days < 3 ? "#9ca3af" : "#1e3a8a"};border-radius:4px 4px 0 0"></div></div></div>
+        <span class="text-[10px] text-gray-500">${w.day}</span>
+        <span class="text-[9px] text-gray-400 leading-none">${w.avg ? (w.avg / 1000).toFixed(1) + "k" : "—"}</span></div>`
+    )
+    .join("");
+
+  const clientRows = d.clients.length
+    ? d.clients
+        .map(
+          (c) => `<tr class="cursor-pointer hover:bg-gray-50" data-dash-client="${c.id}">
+            <td class="py-1.5 pr-2 font-medium text-gray-900 truncate max-w-[10rem]">${escapeHtml(c.name)}</td>
+            <td class="py-1.5 pr-2 text-gray-400 whitespace-nowrap">${c.orders} order${c.orders === 1 ? "" : "s"}</td>
+            <td class="py-1.5 text-right whitespace-nowrap">${fmt(c.cups)} cups</td></tr>`
+        )
+        .join("")
+    : `<tr><td colspan="3" class="py-4 text-center text-gray-400">No orders yet.</td></tr>`;
+
+  const card = (title, sub, body) => `
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm min-w-0 flex flex-col">
+      <h4 class="text-sm font-semibold text-gray-900">${title}</h4>
+      <p class="text-[11px] text-gray-400 mb-2">${sub}</p>
+      <div class="flex-1 flex flex-col min-h-0">${body}</div>
+    </div>`;
+  const legend = `<span class="inline-block w-2 h-2 rounded-sm align-middle" style="background:#1e3a8a"></span> Printed <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:repeating-linear-gradient(135deg,#1e3a8a 0 2px,#9fb0de 2px 4px)"></span> Printed (estimated) <span class="inline-block w-2 h-2 rounded-sm align-middle ml-2" style="background:#16a34a"></span> Ordered`;
+
+  // since counts began: what was asked for against what came off the machines
+  const sinceOrdered = d.months.filter((m) => m.print_days > 0).reduce((n, m) => n + m.ordered, 0);
+  const sincePrinted = d.months.filter((m) => m.print_days > 0).reduce((n, m) => n + m.printed, 0);
+  const gap = sinceOrdered - sincePrinted;
+  const insight = countsFrom
+    ? `<p class="text-[11px] text-gray-500 mt-2">Since ${monthLong(countsFrom)}: <b>${fmt(sincePrinted)}</b> printed against <b>${fmt(sinceOrdered)}</b> ordered ` +
+      `(${gap >= 0 ? fmt(gap) + " more ordered than printed" : fmt(-gap) + " more printed than ordered"}). The two don't line up month to month: an order and its printing can fall in different months.</p>`
+    : "";
+
+  host.innerHTML = `
+    <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-3">${tiles}</div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+      ${card("Printed vs ordered, by month", `${legend} · last 12 months`, `<div class="flex gap-1 pt-1 flex-1">${monthly}</div>${insight}`)}
+      ${card("Output, last 30 days", "Cups printed each day (blank = nothing counted)", `<div class="flex gap-[2px] pt-1 flex-1">${daily}</div>`)}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+      ${card("What we print", "Cups by type, orders from the last 90 days", bars(d.products, "#1e3a8a", "No orders in the last 90 days."))}
+      ${card("Ink colours", "Cups by print colour, last 90 days", bars(d.inks, "#8a6a3e", "No ink colours recorded."))}
+      ${card("Busiest days of the week", `Average cups on a print day, last 90 days${t.lid_rate !== null ? ` · ${t.lid_rate}% of lines include a lid` : ""}`, `<div class="flex gap-1 pt-1 flex-1">${weekday}</div>`)}
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      ${card("Biggest clients by cups", "Cups ordered, last 12 months · click to open", `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${clientRows}</tbody></table>`)}
+      ${card("Lids", "Lid on the order, last 90 days", bars(d.lids, "#16a34a", "No lids on recent orders."))}
+    </div>`;
+
+  host.querySelectorAll("[data-dash-client]").forEach((el) => el.addEventListener("click", () => openPrintClient(el.dataset.dashClient)));
 }
 
 async function loadClientsDashboard() {
