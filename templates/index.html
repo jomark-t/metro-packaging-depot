@@ -8,8 +8,16 @@
 <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='icons/favicon-16x16.png') }}" />
 <link rel="shortcut icon" href="{{ url_for('static', filename='icons/favicon.ico') }}" />
 <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}" />
-<link rel="manifest" href="{{ url_for('static', filename='icons/site.webmanifest') }}" />
+<link rel="manifest" href="/manifest.webmanifest" />
 <meta name="theme-color" content="#1c33bb" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="MPD" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<script>
+  // makes the app installable (see /sw.js); harmless where it isn't supported
+  if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
@@ -394,6 +402,7 @@
           {% if current_user.staff_name and not current_user.is_manager %}
           <button type="button" class="change-pin-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Change PIN</button>
           {% endif %}
+          <button type="button" class="install-app-btn hidden w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Install app</button>
           <form method="POST" action="{{ url_for('logout') }}">
             <button type="submit" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Log out</button>
           </form>
@@ -495,6 +504,7 @@
         {% if current_user.staff_name and not current_user.is_manager %}
         <button type="button" class="change-pin-btn w-full text-left px-3 py-2 rounded-md text-sm font-medium text-white/70 hover:bg-white/10 transition">Change PIN</button>
         {% endif %}
+        <button type="button" class="install-app-btn hidden w-full text-left px-3 py-2 rounded-md text-sm font-medium text-white/70 hover:bg-white/10 transition">Install app</button>
         <form method="POST" action="{{ url_for('logout') }}">
           <button type="submit" class="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-white/70 hover:bg-white/10 transition">Log out</button>
         </form>

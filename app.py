@@ -19,7 +19,7 @@ from functools import wraps
 
 import psycopg2
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from psycopg2.extras import Json, RealDictCursor
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -2690,6 +2690,45 @@ def compute_staff_counts(days, roster_names):
             if e["name"] in counts:
                 counts[e["name"]] += 1
     return counts
+
+
+@app.route("/manifest.webmanifest")
+def web_manifest():
+    """What lets the browser offer to install the app: its name, icons, and
+    that it opens as a window of its own rather than a tab. Public, like the
+    login page - the browser reads it before anyone has signed in."""
+    manifest = {
+        "id": "/",
+        "name": BUSINESS_NAME,
+        "short_name": "MPD",
+        "description": "Schedule, payroll, cup printing and collections for " + BUSINESS_NAME + ".",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "any",
+        "theme_color": "#1c33bb",
+        "background_color": "#1c33bb",
+        "icons": [
+            {"src": "/static/icons/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/static/icons/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/static/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+            {"src": "/static/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+    }
+    resp = app.response_class(json.dumps(manifest), mimetype="application/manifest+json")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/sw.js")
+def service_worker():
+    """The service worker has to be served from the site root for it to cover
+    the whole app (a file under /static/ could only control /static/). Never
+    cached, so an updated worker is picked up on the next visit."""
+    resp = send_from_directory(app.static_folder, "sw.js", mimetype="application/javascript")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
 
 
 @app.route("/favicon.ico")

@@ -4601,6 +4601,49 @@ function attachCombo(input, drop, getNames, allowNew = false) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Install as an app. Chrome and Edge fire `beforeinstallprompt` once the app
+// qualifies; keeping that event lets "Install app" in the account menu open the
+// browser's own install dialog. Safari on iPhone/iPad has no such event, so
+// there the same item explains Share > Add to Home Screen. Once installed (or
+// when already running as the installed app) the item disappears.
+// ---------------------------------------------------------------------------
+{
+  let installEvent = null;
+  const standalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const buttons = () => document.querySelectorAll(".install-app-btn");
+  const show = (on) => buttons().forEach((b) => b.classList.toggle("hidden", !on));
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    installEvent = e;
+    if (!standalone()) show(true);
+  });
+  window.addEventListener("appinstalled", () => {
+    installEvent = null;
+    show(false);
+  });
+  // iPhone and iPad: no prompt event, so offer the instructions instead
+  if (isIos && !standalone()) show(true);
+
+  buttons().forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (installEvent) {
+        installEvent.prompt();
+        await installEvent.userChoice.catch(() => {});
+        installEvent = null;
+        show(false);
+      } else if (isIos) {
+        confirmDialog("Tap the Share button in Safari, then choose “Add to Home Screen”. The app opens full screen from your home screen.", {
+          title: "Install on this device",
+          confirmLabel: "Got it",
+        });
+      }
+    })
+  );
+}
+
 // An in-page stand-in for window.confirm: native dialogs can be suppressed
 // by the browser (the Claude app's pane returns false without showing
 // anything), which made every delete button look dead.
