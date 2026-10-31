@@ -4478,6 +4478,23 @@ def api_print_clients():
     return jsonify({"clients": clients})
 
 
+# StoreHub has written the Time column two ways over the months: 10/28/2026 10:19
+# (month first) and 2026-10-28 10:19 (ISO). Both are read; a day-first date is
+# not accepted because 03/04/2026 would be ambiguous.
+_STOREHUB_TIME_FORMATS = ("%m/%d/%Y %H:%M", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S")
+
+
+def _storehub_time(text):
+    """A StoreHub Time cell -> datetime, or ValueError saying what it couldn't read."""
+    text = (text or "").strip()
+    for fmt in _STOREHUB_TIME_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Couldn't read the date '{text}'.")
+
+
 def _client_key(name):
     """A client name reduced to what identifies it: case, spacing, punctuation
     and "&" vs "and" all ignored, so "Brew Star" finds "Brewstar" instead of
@@ -4578,10 +4595,7 @@ def _storehub_receipts(text):
             continue
         seen.add(number)
         total_rows += 1
-        try:
-            when = datetime.strptime(cell(r, "Time"), "%m/%d/%Y %H:%M")
-        except ValueError:
-            raise ValueError(f"Couldn't read the date '{cell(r, 'Time')}'.")
+        when = _storehub_time(cell(r, "Time"))
         customer = " ".join(cell(r, "Customer").split())
         if not customer:
             blank += 1
@@ -6743,10 +6757,7 @@ def _storehub_parse(text):
     for r in rows[1:]:
         if not r or not r[idx["Time"]].strip():
             continue
-        try:
-            day = datetime.strptime(r[idx["Time"]].strip(), "%m/%d/%Y %H:%M").date().isoformat()
-        except ValueError:
-            raise ValueError(f"Couldn't read the date '{r[idx['Time']]}'.")
+        day = _storehub_time(r[idx["Time"]]).date().isoformat()
         d = days.setdefault(
             day,
             {"date": day, "receipts": 0, "sales": 0.0, "cash": 0.0, "gcash": 0.0, "bank": 0.0, "po": 0.0,
