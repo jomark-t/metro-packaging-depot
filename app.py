@@ -437,6 +437,29 @@ def init_db():
             set_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"""
     )
+    # Holidays, for holiday pay. `type` is "regular" or "special" (a special
+    # non-working day); a proclaimed special *working* day pays normally, so it
+    # is simply not listed. payroll_settings holds the on/off switch and the
+    # date holiday pay starts from - payroll is recomputed live from the
+    # schedule, so without a start date adding holidays would quietly change a
+    # cutoff that was already paid.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS holidays (
+            date DATE PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('regular', 'special')),
+            set_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute("CREATE TABLE IF NOT EXISTS holiday_seeded_years (year INTEGER PRIMARY KEY)")
+    cur.execute("CREATE TABLE IF NOT EXISTS payroll_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    # this year and next get the standard dates once; a holiday someone later
+    # deletes stays deleted because the year is marked as done
+    for seed_year in (date.today().year, date.today().year + 1):
+        cur.execute("SELECT 1 FROM holiday_seeded_years WHERE year=%s", (seed_year,))
+        if cur.fetchone() is None:
+            seed_standard_holidays(cur, seed_year)
     # What each operator earns per cup as Printer and as Checker, from a date
     # onward - the same idea as the quota, so changing someone's rate never
     # rewrites a cutoff that was already worked out. Someone with no row uses
@@ -490,6 +513,14 @@ def init_db():
             pin_hash TEXT,
             failed_attempts INTEGER NOT NULL DEFAULT 0,
             locked_until TIMESTAMP
+        )"""
+    )
+    # the nickname (staff.name) can be changed; the old ones are kept here so a
+    # saved schedule snapshot that still carries the old name can find the person
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS staff_aliases (
+            old_name TEXT PRIMARY KEY,
+            staff_id INTEGER NOT NULL REFERENCES staff(id)
         )"""
     )
     # accounts for people who aren't on the payroll - co-owners and the
@@ -942,10 +973,16 @@ def init_db():
         )"""
     )
 
+    cur.execute("SELECT COUNT(*) AS c FROM staff")
+    roster_is_empty = cur.fetchone()["c"] == 0
     for s in STAFF:
         cur.execute("SELECT id FROM staff WHERE name=%s", (s["name"],))
         row = cur.fetchone()
         if row is None:
+            if not roster_is_empty:
+                # nicknames can be changed from the Employees tab, so a seed
+                # name that is missing now is a rename - not someone to re-hire
+                continue
             # first-run seed only - full_name/role/employment/target/daily_rate
             # and everything else become user-editable via the Employees tab
             # after this, so they're never touched again below
@@ -1116,6 +1153,10 @@ def roster_for_month(db, year, month):
 # Sundays always run 2 people on Opening (8-5). The 1st Sunday of the
 # month is inventory day - the whole roster works.
 #
+# Holidays (Mon-Sat) run a skeleton crew: the manager, plus exactly one sales
+# person to cover the other of Opening/Closing, and no machine operators. A
+# holiday that falls on a Sunday keeps the Sunday rule above.
+#
 # Nothing below is keyed to a person's name: staff are picked up by
 # category from the database, so hiring and archiving just work.
 def compute_machine_roles(days, operators):
@@ -1214,7 +1255,7 @@ def generate_schedule(year, month):
     db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     cur = db.cursor()
 
-    cur.execute("SELECT id, name, target, category FROM staff WHERE active ORDER BY id")
+    cur.execute("SELECT id, name, target, category, role FROM staff WHERE active ORDER BY id")
     staff_rows = {r["name"]: dict(r) for r in cur.fetchall()}
 
     def names_in(category):
@@ -1245,6 +1286,14 @@ def generate_schedule(year, month):
     days = [first_day + timedelta(days=i) for i in range(last_day_num)]
     assignments = {d: [] for d in days}
 
+    # holidays Mon-Sat: the skeleton crew (see the notes above the generator).
+    # The inventory Sunday is a Sunday, so it can never be one of these.
+    holiday_days = {d for d in fetch_holidays(cur, first_day, last_day) if d.weekday() <= 5}
+    # someone filed as sales staff but who runs the machines (James) is in the
+    # sales pool for ordinary days, yet is a machine operator on a holiday
+    machine_side = {n for n, r in staff_rows.items() if schedule_group(r) == "printing"}
+    holiday_pool = [n for n in sales_pool if n not in machine_side]
+
     def add(d, name, label, time_range, detail=None):
         assignments[d].append({"name": name, "label": label, "time_range": time_range, "detail": detail})
 
@@ -1253,7 +1302,9 @@ def generate_schedule(year, month):
     other_sundays = sundays[1:]
 
     pt_sunday_cover = _part_timer_sunday_cover(part_timers, other_sundays)
-    machine_role_map = compute_machine_roles(days, operators)
+    # operators don't work holidays, so those days aren't part of the weekly
+    # Printer/Checker split (it divides the days that are left evenly)
+    machine_role_map = compute_machine_roles([d for d in days if d not in holiday_days], operators)
 
     # 2nd Wednesday of the month is a guaranteed all-hands day (operators
     # and part-timers already work every Wednesday, so this just pulls the
@@ -1267,6 +1318,7 @@ def generate_schedule(year, month):
     spread_overlap_days = {d for d in days if d.weekday() == 3}  # every Thursday
     if second_wednesday is not None:
         spread_overlap_days.add(second_wednesday)
+    spread_overlap_days -= holiday_days  # a holiday is a skeleton crew, not an all-hands day
 
     # --- Inventory day: everyone works -------------------------------
     if first_sunday is not None:
@@ -1278,6 +1330,12 @@ def generate_schedule(year, month):
         if d == first_sunday:
             continue
         wd = d.weekday()
+
+        if d in holiday_days:
+            # operators are off, and so are the part-timers (the one sales
+            # person on a holiday comes from the sales pool - unless there
+            # isn't one, in which case a part-timer takes it below)
+            continue
 
         if wd <= 4 and operators:  # Mon-Fri
             roles = machine_role_map[d]
@@ -1333,11 +1391,23 @@ def generate_schedule(year, month):
             comp_off.add(comp_monday)
 
     for d in days:
-        if d.weekday() == 6 or d in comp_off:
+        # the manager always works a holiday, even the rest day that would
+        # otherwise follow the inventory Sunday
+        if d.weekday() == 6 or (d in comp_off and d not in holiday_days):
             continue
         for name in managers:
             phase = manager_phase_for(name, d)
             add(d, name, phase, SHIFT_TIME_RANGES[phase])
+
+    # a holiday with no sales pool to draw on: one part-timer covers the slot
+    # the manager doesn't (they take turns), so the store still has two people
+    if not holiday_pool and part_timers:
+        for i, d in enumerate(sorted(holiday_days)):
+            if d == first_sunday:
+                continue
+            held = {e["label"] for e in assignments[d]}
+            label = "Closing" if "Opening" in held else "Opening"
+            add(d, part_timers[i % len(part_timers)], label, SHIFT_TIME_RANGES[label])
 
     # --- Pass B: fill the sales pool, biasing toward 2-day-off blocks,
     #             capping consecutive work days at 6, spreading overlap
@@ -1453,6 +1523,32 @@ def generate_schedule(year, month):
                 shift_state[n] = {"type": None, "streak": 0}
             continue
         required = day_requirement(d)
+
+        if d in holiday_days:
+            # Skeleton crew: the manager (already in) plus exactly as many from
+            # the sales pool as the day still needs (one), and nobody from the
+            # machine side. Everyone else is off whatever their day-off quota
+            # says - like the Sunday cap, this is a hard limit, not a target.
+            cap = MAX_CONSECUTIVE_DAYS
+            fresh = [n for n in holiday_pool if consecutive_worked[n] < cap]
+            # the person who most needs the days (fewest days off still owed)
+            # and has worked the fewest in a row takes it
+            fresh.sort(key=lambda n: (off_needed[n], consecutive_worked[n]))
+            rest = [n for n in holiday_pool if n not in fresh]
+            rest.sort(key=lambda n: consecutive_worked[n])  # only if everyone is at the cap
+            working_today = (fresh + rest)[: len(required)]
+            offs_today = [n for n in sales_pool if n not in working_today]
+            for n in offs_today:
+                off_needed[n] -= 1
+            for name, label, time_range in assign_day_labels(working_today, list(required)):
+                add(d, name, label, time_range)
+            for n in offs_today:
+                consecutive_worked[n] = 0
+                shift_state[n] = {"type": None, "streak": 0}
+            for n in working_today:
+                consecutive_worked[n] += 1
+            continue
+
         allowed_off = max(0, len(sales_pool) - len(required))
         if d in spread_overlap_days:
             allowed_off = 0  # designated all-hands / spread coverage day
@@ -1625,6 +1721,7 @@ def generate_schedule(year, month):
                     n
                     for n in sales_pool
                     if n != worker
+                    and not (d in holiday_days and n in machine_side)  # never hand a holiday to the machine side
                     and not _works(d, n)
                     and not _isolated(n)
                     and ((prev_d is not None and _works(prev_d, n)) or (next_d is not None and _works(next_d, n)))
@@ -1653,6 +1750,113 @@ def generate_schedule(year, month):
     return counts
 
 
+HOLIDAY_WORK_LABELS = ("Opening", "Closing", "Half Day", "Inventory", "Printer", "Checker")
+
+
+def plan_holiday_staffing(cur, start, end):
+    """What it would take to put the holidays in start..end (Mon-Sat only) on
+    the skeleton crew in a schedule that already exists: the manager works, one
+    sales person covers the other of Opening/Closing, and nobody from the
+    machines works. Leave days (Paid Time Off) are never touched.
+
+    Returns one dict per holiday that needs changes - {date, name, type,
+    keep, remove, add, change, note} - and leaves out holidays whose month has
+    no schedule yet (the generator does the right thing when it builds one) and
+    holidays already staffed this way. Nothing is written."""
+    holidays = {d: h for d, h in fetch_holidays(cur, start, end).items() if d.weekday() <= 5}
+    if not holidays:
+        return []
+    cur.execute("SELECT id, name, category, role FROM staff WHERE active ORDER BY id")
+    staff = [dict(r) for r in cur.fetchall()]
+    by_id = {p["id"]: p for p in staff}
+    managers = [p for p in staff if p["category"] == "manager"]
+    machines = {p["id"] for p in staff if schedule_group(p) == "printing"}
+    sales_side = [p for p in staff if p["category"] in ("sales", "sales_pt") and p["id"] not in machines]
+
+    cur.execute("SELECT staff_id, date, shift_label FROM schedule WHERE date BETWEEN %s AND %s",
+                (start.isoformat(), end.isoformat()))
+    labels, days_worked = {}, {}
+    for r in cur.fetchall():
+        labels[(r["staff_id"], r["date"])] = r["shift_label"]
+        if r["shift_label"] in HOLIDAY_WORK_LABELS:
+            days_worked[r["staff_id"]] = days_worked.get(r["staff_id"], 0) + 1
+
+    plans = []
+    for day, h in sorted(holidays.items()):
+        iso = day.isoformat()
+        today_rows = {sid: lab for (sid, d), lab in labels.items() if d == iso}
+        if not today_rows:
+            continue  # nothing scheduled for that day: the month hasn't been built
+        item = {"date": iso, "name": h["name"], "type": h["type"], "keep": [], "remove": [], "add": [], "change": [], "note": ""}
+        notes = []
+
+        def label_of(p):
+            return today_rows.get(p["id"])
+
+        # the manager: a must
+        manager_label = None
+        for m in managers:
+            lab = label_of(m)
+            if lab in HOLIDAY_WORK_LABELS:
+                item["keep"].append({"name": m["name"], "label": lab})
+                manager_label = manager_label or lab
+            elif lab == "Paid Time Off":
+                notes.append(f"{m['name']} is on leave")
+            else:
+                item["add"].append({"name": m["name"], "staff_id": m["id"], "label": "Opening"})
+                manager_label = manager_label or "Opening"
+
+        # the one sales person covers the other of Opening / Closing
+        need = "Closing" if manager_label in (None, "Opening", "Half Day", "Inventory") else "Opening"
+        working = [(p, label_of(p)) for p in sales_side if label_of(p) in HOLIDAY_WORK_LABELS]
+        pick = (
+            next(((p, lab) for p, lab in working if p["category"] == "sales" and lab == need), None)
+            or next(((p, lab) for p, lab in working if lab == need), None)
+            or next(((p, lab) for p, lab in working if p["category"] == "sales"), None)
+            or (working[0] if working else None)
+        )
+        if pick is not None:
+            p, lab = pick
+            if lab == need:
+                item["keep"].append({"name": p["name"], "label": lab})
+            else:
+                item["change"].append({"name": p["name"], "staff_id": p["id"], "from": lab, "to": need})
+        else:
+            free = [p for p in sales_side if label_of(p) != "Paid Time Off"]
+            free.sort(key=lambda p: (p["category"] != "sales", days_worked.get(p["id"], 0), p["id"]))
+            if free:
+                item["add"].append({"name": free[0]["name"], "staff_id": free[0]["id"], "label": need})
+            else:
+                notes.append("no sales staff available to cover")
+
+        chosen = {pick[0]["id"]} if pick else {a["staff_id"] for a in item["add"] if a["staff_id"] not in {m["id"] for m in managers}}
+        for p in sales_side:
+            if p["id"] not in chosen and label_of(p) in HOLIDAY_WORK_LABELS:
+                item["remove"].append({"name": p["name"], "staff_id": p["id"], "label": label_of(p)})
+        for pid in machines:
+            if label_of(by_id[pid]) in HOLIDAY_WORK_LABELS:
+                item["remove"].append({"name": by_id[pid]["name"], "staff_id": pid, "label": label_of(by_id[pid])})
+
+        item["note"] = "; ".join(notes)
+        if item["remove"] or item["add"] or item["change"]:
+            plans.append(item)
+    return plans
+
+
+def apply_holiday_staffing(cur, plans):
+    """Carry out plan_holiday_staffing's plan. Caller commits."""
+    for item in plans:
+        for r in item["remove"]:
+            cur.execute("DELETE FROM schedule WHERE staff_id=%s AND date=%s", (r["staff_id"], item["date"]))
+        for c in item["change"]:
+            cur.execute("UPDATE schedule SET shift_label=%s, time_range=%s WHERE staff_id=%s AND date=%s",
+                        (c["to"], SHIFT_TIME_RANGES[c["to"]], c["staff_id"], item["date"]))
+        for a in item["add"]:
+            cur.execute("DELETE FROM schedule WHERE staff_id=%s AND date=%s", (a["staff_id"], item["date"]))
+            cur.execute("INSERT INTO schedule (staff_id, date, shift_label, time_range, detail) VALUES (%s,%s,%s,%s,NULL)",
+                        (a["staff_id"], item["date"], a["label"], SHIFT_TIME_RANGES[a["label"]]))
+
+
 def fetch_schedule_days(db, year, month, roster_names=None):
     """Returns the list of per-day schedule dicts for a given month.
     roster_names drives the "Off Today" column - pass the same roster the
@@ -1678,6 +1882,7 @@ def fetch_schedule_days(db, year, month, roster_names=None):
     by_date = {}
     for r in rows:
         by_date.setdefault(r["date"], []).append(r)
+    month_holidays = fetch_holidays(cur, first_day, last_day)
 
     days = []
     for i in range(last_day_num):
@@ -1692,6 +1897,7 @@ def fetch_schedule_days(db, year, month, roster_names=None):
                 "day_num": d.day,
                 "weekday": d.strftime("%A"),
                 "weekday_short": d.strftime("%a"),
+                "holiday": month_holidays.get(d),
                 "entries": entries,
                 "off": off_names,
             }
@@ -1740,13 +1946,14 @@ def _manager_comp_off_dates(start, end):
     return comp_dates
 
 
-def _manager_absence_deduction(dates_worked, start, end, per_day_rate):
+def _manager_absence_deduction(dates_worked, start, end, per_day_rate, holiday_dates=frozenset()):
     """Mon-Sat is the expected work pattern for a fixed-salary manager
     (Sunday is her standing day off, aside from the mandatory inventory
     Sunday); the day after that inventory Sunday is an automatic
     compensatory rest day, not an absence. Each other unreported Mon-Sat
     day deducts per_day_rate, offset 1-for-1 by any additional
-    (non-inventory) Sunday actually worked in the same cutoff."""
+    (non-inventory) Sunday actually worked in the same cutoff. A holiday
+    she does not work is paid in her salary, so it is never an absence."""
     comp_off = _manager_comp_off_dates(start, end)
     absences = 0
     sundays_worked = 0
@@ -1756,7 +1963,7 @@ def _manager_absence_deduction(dates_worked, start, end, per_day_rate):
             is_inventory_sunday = d.day <= 7
             if not is_inventory_sunday and d in dates_worked:
                 sundays_worked += 1
-        elif d not in comp_off and d not in dates_worked:
+        elif d not in comp_off and d not in dates_worked and d not in holiday_dates:
             absences += 1
         d += timedelta(days=1)
     deductible_days = max(0, absences - sundays_worked)
@@ -1854,6 +2061,143 @@ def fetch_cup_day_shifts(cur, start_iso, end_iso):
     return days
 
 
+# ---------------------------------------------------------------------------
+# Holidays and holiday pay
+#
+#   Regular holiday        worked: 200% of the day     not worked: 100%
+#   Special non-working    worked: 130% of the day     not worked: no work, no pay
+#
+# Base pay already counts a worked day at 100%, so holiday pay is only the part
+# on top of it - its own payslip line. Two groups differ on a day not worked,
+# and that difference is decided here and only here:
+#
+#   daily-rate staff  a regular holiday not worked is paid (+100% of the day)
+#                     if they worked in the 7 days before it; a special
+#                     non-working day not worked is not paid.
+#   the salaried      the monthly salary already pays every day, so nothing is
+#   manager           added for a holiday not worked and it is never counted as
+#                     an absence; a holiday worked adds the premium on top.
+#
+# A day of Paid Time Off on a holiday is already paid in full, so nothing more.
+# Not modelled: a holiday that is also a rest day (a higher rate), and overtime
+# on a holiday (the flat OT rate is a separate question).
+# ---------------------------------------------------------------------------
+HOLIDAY_REGULAR_EXTRA = 1.0  # a regular holiday: +100% on top of the day
+HOLIDAY_SPECIAL_EXTRA = 0.30  # a special non-working day worked: +30%
+HOLIDAY_LOOKBACK_DAYS = 7  # "present the working day before", read as worked in the week before
+HOLIDAY_PAY_DEFAULT_FROM = date(2026, 11, 10)  # the first cutoff not yet paid when this was built
+
+
+def _easter(year):
+    """Easter Sunday (the anonymous Gregorian algorithm)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    L = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * L) // 451
+    month = (h + L - 7 * m + 114) // 31
+    day = (h + L - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def standard_holidays(year):
+    """The holidays fixed by law (and Holy Week, worked out from Easter) as
+    [(date, name, type)]. The days proclaimed each year - Eid'l Fitr and
+    Eid'l Adha, Chinese New Year, 24 and 31 December and any one-off - are
+    announced by proclamation and have to be added by hand."""
+    easter = _easter(year)
+    last_monday_aug = max(d for d in (date(year, 8, n) for n in range(25, 32)) if d.weekday() == 0)
+    return [
+        (date(year, 1, 1), "New Year's Day", "regular"),
+        (easter - timedelta(days=3), "Maundy Thursday", "regular"),
+        (easter - timedelta(days=2), "Good Friday", "regular"),
+        (easter - timedelta(days=1), "Black Saturday", "special"),
+        (date(year, 4, 9), "Araw ng Kagitingan", "regular"),
+        (date(year, 5, 1), "Labor Day", "regular"),
+        (date(year, 6, 12), "Independence Day", "regular"),
+        (date(year, 8, 21), "Ninoy Aquino Day", "special"),
+        (last_monday_aug, "National Heroes Day", "regular"),
+        (date(year, 11, 1), "All Saints' Day", "special"),
+        (date(year, 11, 30), "Bonifacio Day", "regular"),
+        (date(year, 12, 8), "Feast of the Immaculate Conception", "special"),
+        (date(year, 12, 25), "Christmas Day", "regular"),
+        (date(year, 12, 30), "Rizal Day", "regular"),
+    ]
+
+
+def seed_standard_holidays(cur, year, set_by="standard list"):
+    """Add a year's standard holidays (never overwriting one that is there) and
+    note the year as done. Returns how many were added."""
+    added = 0
+    for d, name, kind in standard_holidays(year):
+        cur.execute(
+            "INSERT INTO holidays (date, name, type, set_by) VALUES (%s,%s,%s,%s) ON CONFLICT (date) DO NOTHING",
+            (d, name, kind, set_by),
+        )
+        added += cur.rowcount
+    cur.execute("INSERT INTO holiday_seeded_years (year) VALUES (%s) ON CONFLICT DO NOTHING", (year,))
+    return added
+
+
+def holiday_settings(cur):
+    """{enabled, pay_from}: whether holiday pay is switched on, and the first
+    date it applies to (earlier cutoffs are left exactly as they were)."""
+    cur.execute("SELECT key, value FROM payroll_settings WHERE key IN ('holiday_pay_enabled', 'holiday_pay_from')")
+    saved = {r["key"]: r["value"] for r in cur.fetchall()}
+    try:
+        pay_from = date.fromisoformat(saved["holiday_pay_from"])
+    except (KeyError, ValueError):
+        pay_from = HOLIDAY_PAY_DEFAULT_FROM
+    return {"enabled": saved.get("holiday_pay_enabled", "1") != "0", "pay_from": pay_from}
+
+
+def fetch_holidays(cur, start, end):
+    """{date: {name, type}} for the holidays between two dates."""
+    cur.execute("SELECT date, name, type FROM holidays WHERE date BETWEEN %s AND %s ORDER BY date", (start, end))
+    return {r["date"]: {"name": r["name"], "type": r["type"]} for r in cur.fetchall()}
+
+
+def holiday_pay_lines(person, per_day_rate, holidays, labels, worked_dates):
+    """What one person is owed for holidays: one line per holiday in the
+    cutoff, each with the status that explains the amount (see the rules
+    above). `labels` maps (staff id, ISO date) to that day's shift;
+    `worked_dates` is the set of dates this person has a schedule row."""
+    salaried = bool(person.get("monthly_salary"))
+    lines = []
+    for day, h in sorted(holidays.items()):
+        label = labels.get((person["id"], day.isoformat()))
+        on_leave = label == "Paid Time Off"
+        worked = label is not None and not on_leave
+        fraction = SHIFT_DAY_FRACTION.get(label, 1.0) if worked else 0.0
+        amount, status = 0.0, ""
+        if h["type"] == "regular":
+            if on_leave:
+                status = "on paid leave - already paid"
+            elif worked:
+                # a daily-rate person's half day still earns the full holiday
+                # day (200% on the hours worked + 100% on the rest)
+                amount = per_day_rate * HOLIDAY_REGULAR_EXTRA * (fraction if salaried else 1.0)
+                status = "worked - double pay"
+            elif salaried:
+                status = "not worked - paid in the monthly salary"
+            elif any(0 < (day - d).days <= HOLIDAY_LOOKBACK_DAYS for d in worked_dates):
+                amount = per_day_rate * HOLIDAY_REGULAR_EXTRA
+                status = "not worked - holiday pay"
+            else:
+                status = "not worked - didn't work the week before, no holiday pay"
+        else:
+            if worked:
+                amount = per_day_rate * HOLIDAY_SPECIAL_EXTRA * fraction
+                status = "worked - 130%"
+            else:
+                status = "not worked - no work, no pay" if not on_leave else "on paid leave - already paid"
+        lines.append({"date": day.isoformat(), "name": h["name"], "type": h["type"], "status": status, "amount": round(amount, 2)})
+    return lines
+
+
 def cup_bonus_lines(sid, role_days, cup_counts, custom_days, quota_changes, rate_changes):
     """Every peso of one person's cup bonus, one line per day (or per shift on
     a day with named shifts): the cups, the quota, what is left over, the rate
@@ -1918,6 +2262,20 @@ def compute_payroll(db, start, end, pay_date):
         if r["shift_label"] in CUP_BONUS_RATE:
             cup_shifts[r["staff_id"]].append((r["date"], r["shift_label"]))
 
+    # ---- holidays that apply to this cutoff (on, and not before the start date)
+    hol_settings = holiday_settings(cur)
+    holidays_all = fetch_holidays(cur, start, end)
+    holidays = {d: h for d, h in holidays_all.items() if hol_settings["enabled"] and d >= hol_settings["pay_from"]}
+    schedule_labels = {(r["staff_id"], r["date"]): r["shift_label"] for r in schedule_rows}
+    worked_window = {}  # staff id -> dates with a schedule row, a week before the cutoff on
+    if any(h["type"] == "regular" for h in holidays.values()):
+        cur.execute(
+            "SELECT staff_id, date FROM schedule WHERE date BETWEEN %s AND %s",
+            ((start - timedelta(days=HOLIDAY_LOOKBACK_DAYS)).isoformat(), end.isoformat()),
+        )
+        for r in cur.fetchall():
+            worked_window.setdefault(r["staff_id"], set()).add(date.fromisoformat(r["date"]))
+
     cur.execute(
         "SELECT date, quantity FROM cup_counts WHERE date BETWEEN %s AND %s",
         (start.isoformat(), end.isoformat()),
@@ -1967,10 +2325,13 @@ def compute_payroll(db, start, end, pay_date):
             # any Sunday worked in lieu of a missed weekday (see helper).
             base_pay = s["monthly_salary"] / 2
             per_day_rate = s["monthly_salary"] / 26
-            absence_deduction = _manager_absence_deduction(dates_worked[sid], start, end, per_day_rate)
+            absence_deduction = _manager_absence_deduction(dates_worked[sid], start, end, per_day_rate, set(holidays))
         else:
             base_pay = worked * (s["daily_rate"] or 0)
+            per_day_rate = s["daily_rate"] or 0
             absence_deduction = 0
+        holiday_lines = holiday_pay_lines(s, per_day_rate, holidays, schedule_labels, worked_window.get(sid, set()))
+        holiday_pay = sum(l["amount"] for l in holiday_lines)
 
         bonus_lines = cup_bonus_lines(sid, cup_shifts[sid], cup_counts, custom_days, quota_changes, rate_changes)
         bonus = sum(l["amount"] for l in bonus_lines)
@@ -2016,7 +2377,7 @@ def compute_payroll(db, start, end, pay_date):
             sss + pagibig + philhealth + hmo + error_deduction + cash_advance
             + absence_deduction + undertime_deduction
         )
-        net_pay = base_pay + ot_pay + bonus + manual_bonus - total_deductions
+        net_pay = base_pay + holiday_pay + ot_pay + bonus + manual_bonus - total_deductions
 
         results.append(
             {
@@ -2028,6 +2389,8 @@ def compute_payroll(db, start, end, pay_date):
                 "monthly_salary": s.get("monthly_salary"),
                 "days_worked": worked_display,
                 "base_pay": round(base_pay, 2),
+                "holiday_pay": round(holiday_pay, 2),
+                "holiday_lines": holiday_lines,
                 # cup bonus - the machine operators, which includes anyone on the
                 # printing side by role (James), so he can be named on a shift
                 "has_bonus": schedule_group(s) == "printing",
@@ -2089,6 +2452,13 @@ def compute_payroll(db, start, end, pay_date):
         "pay_date": pay_date.isoformat(),
         "staff": results,
         "cup_counts": cup_rows,
+        # every holiday in the cutoff, and whether it is paid (on, and not
+        # before the date holiday pay starts)
+        "holidays": [
+            {"date": d.isoformat(), "name": h["name"], "type": h["type"], "applies": d in holidays}
+            for d, h in sorted(holidays_all.items())
+        ],
+        "holiday_settings": {"enabled": hol_settings["enabled"], "pay_from": hol_settings["pay_from"].isoformat()},
         "cup_operators": [s["name"] for s in staff_rows if schedule_group(s) == "printing"],
         # each operator's rates: what applies at the end of this cutoff, and
         # the dated changes behind it
@@ -3023,6 +3393,72 @@ def api_staff_update(name):
             record_audit(cur, "Updated employee", name, changed)
         db.commit()
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/staff/<name>/rename", methods=["POST"])
+@manager_required
+def api_staff_rename(name):
+    """Change someone's nickname - the short label on the schedule, the payroll
+    and the login picker. Jomark and Clare can both do it. The nickname is also
+    the key other rows point at (their login account), so it moves together in
+    one transaction; the old nickname is kept so saved snapshots still match."""
+    data = request.get_json(force=True)
+    new = (data.get("name") or "").strip()
+    if not new:
+        return jsonify({"status": "error", "message": "Nickname is required"}), 400
+    if len(new) > 20:
+        return jsonify({"status": "error", "message": "Nickname must be 20 characters or fewer"}), 400
+    if not re.fullmatch(r"[A-Za-z0-9 '\-]+", new):
+        return jsonify({"status": "error", "message": "Nickname can only use letters, numbers, spaces, - and '"}), 400
+    if new.lower() in ("new", "me"):
+        return jsonify({"status": "error", "message": f"'{new}' is reserved - pick a different nickname"}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "Unknown staff member"}), 400
+    if new == name:
+        return jsonify({"status": "ok", "name": name})
+
+    cur.execute("SELECT name FROM staff WHERE LOWER(name)=LOWER(%s) AND id<>%s", (new, row["id"]))
+    clash = cur.fetchone()
+    if clash:
+        return jsonify({"status": "error", "message": f"'{clash['name']}' is already someone's nickname"}), 400
+    cur.execute(
+        "SELECT 1 FROM app_users WHERE LOWER(display_name)=LOWER(%s) AND staff_name IS DISTINCT FROM %s",
+        (new, name),
+    )
+    if cur.fetchone():
+        return jsonify({"status": "error", "message": f"'{new}' is already used by a login account"}), 400
+
+    cur.execute("SELECT id, display_name FROM app_users WHERE staff_name=%s", (name,))
+    user = cur.fetchone()
+    if user:
+        # staff_name references staff(name): let go, rename, then point it back
+        cur.execute("UPDATE app_users SET staff_name=NULL WHERE id=%s", (user["id"],))
+    cur.execute("UPDATE staff SET name=%s WHERE id=%s", (new, row["id"]))
+    if user:
+        cur.execute(
+            "UPDATE app_users SET staff_name=%s, display_name=CASE WHEN display_name=%s THEN %s ELSE display_name END "
+            "WHERE id=%s",
+            (new, name, new, user["id"]),
+        )
+    cur.execute("DELETE FROM staff_aliases WHERE old_name=%s", (new,))
+    cur.execute(
+        "INSERT INTO staff_aliases (old_name, staff_id) VALUES (%s,%s) "
+        "ON CONFLICT (old_name) DO UPDATE SET staff_id=EXCLUDED.staff_id",
+        (name, row["id"]),
+    )
+    record_audit(cur, "Renamed employee", new, {"from": name, "to": new})
+    db.commit()
+    # someone renaming themselves stays signed in
+    if session.get("staff_name") == name:
+        session["staff_name"] = new
+    if session.get("display_name") == name:
+        session["display_name"] = new
+    return jsonify({"status": "ok", "name": new})
 
 
 STAFF_ACCESS_FIELDS = ("can_access_cup_printing_app", "can_access_admin_app", "can_edit_cup_printing")
@@ -8359,6 +8795,9 @@ def api_restore_snapshot(snapshot_id):
 
     cur.execute("SELECT id, name FROM staff")
     staff_id_by_name = {r["name"]: r["id"] for r in cur.fetchall()}
+    cur.execute("SELECT old_name, staff_id FROM staff_aliases")
+    for r in cur.fetchall():
+        staff_id_by_name.setdefault(r["old_name"], r["staff_id"])  # a current nickname always wins
 
     cur.execute("DELETE FROM schedule WHERE date BETWEEN %s AND %s", (first_day.isoformat(), last_day.isoformat()))
     for row in rows:
@@ -8614,6 +9053,185 @@ def api_payroll_cup_rate_delete(name, effective_from):
         cur, "Removed a cup bonus rate change", f"{name} from {effective_from}",
         {"printer": float(row["printer_rate"]), "checker": float(row["checker_rate"])},
     )
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/schedule/holiday-staffing")
+@manager_required
+def api_holiday_staffing_preview():
+    """What putting the upcoming holidays on the skeleton crew would change in
+    schedules that already exist. Only holidays from today on; nothing is
+    written."""
+    cur = get_db().cursor()
+    today = date.today()
+    plans = plan_holiday_staffing(cur, today, today + timedelta(days=200))
+    return jsonify({"plans": plans})
+
+
+@app.route("/api/schedule/holiday-staffing", methods=["POST"])
+@manager_required
+def api_holiday_staffing_apply():
+    """Apply the skeleton crew to the holidays on `dates` (or all upcoming
+    ones). A snapshot of each affected month is saved first, so the schedule
+    can be restored from the Snapshots menu."""
+    data = request.get_json(force=True) or {}
+    db = get_db()
+    cur = db.cursor()
+    today = date.today()
+    plans = plan_holiday_staffing(cur, today, today + timedelta(days=200))
+    wanted = data.get("dates")
+    if wanted:
+        plans = [p for p in plans if p["date"] in wanted]
+    if not plans:
+        return jsonify({"status": "ok", "applied": 0})
+
+    months = sorted({(int(p["date"][:4]), int(p["date"][5:7])) for p in plans})
+    for year, month in months:
+        first = date(year, month, 1)
+        last = date(year, month, calendar.monthrange(year, month)[1])
+        cur.execute(
+            """SELECT staff.name, schedule.date, schedule.shift_label, schedule.time_range, schedule.detail
+               FROM schedule JOIN staff ON schedule.staff_id = staff.id
+               WHERE schedule.date BETWEEN %s AND %s ORDER BY schedule.date""",
+            (first.isoformat(), last.isoformat()),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            "INSERT INTO schedule_snapshots (year, month, label, data) VALUES (%s,%s,%s,%s)",
+            (year, month, datetime.now().strftime("before-holiday-staffing-%m-%d-%Y-%H-%M-%S"), Json(rows)),
+        )
+    apply_holiday_staffing(cur, plans)
+    for year, month in months:
+        record_schedule_edit(cur, year, month, "Applied holiday staffing")
+    record_audit(
+        cur, "Applied holiday staffing", ", ".join(p["date"] for p in plans),
+        {p["date"]: {"off": [r["name"] for r in p["remove"]], "on": [a["name"] for a in p["add"]],
+                     "changed": [c["name"] for c in p["change"]]} for p in plans},
+    )
+    db.commit()
+    return jsonify({"status": "ok", "applied": len(plans)})
+
+
+def _holiday_row(r):
+    return {"date": r["date"].isoformat(), "name": r["name"], "type": r["type"], "set_by": r["set_by"],
+            "weekday": r["date"].strftime("%A")}
+
+
+@app.route("/api/payroll/holidays")
+@payroll_view_required
+def api_holidays():
+    """One year's holidays, with the holiday pay switch and start date."""
+    try:
+        year = int(request.args.get("year") or date.today().year)
+    except ValueError:
+        year = date.today().year
+    cur = get_db().cursor()
+    cur.execute("SELECT date, name, type, set_by FROM holidays WHERE date BETWEEN %s AND %s ORDER BY date",
+                (date(year, 1, 1), date(year, 12, 31)))
+    rows = [_holiday_row(r) for r in cur.fetchall()]
+    cur.execute("SELECT 1 FROM holiday_seeded_years WHERE year=%s", (year,))
+    seeded = cur.fetchone() is not None
+    st = holiday_settings(cur)
+    return jsonify({
+        "year": year, "holidays": rows, "seeded": seeded,
+        "enabled": st["enabled"], "pay_from": st["pay_from"].isoformat(),
+    })
+
+
+@app.route("/api/payroll/holidays", methods=["POST"])
+@superuser_required
+def api_holiday_save():
+    """Add a holiday, or change one that is already on that date."""
+    data = request.get_json(force=True)
+    name = (data.get("name") or "").strip()
+    kind = data.get("type")
+    try:
+        day = date.fromisoformat((data.get("date") or "").strip())
+    except ValueError:
+        return jsonify({"status": "error", "message": "Pick the date."}), 400
+    if not name:
+        return jsonify({"status": "error", "message": "Give the holiday a name."}), 400
+    if kind not in ("regular", "special"):
+        return jsonify({"status": "error", "message": "Choose regular holiday or special non-working day."}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name, type FROM holidays WHERE date=%s", (day,))
+    before = cur.fetchone()
+    cur.execute(
+        """INSERT INTO holidays (date, name, type, set_by) VALUES (%s,%s,%s,%s)
+           ON CONFLICT (date) DO UPDATE SET name=EXCLUDED.name, type=EXCLUDED.type, set_by=EXCLUDED.set_by""",
+        (day, name, kind, session.get("display_name") or "Unknown"),
+    )
+    record_audit(cur, "Changed a holiday" if before else "Added a holiday", f"{name} - {day.isoformat()}",
+                 {"type": {"from": before["type"], "to": kind} if before else kind})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/payroll/holidays/<day>", methods=["DELETE"])
+@superuser_required
+def api_holiday_delete(day):
+    try:
+        d = date.fromisoformat(day)
+    except ValueError:
+        return jsonify({"status": "error", "message": "That is not a date."}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("DELETE FROM holidays WHERE date=%s RETURNING name, type", (d,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No holiday on that date."}), 404
+    record_audit(cur, "Removed a holiday", f"{row['name']} - {day}", {"type": row["type"]})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/payroll/holidays/seed", methods=["POST"])
+@superuser_required
+def api_holidays_seed():
+    """Add a year's standard holidays - only the ones not already there."""
+    try:
+        year = int((request.get_json(force=True) or {}).get("year"))
+        if not 2020 <= year <= 2100:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Pick a year."}), 400
+    db = get_db()
+    cur = db.cursor()
+    added = seed_standard_holidays(cur, year, session.get("display_name") or "standard list")
+    record_audit(cur, "Added the standard holidays", str(year), {"added": added})
+    db.commit()
+    return jsonify({"status": "ok", "added": added})
+
+
+@app.route("/api/payroll/holidays/settings", methods=["POST"])
+@superuser_required
+def api_holiday_settings():
+    """The holiday pay switch, and the date it starts from. Cutoffs before that
+    date are never changed by holidays."""
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    before = holiday_settings(cur)
+    changes = {}
+    if "enabled" in data:
+        enabled = bool(data["enabled"])
+        cur.execute(
+            "INSERT INTO payroll_settings (key, value) VALUES ('holiday_pay_enabled', %s) "
+            "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", ("1" if enabled else "0",))
+        changes["enabled"] = {"from": before["enabled"], "to": enabled}
+    if "pay_from" in data:
+        try:
+            pay_from = date.fromisoformat((data["pay_from"] or "").strip())
+        except ValueError:
+            return jsonify({"status": "error", "message": "Pick the date holiday pay starts."}), 400
+        cur.execute(
+            "INSERT INTO payroll_settings (key, value) VALUES ('holiday_pay_from', %s) "
+            "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (pay_from.isoformat(),))
+        changes["pay_from"] = {"from": before["pay_from"].isoformat(), "to": pay_from.isoformat()}
+    if changes:
+        record_audit(cur, "Changed holiday pay settings", None, changes)
     db.commit()
     return jsonify({"status": "ok"})
 

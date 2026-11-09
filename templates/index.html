@@ -433,6 +433,7 @@
       {% if current_user.can_view_payroll %}
       <button id="tabPayrollBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Payroll</button>
       <button id="tabCupBonusBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Cup Bonus</button>
+      <button id="tabHolidaysBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Holidays</button>
       {% endif %}
       {# Anyone on the payroll also gets their own payslip on its own tab,
          managers included - Clare asked for the same one-page view of her
@@ -2023,6 +2024,15 @@
     </div>
   </div>
 
+  {# Holidays and holiday pay - see renderHolidays in script.js #}
+  <div id="holidaysView" style="display:none">
+    <div class="mb-4">
+      <h2 class="font-display font-semibold text-xl leading-tight">Holidays</h2>
+      <p class="text-sm text-gray-500">Regular holidays and special non-working days, and how they change pay.</p>
+    </div>
+    <div id="holidaysBody"><p class="text-sm text-gray-400 py-8 text-center">Loading…</p></div>
+  </div>
+
   {# Where every peso of the cup bonus comes from - see renderCupBonus in script.js #}
   <div id="cupBonusView" style="display:none">
     <div class="mb-4">
@@ -2050,7 +2060,8 @@
   </div>
 
   <div id="payrollView" style="display:none">
-    <p id="payrollPeriodLabel" class="text-sm text-gray-600 mb-5"></p>
+    <p id="payrollPeriodLabel" class="text-sm text-gray-600 mb-1"></p>
+    <p id="payrollHolidayNote" class="text-xs mb-5 hidden"></p>
 
     <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-6">
       <h2 class="font-display font-semibold text-base mb-1">Printed cup counts</h2>

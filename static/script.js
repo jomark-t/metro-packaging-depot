@@ -365,12 +365,17 @@ function renderTable(days, staff) {
   days.forEach((day) => {
     const tr = document.createElement("tr");
     const wd = day.weekday;
-    if (wd === "Sunday") tr.className = "bg-green-50/40";
+    // a holiday row is light purple whatever day of the week it falls on
+    if (day.holiday) tr.className = "bg-purple-100/70 holiday-row";
+    else if (wd === "Sunday") tr.className = "bg-green-50/40";
     else if (wd === "Saturday") tr.className = "bg-gray-50";
 
     const dateTd = document.createElement("td");
     dateTd.className = "px-3.5 py-2.5 align-top whitespace-nowrap";
-    dateTd.innerHTML = `<span class="font-medium text-[15px]">${day.day_num}</span><span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">${day.weekday_short}</span>`;
+    dateTd.innerHTML = `<span class="font-medium text-[15px]">${day.day_num}</span><span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">${day.weekday_short}</span>` +
+      (day.holiday
+        ? `<span class="block text-[9px] font-semibold leading-tight mt-0.5 max-w-[5.5rem] whitespace-normal text-purple-700" title="${escapeHtml(day.holiday.name)} - ${day.holiday.type === "regular" ? "regular holiday" : "special non-working day"}">${escapeHtml(day.holiday.name)}</span>`
+        : "");
     tr.appendChild(dateTd);
 
     staff.forEach((s, i) => {
@@ -483,6 +488,8 @@ const tabLeaveBtn = document.getElementById("tabLeaveBtn");
 const leaveView = document.getElementById("leaveView");
 const tabPayrollBtn = document.getElementById("tabPayrollBtn");
 const tabCupBonusBtn = document.getElementById("tabCupBonusBtn");
+const tabHolidaysBtn = document.getElementById("tabHolidaysBtn");
+const holidaysView = document.getElementById("holidaysView");
 const cupBonusView = document.getElementById("cupBonusView");
 const tabEmployeesBtn = document.getElementById("tabEmployeesBtn");
 const tabActivityBtn = document.getElementById("tabActivityBtn");
@@ -542,6 +549,7 @@ const TABS = {
 if (tabLeaveBtn) TABS.leave = { btn: tabLeaveBtn, view: leaveView, controls: null };
 if (tabPayrollBtn) TABS.payroll = { btn: tabPayrollBtn, view: payrollView, controls: payrollControls };
 // shares the Payroll tab's month / year / 10th-25th selectors
+if (tabHolidaysBtn) TABS.holidays = { btn: tabHolidaysBtn, view: holidaysView, controls: null };
 if (tabCupBonusBtn) TABS.cupbonus = { btn: tabCupBonusBtn, view: cupBonusView, controls: payrollControls };
 if (tabEmployeesBtn) TABS.employees = { btn: tabEmployeesBtn, view: employeesView, controls: null };
 if (tabActivityBtn) TABS.activity = { btn: tabActivityBtn, view: activityView, controls: null };
@@ -577,6 +585,7 @@ function showTab(tab) {
   // two tabs share the payroll controls, so whichever of them is open keeps them
   if ((tab === "payroll" || tab === "cupbonus") && payrollControls) payrollControls.style.display = "flex";
   if (tab === "cupbonus") loadPayroll();
+  if (tab === "holidays") loadHolidays();
   if (tab === "payroll" && !loadedOnce.payroll) {
     loadedOnce.payroll = true;
     loadPayroll();
@@ -660,6 +669,7 @@ tabScheduleBtn.addEventListener("click", () => showTab("schedule"));
 if (tabLeaveBtn) tabLeaveBtn.addEventListener("click", () => showTab("leave"));
 if (tabPayrollBtn) tabPayrollBtn.addEventListener("click", () => showTab("payroll"));
 if (tabCupBonusBtn) tabCupBonusBtn.addEventListener("click", () => showTab("cupbonus"));
+if (tabHolidaysBtn) tabHolidaysBtn.addEventListener("click", () => showTab("holidays"));
 if (tabEmployeesBtn) tabEmployeesBtn.addEventListener("click", () => showTab("employees"));
 if (tabActivityBtn) tabActivityBtn.addEventListener("click", () => showTab("activity"));
 if (tabCupDashBtn) tabCupDashBtn.addEventListener("click", () => showTab("cupdash"));
@@ -1137,6 +1147,7 @@ async function loadMyPay() {
     lines.push([`Days worked (× ${formatMoney(p.daily_rate)})`, String(p.days_worked), false]);
     lines.push(["Base pay", formatMoney(p.base_pay), false]);
   }
+  if (p.holiday_pay) lines.push(["Holiday pay", formatMoney(p.holiday_pay), false]);
   if (p.has_bonus) lines.push(["Cup bonus", formatMoney(p.bonus), false]);
   if (p.manual_bonus) lines.push(["Bonus", formatMoney(p.manual_bonus), false]);
   if (p.ot_hours) lines.push([`Overtime (${p.ot_hours} h × ${formatMoney(data.ot_rate)})`, formatMoney(p.ot_pay), false]);
@@ -1782,6 +1793,20 @@ async function loadPayroll() {
   const endLabel = new Date(data.period_end + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
   const payLabel = new Date(data.pay_date + "T00:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
   payrollPeriodLabel.textContent = `Cutoff: ${startLabel} – ${endLabel}  ·  Pay date: ${payLabel}`;
+  const holidayNote = document.getElementById("payrollHolidayNote");
+  if (holidayNote) {
+    const hs = data.holidays || [];
+    holidayNote.classList.toggle("hidden", !hs.length);
+    holidayNote.innerHTML = hs.length
+      ? "Holidays in this cutoff: " +
+        hs
+          .map(
+            (h) => `<b class="${h.type === "regular" ? "text-red-600" : "text-amber-600"}">${formatDateLabel(h.date)} ${escapeHtml(h.name)}</b> ` +
+              `<span class="text-gray-500">(${h.type === "regular" ? "regular" : "special"}${h.applies ? "" : data.holiday_settings.enabled ? " - before the start date, not paid" : " - holiday pay is off"})</span>`
+          )
+          .join(" · ")
+      : "";
+  }
 
   const quota = data.cup_daily_quota ?? 1000;
   const printerRate = (data.cup_bonus_rate?.Printer ?? 0.15).toFixed(2);
@@ -1980,6 +2005,215 @@ function renderCupRates(data) {
       loadPayroll();
     })
   );
+}
+
+// ---------------------------------------------------------------------------
+// Holidays - the list holiday pay is worked out from. Regular holidays pay
+// 200% worked / 100% not worked; special non-working days pay 130% worked and
+// nothing if not worked (see the rules in app.py above holiday_pay_lines). Only
+// the superuser edits; managers can read.
+// ---------------------------------------------------------------------------
+
+let holidaysYear = new Date().getFullYear();
+
+async function loadHolidays() {
+  const host = document.getElementById("holidaysBody");
+  let data;
+  try {
+    const res = await fetch(`/api/payroll/holidays?year=${holidaysYear}`);
+    if (!res.ok) throw new Error("Could not load the holidays.");
+    data = await res.json();
+  } catch (err) {
+    host.innerHTML = `<p class="text-sm text-gray-500 py-8 text-center">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  renderHolidays(data);
+}
+
+function renderHolidays(d) {
+  const host = document.getElementById("holidaysBody");
+  const today = isoDate(new Date());
+  const long = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const years = [holidaysYear - 1, holidaysYear, holidaysYear + 1];
+
+  const rows = d.holidays.length
+    ? d.holidays
+        .map((h) => {
+          const past = h.date < today;
+          const stopped = !d.enabled || h.date < d.pay_from;
+          return `<tr class="${past ? "text-gray-400" : ""}">
+            <td class="px-3 py-2 whitespace-nowrap">${long(h.date)}</td>
+            <td class="px-3 py-2 text-gray-500">${h.weekday}</td>
+            <td class="px-3 py-2 font-medium ${past ? "" : "text-gray-900"}">${escapeHtml(h.name)}</td>
+            <td class="px-3 py-2"><span class="text-[10px] rounded px-1.5 py-px ${h.type === "regular" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}">${h.type === "regular" ? "Regular holiday" : "Special non-working"}</span></td>
+            <td class="px-3 py-2 text-[11px] text-gray-500">${stopped ? "not paid (" + (d.enabled ? "before the start date" : "holiday pay is off") + ")" : h.type === "regular" ? "worked 200% · not worked 100%" : "worked 130% · not worked no pay"}</td>
+            <td class="px-3 py-2 text-right">${IS_SUPERUSER ? `<button type="button" class="holiday-del text-gray-300 hover:text-red-600" data-date="${h.date}" data-name="${escapeHtml(h.name)}" aria-label="Remove">&#10005;</button>` : ""}</td></tr>`;
+        })
+        .join("")
+    : `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400 italic">No holidays listed for ${d.year}.</td></tr>`;
+
+  const settings = IS_SUPERUSER
+    ? `<div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm mb-4">
+         <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+           <label class="flex items-center gap-2 font-medium"><input type="checkbox" id="holidayEnabled" ${d.enabled ? "checked" : ""} /> Pay holiday premiums</label>
+           <label class="flex items-center gap-2">Applies from
+             <input type="date" id="holidayFrom" value="${d.pay_from}" class="border border-gray-300 rounded-md px-2 py-1" /></label>
+           <button type="button" id="holidaySettingsSave" class="bg-brand-green text-white text-xs font-semibold rounded-md px-3 py-1.5 hover:opacity-90 transition">Save</button>
+           <span id="holidaySettingsStatus" class="text-xs text-gray-500"></span>
+         </div>
+         <p class="text-[11px] text-gray-500 mt-2">Payroll is worked out live from the schedule, so a start date keeps every cutoff before it exactly as it was paid. Holiday pay shows as its own line on the payslip.</p>
+       </div>`
+    : `<p class="text-xs text-gray-500 mb-3">Holiday pay ${d.enabled ? "applies from " + long(d.pay_from) : "is switched off"}.</p>`;
+
+  const add = IS_SUPERUSER
+    ? `<div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm mt-4">
+         <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-2">Add a holiday</p>
+         <div class="flex flex-wrap items-end gap-2 text-sm">
+           <input type="date" id="holidayNewDate" class="border border-gray-300 rounded-md px-2 py-1.5" />
+           <input type="text" id="holidayNewName" placeholder="Name, e.g. Eid'l Fitr" class="border border-gray-300 rounded-md px-2 py-1.5 w-56" />
+           <select id="holidayNewType" class="border border-gray-300 rounded-md px-2 py-1.5">
+             <option value="regular">Regular holiday</option><option value="special">Special non-working day</option></select>
+           <button type="button" id="holidayAddBtn" class="bg-brand-green text-white text-sm font-semibold rounded-md px-3 py-1.5 hover:opacity-90 transition">Add</button>
+           ${d.seeded ? "" : `<button type="button" id="holidaySeedBtn" class="border border-gray-300 text-sm rounded-md px-3 py-1.5 hover:border-brand-blue hover:text-brand-blue transition">Add the standard ${d.year} holidays</button>`}
+           <span id="holidayStatus" class="text-xs text-gray-500"></span>
+         </div>
+         <p class="text-[11px] text-gray-500 mt-2">The standard list covers the days fixed by law and Holy Week. <b>Check it against the year's proclamation</b> and add what it announces: Eid'l Fitr and Eid'l Adha, Chinese New Year, 24 and 31 December, and any one-off. A special <i>working</i> day pays normally, so leave it out.</p>
+       </div>`
+    : "";
+
+  const crew = `<div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm mb-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex-1 min-w-[16rem]">
+          <p class="text-sm font-medium">Holiday crew</p>
+          <p class="text-xs text-gray-500">On a holiday from Monday to Saturday the store runs two people: the manager and <b>one</b> sales person, and nobody from the machines. The schedule generator follows this. A holiday on a Sunday keeps the Sunday rule.</p>
+        </div>
+        ${IS_MANAGER ? `<button type="button" id="holidayCrewCheck" class="border border-gray-300 text-sm rounded-md px-3 py-1.5 hover:border-brand-blue hover:text-brand-blue transition">Check the current schedule</button>` : ""}
+      </div>
+      <div id="holidayCrewResult" class="mt-3"></div>
+    </div>`;
+
+  host.innerHTML = `
+    ${settings}
+    ${crew}
+    <div class="flex items-center gap-1.5 mb-3">${years
+      .map((y) => `<button type="button" data-holiday-year="${y}" class="text-xs rounded-full border px-3 py-1 transition ${y === d.year ? "bg-brand-blue border-brand-blue text-white" : "bg-white border-gray-300 text-gray-600 hover:border-brand-blue"}">${y}</button>`)
+      .join("")}</div>
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div class="overflow-auto"><table class="w-full text-sm">
+        <thead><tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+          <th class="text-left px-3 py-2">Date</th><th class="text-left px-3 py-2">Day</th><th class="text-left px-3 py-2">Holiday</th>
+          <th class="text-left px-3 py-2">Type</th><th class="text-left px-3 py-2">Pay</th><th></th></tr></thead>
+        <tbody class="divide-y divide-gray-100">${rows}</tbody></table></div>
+    </div>
+    ${add}
+    <div class="bg-white border border-gray-200 rounded-xl px-4 py-3 shadow-sm mt-4 text-xs text-gray-600">
+      <p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-1">How it is worked out</p>
+      <ul class="list-disc pl-5 flex flex-col gap-0.5">
+        <li><b>Daily-rate staff</b>, regular holiday: worked, one extra day on top of the day in base pay (200%). Not worked, one day of holiday pay (100%) if they worked in the 7 days before it. A day of Paid Time Off is already paid.</li>
+        <li><b>Daily-rate staff</b>, special non-working day: worked, 30% more on top of the day. Not worked, no pay.</li>
+        <li><b>The salaried manager</b>: the salary already pays every day, so a holiday not worked adds nothing and is never counted as an absence; a holiday worked adds the premium on top.</li>
+        <li>Not included: a holiday that is also a rest day (a higher rate), and overtime on a holiday.</li>
+      </ul>
+    </div>`;
+
+  const crewBtn = document.getElementById("holidayCrewCheck");
+  if (crewBtn) crewBtn.addEventListener("click", checkHolidayCrew);
+  host.querySelectorAll("[data-holiday-year]").forEach((b) =>
+    b.addEventListener("click", () => {
+      holidaysYear = Number(b.dataset.holidayYear);
+      loadHolidays();
+    })
+  );
+  if (!IS_SUPERUSER) return;
+  const post = async (url, body, statusId) => {
+    const status = document.getElementById(statusId);
+    status.textContent = "";
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.textContent = out.message || "That didn't work.";
+      return null;
+    }
+    return out;
+  };
+  document.getElementById("holidaySettingsSave").addEventListener("click", async () => {
+    const out = await post("/api/payroll/holidays/settings", {
+      enabled: document.getElementById("holidayEnabled").checked,
+      pay_from: document.getElementById("holidayFrom").value,
+    }, "holidaySettingsStatus");
+    if (out) loadHolidays();
+  });
+  document.getElementById("holidayAddBtn").addEventListener("click", async () => {
+    const out = await post("/api/payroll/holidays", {
+      date: document.getElementById("holidayNewDate").value,
+      name: document.getElementById("holidayNewName").value,
+      type: document.getElementById("holidayNewType").value,
+    }, "holidayStatus");
+    if (out) loadHolidays();
+  });
+  const seed = document.getElementById("holidaySeedBtn");
+  if (seed) {
+    seed.addEventListener("click", async () => {
+      const out = await post("/api/payroll/holidays/seed", { year: d.year }, "holidayStatus");
+      if (out) loadHolidays();
+    });
+  }
+  host.querySelectorAll(".holiday-del").forEach((b) =>
+    b.addEventListener("click", async () => {
+      if (!(await confirmDialog(`${b.dataset.name} comes off the list, and payroll for that day is worked out again.`, { title: "Remove this holiday?", confirmLabel: "Remove" }))) return;
+      const res = await fetch(`/api/payroll/holidays/${b.dataset.date}`, { method: "DELETE" });
+      if (res.ok) loadHolidays();
+    })
+  );
+}
+
+// What putting the upcoming holidays on the skeleton crew would change in the
+// schedules that already exist. Nothing is changed until Apply is pressed, and a
+// snapshot of each month is saved first.
+async function checkHolidayCrew() {
+  const out = document.getElementById("holidayCrewResult");
+  out.innerHTML = `<p class="text-xs text-gray-400">Checking the schedule…</p>`;
+  const res = await fetch("/api/schedule/holiday-staffing");
+  if (!res.ok) {
+    out.innerHTML = `<p class="text-xs text-red-600">Could not check the schedule.</p>`;
+    return;
+  }
+  const { plans } = await res.json();
+  if (!plans.length) {
+    out.innerHTML = `<p class="text-sm text-green-700">Every upcoming holiday in a scheduled month is already on the holiday crew. Months not scheduled yet will follow the rule when they are generated.</p>`;
+    return;
+  }
+  const names = (list, fn) => (list.length ? list.map(fn).join(", ") : "—");
+  const rows = plans
+    .map((p) => {
+      const d = new Date(`${p.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      const works = [...p.keep.map((k) => `${k.name} (${k.label})`), ...p.change.map((c) => `${c.name} (${c.from} → ${c.to})`), ...p.add.map((a) => `${a.name} (${a.label}, added)`)];
+      return `<div class="border border-gray-200 rounded-lg px-3 py-2 text-sm">
+        <p class="font-medium">${d} · ${escapeHtml(p.name)} <span class="text-[10px] rounded px-1.5 py-px ${p.type === "regular" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}">${p.type === "regular" ? "Regular holiday" : "Special non-working"}</span></p>
+        <p class="text-xs mt-0.5"><span class="text-gray-500">Works:</span> <b>${works.map(escapeHtml).join(", ") || "—"}</b></p>
+        <p class="text-xs"><span class="text-gray-500">Taken off:</span> ${names(p.remove, (r) => `${escapeHtml(r.name)} (${escapeHtml(r.label)})`)}</p>
+        ${p.note ? `<p class="text-xs text-amber-600">${escapeHtml(p.note)}</p>` : ""}
+        <p class="text-[11px] text-gray-400 mt-0.5">${p.type === "regular" ? "Anyone taken off still gets holiday pay if they worked in the week before." : "A special non-working day: anyone taken off is not paid for it."}</p>
+      </div>`;
+    })
+    .join("");
+  out.innerHTML = `<p class="text-xs text-gray-500 mb-2">${plans.length} holiday${plans.length === 1 ? "" : "s"} in schedules that already exist would change:</p>
+    <div class="flex flex-col gap-2">${rows}</div>
+    <div class="flex items-center gap-3 mt-3">
+      <button type="button" id="holidayCrewApply" class="bg-brand-green text-white text-sm font-semibold rounded-md px-4 py-1.5 hover:opacity-90 transition">Apply to the schedule</button>
+      <span id="holidayCrewStatus" class="text-xs text-gray-500">A snapshot of each month is saved first, so it can be restored.</span>
+    </div>`;
+  document.getElementById("holidayCrewApply").addEventListener("click", async () => {
+    if (!(await confirmDialog("This changes the shifts on those days in the live schedule. A snapshot of each month is saved first.", { title: "Put the holidays on the holiday crew?", confirmLabel: "Apply" }))) return;
+    const status = document.getElementById("holidayCrewStatus");
+    const r = await fetch("/api/schedule/holiday-staffing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dates: plans.map((p) => p.date) }) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      status.textContent = body.message || "That didn't work.";
+      return;
+    }
+    out.innerHTML = `<p class="text-sm text-green-700">Done - ${body.applied} holiday${body.applied === 1 ? "" : "s"} updated. The previous schedule is saved as a snapshot.</p>`;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2466,8 +2700,9 @@ function computeRowTotals(row) {
   const totalDeductions =
     sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed + undertimeDed;
   const basePay = parseFloat(row.dataset.basePay) || 0;
+  const holidayPay = parseFloat(row.dataset.holidayPay) || 0;
   const bonus = parseFloat(row.dataset.bonus) || 0;
-  const netPay = basePay + otPay + bonus + manualBonus - totalDeductions;
+  const netPay = basePay + holidayPay + otPay + bonus + manualBonus - totalDeductions;
 
   row.querySelector(".ot-pay-cell").textContent = formatMoney(otPay);
   row.querySelector(".undertime-pay-cell").textContent = formatMoney(undertimeDed);
@@ -2490,13 +2725,14 @@ function computeRowTotals(row) {
 
 function computeGrandTotals() {
   const totals = {
-    days: 0, base: 0, bonus: 0, manualBonus: 0, otHours: 0, otPay: 0,
+    days: 0, base: 0, holiday: 0, bonus: 0, manualBonus: 0, otHours: 0, otPay: 0,
     undertimeHours: 0, undertimeDed: 0,
     sss: 0, pagibig: 0, philhealth: 0, hmo: 0, errorDed: 0, cashAdvance: 0, absenceDed: 0, ded: 0, net: 0,
   };
 
   Array.from(payrollBody.querySelectorAll("tr")).forEach((row) => {
     const base = parseFloat(row.dataset.basePay) || 0;
+    const holiday = parseFloat(row.dataset.holidayPay) || 0;
     const bonus = parseFloat(row.dataset.bonus) || 0;
     const manualBonus = parseFloat(row.querySelector(".manual-bonus-input").value) || 0;
     const otHours = parseFloat(row.querySelector(".ot-hours-input").value) || 0;
@@ -2512,10 +2748,11 @@ function computeGrandTotals() {
     const undertimeDed = undertimeHours * (parseFloat(row.dataset.undertimeRate) || 0);
     const ded =
       sss + pagibig + philhealth + hmo + errorDed + cashAdvance + absenceDed + undertimeDed;
-    const net = base + otPay + bonus + manualBonus - ded;
+    const net = base + holiday + otPay + bonus + manualBonus - ded;
 
     totals.days += parseFloat(row.dataset.days) || 0;
     totals.base += base;
+    totals.holiday += holiday;
     totals.bonus += bonus;
     totals.manualBonus += manualBonus;
     totals.otHours += otHours;
@@ -2539,6 +2776,7 @@ function computeGrandTotals() {
   const foot = payrollFoot.firstElementChild;
   foot.querySelector(".totals-days").textContent = totals.days;
   foot.querySelector(".totals-base").textContent = formatMoney(totals.base);
+  foot.querySelector(".totals-holiday").textContent = formatMoney(totals.holiday);
   foot.querySelector(".totals-bonus").textContent = formatMoney(totals.bonus);
   foot.querySelector(".totals-manual-bonus").textContent = formatMoney(totals.manualBonus);
   foot.querySelector(".totals-ot-hours").textContent = totals.otHours;
@@ -2564,6 +2802,7 @@ function renderPayrollFooter() {
       <td class="px-3 py-3"></td>
       <td class="px-3 py-3 totals-days"></td>
       <td class="px-3 py-3 totals-base whitespace-nowrap"></td>
+      <td class="px-3 py-3 totals-holiday whitespace-nowrap"></td>
       <td class="px-3 py-3 totals-bonus whitespace-nowrap"></td>
       <td class="px-3 py-3 totals-manual-bonus whitespace-nowrap"></td>
       <td class="px-3 py-3 totals-ot-hours"></td>
@@ -2658,7 +2897,7 @@ document.addEventListener("keydown", (e) => {
 
 function renderPayrollTable(staffList) {
   const headers = [
-    "Name", "Net Pay", "Role", "Days", "Base Pay", "Cup Bonus", "Bonus",
+    "Name", "Net Pay", "Role", "Days", "Base Pay", "Holiday Pay", "Cup Bonus", "Bonus",
     `OT Hrs`, `OT Pay (×₱${currentOtRate})`, "Undertime Hrs", "Undertime Ded.",
     "SSS", "Pag-IBIG", "PhilHealth", "HMO", "Printing Errors",
     "Cash Advance", "Absence Ded.", "Total Ded.",
@@ -2673,6 +2912,7 @@ function renderPayrollTable(staffList) {
     tr.dataset.name = p.name;
     tr.dataset.basePay = p.base_pay;
     tr.dataset.bonus = p.bonus;
+    tr.dataset.holidayPay = p.holiday_pay || 0;
     tr.dataset.days = p.days_worked;
     tr.dataset.absenceDeduction = p.absence_deduction;
 
@@ -2707,6 +2947,18 @@ function renderPayrollTable(staffList) {
     baseTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
     baseTd.textContent = formatMoney(p.base_pay);
     tr.appendChild(baseTd);
+
+    // holiday pay: only the part on top of the day already in base pay; the
+    // tooltip says which holidays it is for and why
+    const holidayTd = document.createElement("td");
+    holidayTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
+    holidayTd.textContent = p.holiday_pay ? formatMoney(p.holiday_pay) : "—";
+    if ((p.holiday_lines || []).length) {
+      holidayTd.title = p.holiday_lines
+        .map((l) => `${formatDateLabel(l.date)} ${l.name}: ${l.status}${l.amount ? " (" + formatMoney(l.amount) + ")" : ""}`)
+        .join("\n");
+    }
+    tr.appendChild(holidayTd);
 
     const bonusTd = document.createElement("td");
     bonusTd.className = "px-3 py-2.5 align-top whitespace-nowrap";
@@ -3168,10 +3420,13 @@ function employeeCardHtml(s) {
           </label>
         </div>
         <div class="flex-1 min-w-0">
-          <p class="text-[11px] text-gray-400 font-mono uppercase tracking-wide">
-            ${escapeHtml(s.name)} &middot; ${escapeHtml(s.category)}
-            ${s.active === false ? '<span class="ml-1 text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5 normal-case">Archived</span>' : ""}
-          </p>
+          <div class="flex items-center gap-2 flex-wrap mb-1">
+            <label class="text-[11px] text-gray-400 font-mono uppercase tracking-wide">Nickname</label>
+            <input type="text" maxlength="20" class="nickname-input text-sm font-semibold border border-gray-200 rounded-md px-2 py-0.5 w-36 focus:border-brand-blue focus:outline-none" value="${escapeHtml(s.name)}" title="The short name shown on the schedule, payroll and login" />
+            <button type="button" class="rename-employee-btn hidden text-xs font-semibold text-white bg-brand-blue rounded-md px-2.5 py-1 hover:brightness-110 transition">Rename</button>
+            <span class="text-[11px] text-gray-400 font-mono uppercase tracking-wide">&middot; ${escapeHtml(s.category)}</span>
+            ${s.active === false ? '<span class="text-[11px] text-gray-500 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5">Archived</span>' : ""}
+          </div>
           <input class="full-name-input font-display font-semibold text-lg w-full border-b border-transparent hover:border-gray-200 focus:border-brand-blue focus:outline-none bg-transparent" value="${escapeHtml(s.full_name)}" />
           <input class="role-input text-xs text-gray-500 w-full border-b border-transparent hover:border-gray-200 focus:border-brand-blue focus:outline-none bg-transparent mt-0.5" value="${escapeHtml(s.role)}" />
         </div>
@@ -3397,6 +3652,16 @@ function renderEmployees() {
       loadEmployeeAdvances(name, card);
     }
 
+    const nicknameInput = card.querySelector(".nickname-input");
+    const renameBtn = card.querySelector(".rename-employee-btn");
+    if (nicknameInput && renameBtn) {
+      // the button only appears once the nickname has actually been changed
+      nicknameInput.addEventListener("input", () => renameBtn.classList.toggle("hidden", nicknameInput.value.trim() === name || !nicknameInput.value.trim()));
+      nicknameInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !renameBtn.classList.contains("hidden")) renameBtn.click();
+      });
+      renameBtn.addEventListener("click", () => renameEmployee(card, name, nicknameInput.value.trim()));
+    }
     const archiveBtn = card.querySelector(".archive-employee-btn");
     if (archiveBtn) archiveBtn.addEventListener("click", () => archiveEmployee(card, name));
     const restoreBtn = card.querySelector(".restore-employee-btn");
@@ -3409,6 +3674,34 @@ function renderEmployees() {
       });
     }
   });
+}
+
+async function renameEmployee(card, name, newName) {
+  const confirmed = window.confirm(
+    `Change ${name}'s nickname to ${newName}?\n\n` +
+      "It changes everywhere the short name shows: the schedule, payroll and the login picker. " +
+      "Past schedules, pay and leave stay with the same person.\n\n" +
+      "If they are signed in on another device they will need to sign in again."
+  );
+  if (!confirmed) {
+    card.querySelector(".nickname-input").value = name;
+    card.querySelector(".rename-employee-btn").classList.add("hidden");
+    return;
+  }
+  const statusEl = card.querySelector(".employee-save-status");
+  statusEl.textContent = "Renaming…";
+  const res = await fetch(`/api/staff/${encodeURIComponent(name)}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: newName }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    statusEl.textContent = data.message || "Could not rename.";
+    return;
+  }
+  selectedEmployeeName = data.name;
+  await Promise.all([loadEmployees(), loadSchedule()]);
 }
 
 async function archiveEmployee(card, name) {

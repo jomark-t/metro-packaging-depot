@@ -87,10 +87,13 @@
       </thead>
       <tbody class="divide-y divide-gray-100">
         {% for day in chunk.days %}
-        <tr class="{{ 'bg-green-50/40' if day.weekday == 'Sunday' else ('bg-gray-50' if day.weekday == 'Saturday' else '') }}">
+        <tr class="{{ 'bg-purple-100/70' if day.holiday else ('bg-green-50/40' if day.weekday == 'Sunday' else ('bg-gray-50' if day.weekday == 'Saturday' else '')) }}" {% if day.holiday %}style="background-color:#ede9fe"{% endif %}>
           <td class="px-3.5 py-2.5 align-top whitespace-nowrap">
             <span class="font-mono font-medium text-[15px]">{{ day.day_num }}</span>
             <span class="block text-[10px] uppercase tracking-wide text-gray-500 mt-0.5">{{ day.weekday_short }}</span>
+            {% if day.holiday %}
+            <span class="block text-[9px] font-semibold leading-tight mt-0.5 text-purple-700" style="color:#7e22ce">{{ day.holiday.name }}</span>
+            {% endif %}
           </td>
           {% for s in staff %}
           <td class="px-3.5 py-2.5 align-top{{ ' border-l border-gray-200' if loop.index0 > 0 and s.group != staff[loop.index0 - 1].group else '' }}">

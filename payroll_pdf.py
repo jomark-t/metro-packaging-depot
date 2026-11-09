@@ -87,6 +87,8 @@ def _payslip_rows(person, ot_rate):
             ("Days worked", f"{person['days_worked']} d &times; {_money(person['daily_rate'])}"),
             ("Base pay", _money(person["base_pay"])),
         ]
+    if person.get("holiday_pay"):
+        rows.append(("Holiday pay", _money(person["holiday_pay"])))
     if person["has_bonus"]:
         rows.append(("Cup bonus", _money(person["bonus"])))
     if person.get("manual_bonus"):
