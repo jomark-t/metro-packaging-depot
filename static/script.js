@@ -533,7 +533,6 @@ const OPS_TAB_DEFS = [
   ["capitalExpense", "tabCapitalExpenseBtn", "capitalExpenseView"],
   ["monthlySales", "tabMonthlySalesBtn", "monthlySalesView"],
 ];
-const scheduleControls = document.getElementById("scheduleControls");
 const payrollControls = document.getElementById("payrollControls");
 const scheduleView = document.getElementById("scheduleView");
 const payrollView = document.getElementById("payrollView");
@@ -543,7 +542,7 @@ const employeesView = document.getElementById("employeesView");
 // tabs are only registered when they do.
 const TABS = {
   dashboard: { btn: tabDashboardBtn, view: dashboardView, controls: null },
-  schedule: { btn: tabScheduleBtn, view: scheduleView, controls: scheduleControls },
+  schedule: { btn: tabScheduleBtn, view: scheduleView, controls: null },
 };
 // Time Off only exists for people who take leave or approve it.
 if (tabLeaveBtn) TABS.leave = { btn: tabLeaveBtn, view: leaveView, controls: null };
@@ -3180,7 +3179,12 @@ async function loadThirteenthMonth() {
       total += p.thirteenth_month;
       // salaried staff earn by the month, so their day count is context
       // rather than the multiplier - show the basis that actually applies
-      const basis = p.monthly_salary
+      const basis = p.pay_history
+        ? `${p.days_worked} d worked · ${[
+            p.daily_earned ? `${formatMoney(p.daily_earned)} by the day` : "",
+            p.salary_earned ? `${formatMoney(p.salary_earned)} salary${p.absence_deduction ? ` − ${formatMoney(p.absence_deduction)} absences` : ""}` : "",
+          ].filter(Boolean).join(" + ")} <span class="text-brand-blue">(pay history)</span>`
+        : p.monthly_salary
         ? `${p.days_worked} d worked · ${formatMoney(p.monthly_salary)}/mo × ${p.months_counted}`
         : `${p.days_worked} d × ${formatMoney(p.daily_rate)}`;
       return `
@@ -3262,6 +3266,19 @@ function sectionHtml(title, innerHtml, headerExtraHtml) {
     </section>
   `;
 }
+
+// The sections of an employee's card, one tab each. All of them stay on the
+// page (hidden when not shown) so a single Save still saves every field.
+const EMPLOYEE_CARD_TABS = [
+  ["basic", "Basic info"],
+  ["gov", "Government"],
+  ["bank", "Bank"],
+  ["pto", "Paid time off"],
+  ["advances", "Cash advances"],
+  ["pay", "Pay history"],
+  ["access", "Login & access"],
+];
+let employeeCardTab = "basic"; // stays on the same tab when switching between employees
 
 function employeeCardHtml(s) {
   const photoSrc = s.photo_filename ? `/static/uploads/${s.photo_filename}` : "";
@@ -3412,6 +3429,33 @@ function employeeCardHtml(s) {
     <p class="text-[11px] text-gray-400 mt-2">Payroll &amp; HRMS always stays available.</p>
   `;
 
+  const payHistoryHtml = `
+    <div class="pay-history-wrap text-sm text-gray-600 mb-3">Loading…</div>
+    ${
+      IS_SUPERUSER
+        ? `<div class="grid grid-cols-2 gap-2 text-xs">
+      <label class="block"><span class="text-gray-500">Pay starts</span>
+        <input type="date" class="ph-date-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+      <label class="block"><span class="text-gray-500">Note</span>
+        <input class="ph-note-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" placeholder="e.g. raise, promoted" /></label>
+      <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
+        <input type="number" min="0" step="0.01" class="ph-daily-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+      <label class="block"><span class="text-gray-500">or Monthly salary (₱)</span>
+        <input type="number" min="0" step="0.01" class="ph-monthly-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+    </div>
+    <div class="flex items-center gap-3 mt-3 flex-wrap">
+      <button type="button" class="ph-add-btn text-xs bg-brand-blue text-white font-semibold rounded-md px-3 py-1.5 hover:brightness-110 transition">Add pay change</button>
+      <span class="ph-status text-xs text-gray-500"></span>
+    </div>`
+        : ""
+    }
+    <p class="text-[11px] text-gray-400 mt-2">
+      Used for the 13th month only: each day is priced at the pay that applied then. Changing the rate or salary
+      on this card adds a line here dated today (add one with the right date if the raise started earlier).
+      Payroll cutoffs use the rate on the card. With no entries, today's rate applies to the whole year.
+    </p>
+  `;
+
   // one box for how they sign in and what they can open
   const subHeading = (text) => `<p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-2">${text}</p>`;
   const loginAccessHtml = `
@@ -3446,18 +3490,32 @@ function employeeCardHtml(s) {
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        ${sectionHtml("Basic Information", basicInfoHtml)}
-        ${sectionHtml("Government (auto-filled each cutoff)", governmentHtml)}
-        ${sectionHtml("Bank", bankHtml)}
-        ${sectionHtml(
-          "Paid Time Off",
-          ptoHtml,
-          '<select class="pto-year-select text-xs border border-gray-300 rounded-md px-2 py-1"></select>'
-        )}
-        ${sectionHtml("Cash Advances", advancesHtml)}
-        <div class="lg:col-span-2">${sectionHtml("Login &amp; App Access", loginAccessHtml)}</div>
+      <div class="flex flex-wrap gap-x-1 gap-y-1 border-b border-gray-200 mb-4">
+        ${EMPLOYEE_CARD_TABS.map(
+          ([id, label]) =>
+            `<button type="button" class="emp-tab-btn text-sm font-semibold px-3.5 py-2 -mb-px border-b-2 transition ${
+              id === employeeCardTab ? "border-brand-blue text-brand-blue" : "border-transparent text-gray-500 hover:text-black"
+            }" data-tab="${id}">${label}</button>`
+        ).join("")}
       </div>
+      ${[
+        ["basic", sectionHtml("Basic Information", basicInfoHtml)],
+        ["gov", sectionHtml("Government (auto-filled each cutoff)", governmentHtml)],
+        ["bank", sectionHtml("Bank", bankHtml)],
+        [
+          "pto",
+          sectionHtml(
+            "Paid Time Off",
+            ptoHtml,
+            '<select class="pto-year-select text-xs border border-gray-300 rounded-md px-2 py-1"></select>'
+          ),
+        ],
+        ["advances", sectionHtml("Cash Advances", advancesHtml)],
+        ["pay", sectionHtml("Pay rate history", payHistoryHtml)],
+        ["access", sectionHtml("Login &amp; App Access", loginAccessHtml)],
+      ]
+        .map(([id, html]) => `<div class="emp-panel${id === employeeCardTab ? "" : " hidden"}" data-panel="${id}">${html}</div>`)
+        .join("")}
 
       <div class="flex items-center gap-3 mt-5 flex-wrap">
         <button class="save-employee-btn bg-brand-green text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 active:brightness-90 transition">Save</button>
@@ -3622,6 +3680,19 @@ function renderEmployees() {
   employeesGrid.querySelectorAll("[data-name]").forEach((card) => {
     const name = card.dataset.name;
     if (HR_VIEW_ONLY) card.classList.add("hr-view-only");
+    card.querySelectorAll(".emp-tab-btn").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        employeeCardTab = btn.dataset.tab;
+        card.querySelectorAll(".emp-tab-btn").forEach((b) => {
+          const on = b.dataset.tab === employeeCardTab;
+          b.classList.toggle("border-brand-blue", on);
+          b.classList.toggle("text-brand-blue", on);
+          b.classList.toggle("border-transparent", !on);
+          b.classList.toggle("text-gray-500", !on);
+        });
+        card.querySelectorAll(".emp-panel").forEach((p) => p.classList.toggle("hidden", p.dataset.panel !== employeeCardTab));
+      })
+    );
     card.querySelector(".save-employee-btn").addEventListener("click", () => saveEmployee(card, name));
     const photoInput = card.querySelector(".photo-input");
     photoInput.addEventListener("change", () => uploadEmployeePhoto(card, name, photoInput));
@@ -3637,6 +3708,7 @@ function renderEmployees() {
     }
     yearSelect.addEventListener("change", () => loadEmployeePto(name, card, yearSelect.value));
     loadEmployeePto(name, card, currentYear);
+    loadPayHistory(name, card);
 
     const saveLoginBtn = card.querySelector(".save-login-btn");
     if (saveLoginBtn) {
@@ -3687,6 +3759,72 @@ function renderEmployees() {
       });
     }
   });
+}
+
+function renderPayHistory(card, name, history) {
+  const wrap = card.querySelector(".pay-history-wrap");
+  if (!wrap) return;
+  if (!history.length) {
+    wrap.innerHTML = `<span class="text-gray-400">No pay changes recorded.</span>`;
+  } else {
+    const fmt = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    wrap.innerHTML = `<table class="w-full text-xs">
+      <thead><tr class="text-gray-400 text-left"><th class="py-1 pr-2 font-normal">From</th><th class="py-1 pr-2 font-normal">Pay</th><th class="py-1 pr-2 font-normal">Note</th><th></th></tr></thead>
+      <tbody>${history
+        .map(
+          (h) => `<tr class="border-t border-gray-100">
+        <td class="py-1.5 pr-2 whitespace-nowrap">${fmt(h.effective_from)}</td>
+        <td class="py-1.5 pr-2 whitespace-nowrap font-medium">${h.monthly_salary ? `${formatMoney(h.monthly_salary)} / month` : `${formatMoney(h.daily_rate)} / day`}</td>
+        <td class="py-1.5 pr-2 text-gray-500">${escapeHtml(h.note)}</td>
+        <td class="py-1.5 text-right">${IS_SUPERUSER ? `<button type="button" class="ph-del text-gray-300 hover:text-red-600" data-date="${h.effective_from}" aria-label="Remove">&#10005;</button>` : ""}</td></tr>`
+        )
+        .join("")}</tbody></table>`;
+    wrap.querySelectorAll(".ph-del").forEach((b) =>
+      b.addEventListener("click", async () => {
+        if (!window.confirm("Remove this pay change? The 13th month is worked out again without it.")) return;
+        const res = await fetch(`/api/staff/${encodeURIComponent(name)}/pay-history/${b.dataset.date}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) renderPayHistory(card, name, data.history);
+      })
+    );
+  }
+}
+
+async function loadPayHistory(name, card) {
+  const wrap = card.querySelector(".pay-history-wrap");
+  if (!wrap) return;
+  try {
+    const res = await fetch(`/api/staff/${encodeURIComponent(name)}/pay-history`);
+    if (!res.ok) throw new Error();
+    renderPayHistory(card, name, (await res.json()).history);
+  } catch (err) {
+    wrap.textContent = "Could not load the pay history.";
+  }
+  const add = card.querySelector(".ph-add-btn");
+  if (add && !add.dataset.bound) {
+    add.dataset.bound = "1";
+    add.addEventListener("click", async () => {
+      const status = card.querySelector(".ph-status");
+      status.textContent = "";
+      const res = await fetch(`/api/staff/${encodeURIComponent(name)}/pay-history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          effective_from: card.querySelector(".ph-date-input").value,
+          daily_rate: card.querySelector(".ph-daily-input").value,
+          monthly_salary: card.querySelector(".ph-monthly-input").value,
+          note: card.querySelector(".ph-note-input").value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        status.textContent = data.message || "Could not save.";
+        return;
+      }
+      ["ph-date-input", "ph-daily-input", "ph-monthly-input", "ph-note-input"].forEach((c) => (card.querySelector("." + c).value = ""));
+      renderPayHistory(card, name, data.history);
+    });
+  }
 }
 
 async function renameEmployee(card, name, newName) {
@@ -3938,6 +4076,7 @@ async function saveEmployee(card, name) {
     });
     if (!res.ok) throw new Error("Save failed");
     statusEl.textContent = "Saved.";
+    loadPayHistory(name, card); // a changed rate adds a line to the pay history
     setTimeout(() => (statusEl.textContent = ""), 2500);
   } catch (err) {
     statusEl.textContent = "Could not save. Please try again.";
@@ -8513,6 +8652,7 @@ function renderStorehubPreview(data) {
     .map((d) => {
       const notes = [];
       if (d.status === "update") notes.push(`was ${printMoney(d.was.sales)}${d.was.own_use ? ` + ${printMoney(d.was.own_use)} own use` : ""}`);
+      if (d.summary && d.fills_gp) notes.push(`gross profit ${printMoney(d.gross_profit)} filled in`);
       if (d.own_use) notes.push(`${d.own_use_receipts} own-use receipt${d.own_use_receipts === 1 ? "" : "s"} (${printMoney(d.own_use)}) counted in Sales`);
       if (d.cancelled) notes.push(`${d.cancelled} cancelled receipt${d.cancelled === 1 ? "" : "s"} (${printMoney(d.cancelled_amount)}) left out`);
       if (d.card_cheque) notes.push(`${printMoney(d.card_cheque)} card/cheque counted as Bank`);
@@ -8531,6 +8671,7 @@ function renderStorehubPreview(data) {
     })
     .join("");
   const total = data.days.reduce((n, d) => n + d.sales, 0);
+  const isSummary = data.days.some((d) => d.summary);
   const touching = data.days.filter((d) => d.status !== "same").length;
   // the same file also files each receipt under the client it names
   const cl = data.clients;
@@ -8553,7 +8694,11 @@ function renderStorehubPreview(data) {
       <tbody>${rows}</tbody></table>
     <p class="text-sm mt-3"><b>${data.days.length}</b> day${data.days.length === 1 ? "" : "s"}, <b>${printMoney(total)}</b> in sales.
       ${touching ? `${touching} will be added or changed.` : "Everything is already in Monthly Sales."}
-      <span class="text-gray-400">Gross profit, collected dates and notes are left as they are.</span></p>${clientLine}`;
+      <span class="text-gray-400">${
+        isSummary
+          ? "This is a daily-totals file: it has no payment split or own use, so Cash, Gcash, Bank, PO and Own Use stay as they are. Gross profit is filled in only on days where it is empty."
+          : "Gross profit, collected dates and notes are left as they are."
+      }</span></p>${clientLine}`;
   const go = document.getElementById("storehubGo");
   const todo = touching || clientTodo;
   go.disabled = !todo;

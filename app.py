@@ -526,6 +526,23 @@ def init_db():
             staff_id INTEGER NOT NULL REFERENCES staff(id)
         )"""
     )
+    # what each person was paid when: one row per change of base pay, effective
+    # from a date. Only the 13th month reads it (so each day is priced at the
+    # rate that applied then); the payroll cutoffs keep using the current rate on
+    # the employee card.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS staff_pay_history (
+            id SERIAL PRIMARY KEY,
+            staff_id INTEGER NOT NULL REFERENCES staff(id),
+            effective_from DATE NOT NULL,
+            daily_rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+            monthly_salary NUMERIC(12,2) NOT NULL DEFAULT 0,
+            note TEXT,
+            created_by TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (staff_id, effective_from)
+        )"""
+    )
     # accounts for people who aren't on the payroll - co-owners and the
     # like. They're app_users rows with staff_name NULL and is_superuser
     # FALSE: read-only everywhere, Dashboard and Schedule by default, and
@@ -1236,6 +1253,19 @@ def _part_timer_sunday_cover(part_timers, other_sundays):
     return cover
 
 
+def started_by(start_text, day):
+    """False only for someone whose start date is after `day`. No start date (the
+    people who were here before it was asked) or one that can't be read means
+    they are already working."""
+    start_text = (start_text or "").strip()
+    if not start_text:
+        return True
+    try:
+        return date.fromisoformat(start_text) <= day
+    except ValueError:
+        return True
+
+
 class ScheduleGenerationError(Exception):
     """The roster can't drive the generator (see generate_schedule)."""
 
@@ -1258,8 +1288,12 @@ def generate_schedule(year, month):
     db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     cur = db.cursor()
 
-    cur.execute("SELECT id, name, target, category, role FROM staff WHERE active ORDER BY id")
+    cur.execute("SELECT id, name, target, category, role, start_date FROM staff WHERE active ORDER BY id")
     staff_rows = {r["name"]: dict(r) for r in cur.fetchall()}
+
+    def started(name, d):
+        """Whether `name` has begun working here by day d (their start date)."""
+        return started_by(staff_rows[name].get("start_date"), d)
 
     def names_in(category):
         return [n for n, r in staff_rows.items() if r["category"] == category]
@@ -1307,7 +1341,14 @@ def generate_schedule(year, month):
     pt_sunday_cover = _part_timer_sunday_cover(part_timers, other_sundays)
     # operators don't work holidays, so those days aren't part of the weekly
     # Printer/Checker split (it divides the days that are left evenly)
-    machine_role_map = compute_machine_roles([d for d in days if d not in holiday_days], operators)
+    # (and only operators who have started are in the split on a given day)
+    machine_role_map = {}
+    role_segments = {}
+    for d in days:
+        if d not in holiday_days:
+            role_segments.setdefault(tuple(n for n in operators if started(n, d)), []).append(d)
+    for active_ops, seg_days in role_segments.items():
+        machine_role_map.update(compute_machine_roles(seg_days, list(active_ops)))
 
     # 2nd Wednesday of the month is a guaranteed all-hands day (operators
     # and part-timers already work every Wednesday, so this just pulls the
@@ -1326,7 +1367,8 @@ def generate_schedule(year, month):
     # --- Inventory day: everyone works -------------------------------
     if first_sunday is not None:
         for name in staff_rows:
-            add(first_sunday, name, "Inventory", SHIFT_TIME_RANGES["Inventory"])
+            if started(name, first_sunday):
+                add(first_sunday, name, "Inventory", SHIFT_TIME_RANGES["Inventory"])
 
     # --- Pass A: fixed assignments (machine operators + part-timers) ---
     for d in days:
@@ -1341,11 +1383,14 @@ def generate_schedule(year, month):
             continue
 
         if wd <= 4 and operators:  # Mon-Fri
-            roles = machine_role_map[d]
+            roles = machine_role_map.get(d, {})
             for name in operators:
-                add(d, name, roles[name], SHIFT_TIME_RANGES[roles[name]])
+                if name in roles:
+                    add(d, name, roles[name], SHIFT_TIME_RANGES[roles[name]])
 
         for name in part_timers:
+            if not started(name, d):
+                continue
             if wd == 2:  # Wednesday - covers the Opening slot
                 add(d, name, "Opening", SHIFT_TIME_RANGES["Opening"])
             elif wd == 4:  # Friday - assist only, doesn't cover a slot
@@ -1399,6 +1444,8 @@ def generate_schedule(year, month):
         if d.weekday() == 6 or (d in comp_off and d not in holiday_days):
             continue
         for name in managers:
+            if not started(name, d):
+                continue
             phase = manager_phase_for(name, d)
             add(d, name, phase, SHIFT_TIME_RANGES[phase])
 
@@ -1410,7 +1457,9 @@ def generate_schedule(year, month):
                 continue
             held = {e["label"] for e in assignments[d]}
             label = "Closing" if "Opening" in held else "Opening"
-            add(d, part_timers[i % len(part_timers)], label, SHIFT_TIME_RANGES[label])
+            pts = [n for n in part_timers if started(n, d)]
+            if pts:
+                add(d, pts[i % len(pts)], label, SHIFT_TIME_RANGES[label])
 
     # --- Pass B: fill the sales pool, biasing toward 2-day-off blocks,
     #             capping consecutive work days at 6, spreading overlap
@@ -1447,9 +1496,21 @@ def generate_schedule(year, month):
 
     # A sales person with no monthly target set is treated as full-time
     # (Mon-Sat); the 6-day cap and off-pairing below still apply.
-    default_target = last_day_num - len(sundays)
-    targets = {n: (staff_rows[n]["target"] or default_target) for n in sales_pool}
-    off_needed = {n: max(0, last_day_num - targets[n]) for n in sales_pool}
+    # Someone who starts mid-month only owes the days from their start date, so
+    # the target is pro-rated to those (a full month works out exactly as before).
+    avail_days = {n: [d for d in days if started(n, d)] for n in sales_pool}
+    targets = {}
+    for n in sales_pool:
+        mine = avail_days[n]
+        if staff_rows[n]["target"]:
+            targets[n] = (
+                staff_rows[n]["target"]
+                if len(mine) == last_day_num
+                else round(staff_rows[n]["target"] * len(mine) / last_day_num)
+            )
+        else:
+            targets[n] = len(mine) - sum(1 for d in mine if d.weekday() == 6)
+    off_needed = {n: max(0, len(avail_days[n]) - targets[n]) for n in sales_pool}
     consecutive_worked = {n: 0 for n in sales_pool}
     shift_state = {n: {"type": None, "streak": 0} for n in sales_pool}
 
@@ -1517,11 +1578,12 @@ def generate_schedule(year, month):
     extra_toggle = 0
 
     for d in days:
+        pool_d = [n for n in sales_pool if started(n, d)]  # nobody is rostered before their start date
         if d == first_sunday:
             # inventory day: everyone works it, but it's a distinct task -
             # counts toward the 6-day work cap, but breaks any
             # Opening/Closing streak (like a day off would)
-            for n in sales_pool:
+            for n in pool_d:
                 consecutive_worked[n] += 1
                 shift_state[n] = {"type": None, "streak": 0}
             continue
@@ -1533,14 +1595,14 @@ def generate_schedule(year, month):
             # machine side. Everyone else is off whatever their day-off quota
             # says - like the Sunday cap, this is a hard limit, not a target.
             cap = MAX_CONSECUTIVE_DAYS
-            fresh = [n for n in holiday_pool if consecutive_worked[n] < cap]
+            fresh = [n for n in holiday_pool if n in pool_d and consecutive_worked[n] < cap]
             # the person who most needs the days (fewest days off still owed)
             # and has worked the fewest in a row takes it
             fresh.sort(key=lambda n: (off_needed[n], consecutive_worked[n]))
-            rest = [n for n in holiday_pool if n not in fresh]
+            rest = [n for n in holiday_pool if n in pool_d and n not in fresh]
             rest.sort(key=lambda n: consecutive_worked[n])  # only if everyone is at the cap
             working_today = (fresh + rest)[: len(required)]
-            offs_today = [n for n in sales_pool if n not in working_today]
+            offs_today = [n for n in pool_d if n not in working_today]
             for n in offs_today:
                 off_needed[n] -= 1
             for name, label, time_range in assign_day_labels(working_today, list(required)):
@@ -1552,7 +1614,7 @@ def generate_schedule(year, month):
                 consecutive_worked[n] += 1
             continue
 
-        allowed_off = max(0, len(sales_pool) - len(required))
+        allowed_off = max(0, len(pool_d) - len(required))
         if d in spread_overlap_days:
             allowed_off = 0  # designated all-hands / spread coverage day
 
@@ -1566,7 +1628,7 @@ def generate_schedule(year, month):
         cap_today = MAX_CONSECUTIVE_DAYS
         if first_sunday is not None and d == first_sunday - timedelta(days=1):
             cap_today = MAX_CONSECUTIVE_DAYS - 1
-        mandatory = [n for n in sales_pool if consecutive_worked[n] >= cap_today]
+        mandatory = [n for n in pool_d if consecutive_worked[n] >= cap_today]
         mandatory.sort(key=lambda n: consecutive_worked[n], reverse=True)
 
         # rare edge case: more people hit the cap than the day can spare on
@@ -1579,7 +1641,7 @@ def generate_schedule(year, month):
             if resting_pt is not None:
                 add(d, resting_pt, "Opening", SHIFT_TIME_RANGES["Opening"])
                 required = required[1:]  # the part-timer now covers one Opening slot
-                allowed_off = max(0, len(sales_pool) - len(required))
+                allowed_off = max(0, len(pool_d) - len(required))
 
         for n in mandatory:
             if n in offs_today:
@@ -1605,7 +1667,7 @@ def generate_schedule(year, month):
                 off_streak_person = None
 
         while len(offs_today) < allowed_off:
-            candidates = [n for n in sales_pool if n not in offs_today and off_needed[n] > 0]
+            candidates = [n for n in pool_d if n not in offs_today and off_needed[n] > 0]
             if not candidates:
                 break
             candidates.sort(key=lambda n: off_needed[n], reverse=True)
@@ -1620,7 +1682,7 @@ def generate_schedule(year, month):
         # nobody "needing" an off day, still force enough rest to hit the cap
         if d.weekday() == 6:
             while len(offs_today) < allowed_off:
-                candidates = [n for n in sales_pool if n not in offs_today]
+                candidates = [n for n in pool_d if n not in offs_today]
                 if not candidates:
                     break
                 candidates.sort(key=lambda n: off_needed[n], reverse=True)
@@ -1628,7 +1690,7 @@ def generate_schedule(year, month):
                 offs_today.append(chosen)
                 off_needed[chosen] -= 1
 
-        working_today = [n for n in sales_pool if n not in offs_today]
+        working_today = [n for n in pool_d if n not in offs_today]
 
         # more workers than required labels (nobody needed an off day) ->
         # natural busy-day overlap; double up on Opening/Closing (not Support).
@@ -1725,6 +1787,7 @@ def generate_schedule(year, month):
                     for n in sales_pool
                     if n != worker
                     and not (d in holiday_days and n in machine_side)  # never hand a holiday to the machine side
+                    and started(n, d)
                     and not _works(d, n)
                     and not _isolated(n)
                     and ((prev_d is not None and _works(prev_d, n)) or (next_d is not None and _works(next_d, n)))
@@ -1742,6 +1805,8 @@ def generate_schedule(year, month):
     counts = {n: 0 for n in staff_rows}
     for d in days:
         for a in assignments[d]:
+            if not started(a["name"], d):
+                continue  # belt and braces: nobody is saved before their start date
             staff_id = staff_rows[a["name"]]["id"]
             cur.execute(
                 "INSERT INTO schedule (staff_id, date, shift_label, time_range, detail) VALUES (%s,%s,%s,%s,%s)",
@@ -1769,12 +1834,12 @@ def plan_holiday_staffing(cur, start, end):
     holidays = {d: h for d, h in fetch_holidays(cur, start, end).items() if d.weekday() <= 5}
     if not holidays:
         return []
-    cur.execute("SELECT id, name, category, role FROM staff WHERE active ORDER BY id")
+    cur.execute("SELECT id, name, category, role, start_date FROM staff WHERE active ORDER BY id")
     staff = [dict(r) for r in cur.fetchall()]
     by_id = {p["id"]: p for p in staff}
-    managers = [p for p in staff if p["category"] == "manager"]
+    all_managers = [p for p in staff if p["category"] == "manager"]
     machines = {p["id"] for p in staff if schedule_group(p) == "printing"}
-    sales_side = [p for p in staff if p["category"] in ("sales", "sales_pt") and p["id"] not in machines]
+    all_sales_side = [p for p in staff if p["category"] in ("sales", "sales_pt") and p["id"] not in machines]
 
     cur.execute("SELECT staff_id, date, shift_label FROM schedule WHERE date BETWEEN %s AND %s",
                 (start.isoformat(), end.isoformat()))
@@ -1792,6 +1857,9 @@ def plan_holiday_staffing(cur, start, end):
             continue  # nothing scheduled for that day: the month hasn't been built
         item = {"date": iso, "name": h["name"], "type": h["type"], "keep": [], "remove": [], "add": [], "change": [], "note": ""}
         notes = []
+        # someone who starts after this holiday can't be put on it
+        managers = [p for p in all_managers if started_by(p["start_date"], day)]
+        sales_side = [p for p in all_sales_side if started_by(p["start_date"], day)]
 
         def label_of(p):
             return today_rows.get(p["id"])
@@ -2486,25 +2554,61 @@ def compute_payroll(db, start, end, pay_date):
     }
 
 
+def _pay_terms(staff_row, history):
+    """The base pay a person had over time, as [(from_date, daily_rate,
+    monthly_salary)] oldest first. Without any history it is just what the
+    employee card says today, for all time. Days before the first entry take
+    the first entry's pay."""
+    if history:
+        return [(h["effective_from"], float(h["daily_rate"] or 0), float(h["monthly_salary"] or 0)) for h in history]
+    return [(date.min, float(staff_row.get("daily_rate") or 0), float(staff_row.get("monthly_salary") or 0))]
+
+
+def _month_segments(terms, first, last):
+    """Split one calendar month wherever the base pay changed:
+    [(seg_start, seg_end, daily_rate, monthly_salary)]."""
+    cuts = [first] + [t[0] for t in terms if first < t[0] <= last]
+    segs = []
+    for i, start in enumerate(cuts):
+        end = (cuts[i + 1] - timedelta(days=1)) if i + 1 < len(cuts) else last
+        term = terms[0]
+        for t in terms:
+            if t[0] <= start:
+                term = t
+        segs.append((start, end, term[1], term[2]))
+    return segs
+
+
 def compute_thirteenth_month(db, year):
     """13th month pay = total *basic* salary earned in the calendar year
     divided by 12 (PD 851). Basic salary only - overtime, cup bonus,
     discretionary bonus and allowances are all excluded by law, and
     deductions for absences and undertime reduce it.
 
-    Daily-rate staff: days actually worked that year x their daily rate,
-    read straight off the schedule (a Half Day counts as 0.5,
-    same as in the semi-monthly payroll).
+    Every day is priced at the base pay that applied on that day (see
+    staff_pay_history), so a raise or a change from daily pay to a monthly
+    salary part-way through the year is counted exactly, not backdated.
 
-    Fixed-salary staff (the manager): her monthly salary for each month
-    the schedule covers, less the same unreported-day absence deduction
-    the cutoffs apply - computed calendar month by calendar month here,
-    rather than per cutoff, since the year is the unit that matters.
+    Daily-rate days: days actually worked x the daily rate then, read straight
+    off the schedule (a Half Day counts as 0.5, same as in the semi-monthly
+    payroll).
+
+    Fixed-salary stretches (the manager): the monthly salary for each month the
+    schedule covers - pro-rated by calendar days if the salary starts or
+    changes mid-month - less the same unreported-day absence deduction the
+    cutoffs apply, worked out month by month here since the year is the unit
+    that matters.
 
     Months with no schedule at all are skipped rather than counted as
     zero-earning, so running this mid-year reports what's been earned so
     far instead of understating it."""
     cur = db.cursor()
+    cur.execute(
+        "SELECT staff_id, effective_from, daily_rate, monthly_salary FROM staff_pay_history ORDER BY staff_id, effective_from"
+    )
+    history_by_staff = {}
+    for h in cur.fetchall():
+        history_by_staff.setdefault(h["staff_id"], []).append(h)
     cur.execute(
         "SELECT id, name, full_name, role, category, daily_rate, monthly_salary FROM staff ORDER BY id"
     )
@@ -2520,11 +2624,14 @@ def compute_thirteenth_month(db, year):
 
     days_worked = {s["id"]: 0.0 for s in staff_rows}
     dates_worked = {s["id"]: set() for s in staff_rows}
+    day_fraction = {s["id"]: {} for s in staff_rows}
     months_with_data = set()
     for r in schedule_rows:
         d = date.fromisoformat(r["date"])
-        days_worked[r["staff_id"]] += SHIFT_DAY_FRACTION.get(r["shift_label"], 1.0)
+        frac = SHIFT_DAY_FRACTION.get(r["shift_label"], 1.0)
+        days_worked[r["staff_id"]] += frac
         dates_worked[r["staff_id"]].add(d)
+        day_fraction[r["staff_id"]][d] = frac
         months_with_data.add(d.month)
 
     # undertime reduces basic salary actually earned, so it reduces the
@@ -2547,18 +2654,29 @@ def compute_thirteenth_month(db, year):
         undertime_hours = undertime_by_staff.get(sid, 0.0)
         undertime_deduction = undertime_hours * _undertime_hourly_rate(s)
 
-        if s.get("monthly_salary"):
-            per_day_rate = s["monthly_salary"] / 26
-            absence_deduction = 0.0
-            for m in sorted(months_with_data):
-                last_day = calendar.monthrange(year, m)[1]
-                absence_deduction += _manager_absence_deduction(
-                    dates_worked[sid], date(year, m, 1), date(year, m, last_day), per_day_rate
-                )
-            basic_earned = s["monthly_salary"] * months_counted - absence_deduction
-        else:
-            absence_deduction = 0.0
-            basic_earned = worked * (s["daily_rate"] or 0)
+        terms = _pay_terms(s, history_by_staff.get(sid))
+        absence_deduction = 0.0
+        salary_earned = 0.0
+        daily_earned = 0.0
+        salaried_months = 0
+        for m in sorted(months_with_data):
+            month_days = calendar.monthrange(year, m)[1]
+            for seg_start, seg_end, seg_daily, seg_monthly in _month_segments(
+                terms, date(year, m, 1), date(year, m, month_days)
+            ):
+                if seg_monthly:
+                    seg_len = (seg_end - seg_start).days + 1
+                    salary_earned += seg_monthly * seg_len / month_days
+                    absence_deduction += _manager_absence_deduction(
+                        dates_worked[sid], seg_start, seg_end, seg_monthly / 26
+                    )
+                    if seg_len == month_days:
+                        salaried_months += 1
+                else:
+                    daily_earned += seg_daily * sum(
+                        f for d, f in day_fraction[sid].items() if seg_start <= d <= seg_end
+                    )
+        basic_earned = salary_earned + daily_earned - absence_deduction
         basic_earned -= undertime_deduction
 
         results.append(
@@ -2570,6 +2688,10 @@ def compute_thirteenth_month(db, year):
                 "monthly_salary": s.get("monthly_salary"),
                 "days_worked": int(worked) if worked == int(worked) else worked,
                 "months_counted": months_counted,
+                "salaried_months": salaried_months,
+                "salary_earned": round(salary_earned, 2),
+                "daily_earned": round(daily_earned, 2),
+                "pay_history": bool(history_by_staff.get(sid)),
                 "absence_deduction": round(absence_deduction, 2),
                 "undertime_hours": round(undertime_hours, 2),
                 "undertime_deduction": round(undertime_deduction, 2),
@@ -3413,6 +3535,53 @@ def api_staff_restore(name):
     return jsonify({"status": "ok"})
 
 
+def _log_pay_change(cur, staff_id, name, old_pay, updates):
+    """Changing the daily rate or monthly salary on the employee card also
+    writes a line in their pay history (effective today - the Pay rate history
+    box can move the date), so a raise never gets backdated over the year's 13th
+    month. The first time, the pay they had before is saved too."""
+    if "daily_rate" not in updates and "monthly_salary" not in updates:
+        return
+
+    def pay_of(daily, monthly):
+        monthly = float(monthly or 0)
+        return (0.0, monthly) if monthly else (float(daily or 0), 0.0)
+
+    before = pay_of(old_pay["daily_rate"], old_pay["monthly_salary"])
+    after = pay_of(updates.get("daily_rate", old_pay["daily_rate"]), updates.get("monthly_salary", old_pay["monthly_salary"]))
+    if before == after or after == (0.0, 0.0):
+        return
+
+    cur.execute("SELECT COUNT(*) AS c FROM staff_pay_history WHERE staff_id=%s", (staff_id,))
+    has_history = cur.fetchone()["c"] > 0
+    today = date.today()
+    effective = today
+    if not has_history:
+        if before != (0.0, 0.0):
+            cur.execute(
+                """INSERT INTO staff_pay_history (staff_id, effective_from, daily_rate, monthly_salary, note, created_by)
+                   VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (staff_id, effective_from) DO NOTHING""",
+                (staff_id, date(today.year, 1, 1), before[0], before[1], "before the first change on record",
+                 session.get("display_name")),
+            )
+        else:
+            # first rate ever set for someone: it counts from the day they started
+            start = (old_pay.get("start_date") or "").strip()
+            try:
+                effective = date.fromisoformat(start) if start else today
+            except ValueError:
+                effective = today
+    cur.execute(
+        """INSERT INTO staff_pay_history (staff_id, effective_from, daily_rate, monthly_salary, note, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s)
+           ON CONFLICT (staff_id, effective_from) DO UPDATE
+             SET daily_rate=EXCLUDED.daily_rate, monthly_salary=EXCLUDED.monthly_salary, note=EXCLUDED.note""",
+        (staff_id, effective, after[0], after[1], "changed on the employee card", session.get("display_name")),
+    )
+    record_audit(cur, "Recorded pay change", name,
+                 {"from": effective.isoformat(), "daily_rate": after[0], "monthly_salary": after[1]})
+
+
 @app.route("/api/staff/<name>", methods=["POST"])
 @manager_required
 def api_staff_update(name):
@@ -3426,6 +3595,9 @@ def api_staff_update(name):
     cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
     row = cur.fetchone()
     staff_id = row["id"]
+
+    cur.execute("SELECT daily_rate, monthly_salary, start_date FROM staff WHERE id=%s", (staff_id,))
+    old_pay = dict(cur.fetchone())
 
     updates = {}
     for field in STAFF_EDITABLE_FIELDS:
@@ -3464,6 +3636,7 @@ def api_staff_update(name):
         cur.execute(f"UPDATE staff SET {set_clause} WHERE id=%s", (*updates.values(), staff_id))
         if changed:
             record_audit(cur, "Updated employee", name, changed)
+        _log_pay_change(cur, staff_id, name, old_pay, updates)
         db.commit()
     return jsonify({"status": "ok"})
 
@@ -3532,6 +3705,95 @@ def api_staff_rename(name):
     if session.get("display_name") == name:
         session["display_name"] = new
     return jsonify({"status": "ok", "name": new})
+
+
+def _pay_history_json(cur, staff_id):
+    cur.execute(
+        "SELECT effective_from, daily_rate, monthly_salary, note FROM staff_pay_history WHERE staff_id=%s ORDER BY effective_from",
+        (staff_id,),
+    )
+    return [
+        {"effective_from": r["effective_from"].isoformat(), "daily_rate": float(r["daily_rate"]),
+         "monthly_salary": float(r["monthly_salary"]), "note": r["note"] or ""}
+        for r in cur.fetchall()
+    ]
+
+
+@app.route("/api/staff/<name>/pay-history")
+@hr_view_required
+def api_staff_pay_history(name):
+    cur = get_db().cursor()
+    cur.execute("SELECT id, daily_rate, monthly_salary FROM staff WHERE name=%s", (name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "Unknown staff member"}), 400
+    return jsonify({
+        "history": _pay_history_json(cur, row["id"]),
+        "current": {"daily_rate": float(row["daily_rate"] or 0), "monthly_salary": float(row["monthly_salary"] or 0)},
+    })
+
+
+@app.route("/api/staff/<name>/pay-history", methods=["POST"])
+@superuser_required
+def api_staff_pay_history_save(name):
+    """Record base pay from a date (a raise, or a move from daily pay to a
+    monthly salary). Saving a date that already has a row replaces it. Only the
+    13th month reads this; the employee card's rate is what payroll cutoffs use."""
+    data = request.get_json(force=True)
+    try:
+        effective = date.fromisoformat((data.get("effective_from") or "").strip())
+    except ValueError:
+        return jsonify({"status": "error", "message": "Pick the date this pay starts"}), 400
+    try:
+        daily = float(data.get("daily_rate") or 0)
+        monthly = float(data.get("monthly_salary") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Rates must be numbers"}), 400
+    if daily < 0 or monthly < 0:
+        return jsonify({"status": "error", "message": "Rates can't be negative"}), 400
+    if not daily and not monthly:
+        return jsonify({"status": "error", "message": "Enter a daily rate or a monthly salary"}), 400
+    if daily and monthly:
+        return jsonify({"status": "error", "message": "Enter a daily rate or a monthly salary, not both"}), 400
+    note = (data.get("note") or "").strip() or None
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "Unknown staff member"}), 400
+    cur.execute(
+        """INSERT INTO staff_pay_history (staff_id, effective_from, daily_rate, monthly_salary, note, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s)
+           ON CONFLICT (staff_id, effective_from) DO UPDATE
+             SET daily_rate=EXCLUDED.daily_rate, monthly_salary=EXCLUDED.monthly_salary, note=EXCLUDED.note""",
+        (row["id"], effective, daily, monthly, note, session.get("display_name")),
+    )
+    record_audit(cur, "Recorded pay change", name,
+                 {"from": effective.isoformat(), "daily_rate": daily, "monthly_salary": monthly})
+    db.commit()
+    return jsonify({"status": "ok", "history": _pay_history_json(cur, row["id"])})
+
+
+@app.route("/api/staff/<name>/pay-history/<day>", methods=["DELETE"])
+@superuser_required
+def api_staff_pay_history_delete(name, day):
+    try:
+        effective = date.fromisoformat(day)
+    except ValueError:
+        return jsonify({"status": "error", "message": "Invalid date"}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id FROM staff WHERE name=%s", (name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "Unknown staff member"}), 400
+    cur.execute("DELETE FROM staff_pay_history WHERE staff_id=%s AND effective_from=%s", (row["id"], effective))
+    if cur.rowcount:
+        record_audit(cur, "Removed pay change", name, {"from": effective.isoformat()})
+    db.commit()
+    return jsonify({"status": "ok", "history": _pay_history_json(cur, row["id"])})
 
 
 STAFF_ACCESS_FIELDS = ("can_access_cup_printing_app", "can_access_admin_app", "can_edit_cup_printing")
@@ -7238,8 +7500,60 @@ def api_ops_sales_bulk():
     return jsonify({"status": "ok", "created": created, "skipped": skipped})
 
 
+_STOREHUB_DAY_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d")
+
+
+def _storehub_parse_daily_summary(rows):
+    """StoreHub's "Sales over time" export: one row per day with the day's
+    totals, no receipts. It carries the day's Sales (net of returns) and its
+    Gross Profit, but nothing about how it was paid or what was own use, so
+    those days come back flagged `summary` and the importer leaves the payment
+    columns alone."""
+    header = [h.strip() for h in rows[0]]
+    idx = {h: i for i, h in enumerate(header)}
+    sales_col = "Net Sales (PHP)" if "Net Sales (PHP)" in idx else "Total Sales (PHP)"
+
+    def num(r, name):
+        i = idx.get(name)
+        v = r[i].strip().replace(",", "") if i is not None and i < len(r) else ""
+        try:
+            return float(v) if v else 0.0
+        except ValueError:
+            return 0.0
+
+    out = []
+    seen = set()
+    for r in rows[1:]:
+        if not r or not r[0].strip():
+            continue
+        text = r[0].strip()
+        day = None
+        for fmt in _STOREHUB_DAY_FORMATS:
+            try:
+                day = datetime.strptime(text, fmt).date().isoformat()
+                break
+            except ValueError:
+                continue
+        if day is None:
+            raise ValueError(f"Couldn't read the date '{text}'.")
+        if day in seen:
+            raise ValueError(f"{day} is in the file twice.")
+        seen.add(day)
+        out.append({
+            "date": day,
+            "summary": True,
+            "receipts": int(num(r, "Total Transactions")),
+            "sales": round(num(r, sales_col), 2),
+            "gross_profit": round(num(r, "Gross Profit (PHP)"), 2),
+            "discounts": round(num(r, "Total Discount (PHP)"), 2),
+            "cash": None, "gcash": None, "bank": None, "po": None, "own_use": None,
+        })
+    return sorted(out, key=lambda d: d["date"])
+
+
 def _storehub_parse(text):
     """One StoreHub "Transactions" export -> one figure set per day.
+    (A "Sales over time" export is read too - see _storehub_parse_daily_summary.)
 
     Sales is the receipt Total (already net of discounts), own-use receipts
     (MPD Usage) included - that is how the books have always counted it.
@@ -7248,8 +7562,12 @@ def _storehub_parse(text):
     PO; a card or cheque counts as Bank, since that is where it lands."""
     rows = list(csv.reader(io.StringIO(text)))
     header = rows[0] if rows else []
+    if "Date / Time" in [h.strip() for h in header] and (
+        "Total Sales (PHP)" in header or "Net Sales (PHP)" in header
+    ):
+        return _storehub_parse_daily_summary(rows)
     if "Time" not in header or "Total" not in header or "Is_Cancelled" not in header:
-        raise ValueError("That doesn't look like a StoreHub transactions export.")
+        raise ValueError("That doesn't look like a StoreHub export (a Transactions or a Sales over time file).")
     idx = {}
     for i, h in enumerate(header):  # "Employee" appears twice - the first one is the cashier
         idx.setdefault(h, i)
@@ -7320,9 +7638,36 @@ def api_ops_sales_storehub():
     changed = 0
     for d in parsed:
         cur.execute(
-            "SELECT id, sales, cash, gcash, bank, po, own_use FROM ops_sales_days WHERE sale_date=%s", (d["date"],)
+            "SELECT id, sales, cash, gcash, bank, po, own_use, gross_profit FROM ops_sales_days WHERE sale_date=%s",
+            (d["date"],),
         )
         row = cur.fetchone()
+        if d.get("summary"):
+            # a daily-totals file: Sales, plus Gross Profit where the day has none yet.
+            # Cash, GCash, Bank, PO and Own Use are not in it, so they are never touched.
+            gp = d["gross_profit"]
+            fills_gp = bool(gp) and (row is None or not float(row["gross_profit"] or 0))
+            d["fills_gp"] = fills_gp
+            if row is None:
+                d["status"] = "new"
+            else:
+                d["was"] = {k: float(row[k]) for k in ("sales", "cash", "gcash", "bank", "po", "own_use")}
+                same = abs(float(row["sales"]) - d["sales"]) < 0.005 and not fills_gp
+                d["status"] = "same" if same else "update"
+            if apply and d["status"] != "same":
+                if row is None:
+                    cur.execute(
+                        "INSERT INTO ops_sales_days (sale_date, sales, gross_profit) VALUES (%s,%s,%s)",
+                        (d["date"], d["sales"], gp),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE ops_sales_days SET sales=%s, gross_profit=CASE WHEN %s THEN %s ELSE gross_profit END, "
+                        "updated_at=NOW() WHERE id=%s",
+                        (d["sales"], fills_gp, gp, row["id"]),
+                    )
+                changed += 1
+            continue
         new_vals = (d["sales"], d["cash"], d["gcash"], d["bank"], d["po"], d["own_use"])
         if row is None:
             d["status"] = "new"

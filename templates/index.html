@@ -513,11 +513,6 @@
   </nav>
 
   <div class="flex items-center gap-2 sm:gap-4 flex-wrap mt-3 sm:mt-0 sm:order-3 sm:ml-auto">
-    <div id="scheduleControls" class="flex items-center gap-2 flex-wrap">
-      <select id="monthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
-      <select id="yearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
-    </div>
-
     <div id="payrollControls" class="flex items-center gap-2 flex-wrap" style="display:none">
       <select id="payrollMonthSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
       <select id="payrollYearSelect" class="bg-white/10 border border-white/25 text-white text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-green"></select>
@@ -609,6 +604,10 @@
 
   <div id="scheduleView">
     <div class="flex items-center gap-3 mb-5 flex-wrap">
+      {# which month the page and every button below act on, so it comes first #}
+      <select id="monthSelect" class="bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-blue"></select>
+      <select id="yearSelect" class="bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand-blue"></select>
+      <span class="w-px h-6 bg-gray-300 mx-1"></span>
       {# Generating and snapshotting are superuser-only at the API, so the
          controls aren't rendered at all for anyone else rather than shown
          greyed out. Download PDF is open to everyone. #}
