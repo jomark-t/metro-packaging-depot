@@ -4592,28 +4592,78 @@ def api_print_orders_history():
     open). This one is built to stay fast as the order history grows
     without bound.
 
-    Cursor is the last-loaded order's id rather than an offset, so paging
-    in stays correct even if an order is added or deleted in between."""
+    Paged by page number, so the page can show "51-100 of 415" and jump
+    around. Filters (all optional, all combine): q (client name), date_from /
+    date_to (order date), paid yes|no, logo yes|no (new logo/frame), status
+    (an order with a cup line in that state), placed_by (a name, or "none")."""
     try:
         limit = min(max(int(request.args.get("limit", 50)), 1), 200)
     except ValueError:
         limit = 50
-    before_id = request.args.get("before_id")
-    q = (request.args.get("q") or "").strip()
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except ValueError:
+        page = 1
 
     where_parts = []
     params = []
+    q = (request.args.get("q") or "").strip()
     if q:
         where_parts.append("c.name ILIKE %s")
         params.append(f"%{q}%")
-    if before_id:
+    for arg, op in (("date_from", ">="), ("date_to", "<=")):
+        text = (request.args.get(arg) or "").strip()
+        if text:
+            try:
+                day = datetime.strptime(text, "%Y-%m-%d").date()
+            except ValueError:
+                return jsonify({"message": "Dates must look like 2026-11-30."}), 400
+            where_parts.append(f"o.order_date {op} %s")
+            params.append(day)
+    paid = (request.args.get("paid") or "").strip().lower()
+    if paid in ("yes", "no"):
+        where_parts.append("o.is_paid" if paid == "yes" else "NOT o.is_paid")
+    logo = (request.args.get("logo") or "").strip().lower()
+    if logo in ("yes", "no"):
+        where_parts.append("o.needs_new_frame" if logo == "yes" else "NOT o.needs_new_frame")
+    status = (request.args.get("status") or "").strip()
+    if status in ("not_started", "ongoing", "done"):
         where_parts.append(
-            "(o.order_date, o.id) < (SELECT order_date, id FROM print_orders WHERE id=%s)"
+            "EXISTS (SELECT 1 FROM print_order_items si WHERE si.order_id = o.id AND si.status = %s)"
         )
-        params.append(before_id)
+        params.append(status)
+    placed_by = (request.args.get("placed_by") or "").strip()
+    if placed_by == "none":
+        where_parts.append("(o.placed_by IS NULL OR o.placed_by = '')")
+    elif placed_by:
+        where_parts.append("o.placed_by = %s")
+        params.append(placed_by)
     where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     cur = get_db().cursor()
+    cur.execute(
+        f"""SELECT COUNT(*) AS n
+            FROM print_orders o
+            JOIN print_clients c ON c.id = o.client_id
+            {where_sql}""",
+        params,
+    )
+    total = cur.fetchone()["n"]
+    # cups still waiting to be printed across everything these filters match
+    # (not just this page): lines not yet done or cancelled, on real orders
+    cur.execute(
+        f"""SELECT COALESCE(SUM(i.quantity), 0) AS cups
+            FROM print_orders o
+            JOIN print_clients c ON c.id = o.client_id
+            JOIN print_order_items i ON i.order_id = o.id
+            {where_sql}{" AND" if where_sql else "WHERE"} NOT o.is_draft
+              AND i.status IN ('not_started', 'ongoing')""",
+        params,
+    )
+    cups_to_print = int(cur.fetchone()["cups"])
+    pages = max((total + limit - 1) // limit, 1)
+    page = min(page, pages)
+
     cur.execute(
         f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
                    o.is_rush, o.needs_new_frame, o.is_draft,
@@ -4626,14 +4676,13 @@ def api_print_orders_history():
             JOIN print_clients c ON c.id = o.client_id
             {where_sql}
             ORDER BY o.order_date DESC, o.id DESC
-            LIMIT %s""",
-        (*params, limit + 1),
+            LIMIT %s OFFSET %s""",
+        (*params, limit, (page - 1) * limit),
     )
     orders = [dict(r) for r in cur.fetchall()]
-    has_more = len(orders) > limit
-    orders = orders[:limit]
     _attach_items_and_totals(orders)
-    return jsonify({"orders": orders, "has_more": has_more})
+    return jsonify({"orders": orders, "total": total, "cups_to_print": cups_to_print,
+                    "page": page, "pages": pages, "limit": limit})
 
 
 def price_line(cur, product_id, lid_product_id, quantity):

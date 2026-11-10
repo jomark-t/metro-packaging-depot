@@ -5361,12 +5361,29 @@ if (document.getElementById("statusNewBtn")) {
 // (date, deadline, client, new logo, paid, remarks) spanning its rows.
 // ---------------------------------------------------------------------------
 
-const CUP_PRINTS_PAGE_SIZE = 50;
+let cupPrintsPageSize = 50;
+let cupPrintsPage = 1;
+let cupPrintsPages = 1;
+let cupPrintsTotal = 0;
+let cupPrintsToPrint = 0;
 let cupPrintsQuery = "";
 let cupPrintsOrders = [];
-let cupPrintsHasMore = true;
-let cupPrintsLoading = false;
+let cupPrintsRequest = 0;
 let cupPrintsSearchTimer = null;
+const CUP_PRINTS_FILTERS = [
+  ["date_from", "cupPrintsFrom"], ["date_to", "cupPrintsTo"], ["status", "cupPrintsStatus"],
+  ["paid", "cupPrintsPaid"], ["logo", "cupPrintsLogo"], ["placed_by", "cupPrintsPlacedBy"],
+];
+
+function cupPrintsFilterValues() {
+  const out = {};
+  CUP_PRINTS_FILTERS.forEach(([key, id]) => { out[key] = document.getElementById(id)?.value || ""; });
+  return out;
+}
+
+function cupPrintsFiltersActive() {
+  return !!cupPrintsQuery.trim() || Object.values(cupPrintsFilterValues()).some(Boolean);
+}
 
 async function loadCupPrints() {
   const body = document.getElementById("cupPrintsBody");
@@ -5377,67 +5394,88 @@ async function loadCupPrints() {
     return;
   }
   await loadPrintPeople();
-  await loadMoreCupPrints({ reset: true });
+  const sel = document.getElementById("cupPrintsPlacedBy");
+  if (sel) {
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">All</option><option value="none">Not set</option>` +
+      printPeople.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+    sel.value = keep;
+  }
+  await loadCupPrintsPage({ page: 1 });
 }
 
-// Paginated, newest-first, over every order ever - not just the open set.
-// A reset load (a fresh visit, or a new search term) replaces cupPrintsOrders;
-// otherwise this appends the next batch after the last loaded order.
-async function loadMoreCupPrints({ reset = false, limit } = {}) {
-  if (cupPrintsLoading) return;
-  if (!reset && !cupPrintsHasMore) return;
-  cupPrintsLoading = true;
-
+// One page at a time, newest first, over every order ever - not just the open
+// set. Filters are applied on the server, since the matching orders are
+// mostly not on the page being shown.
+async function loadCupPrintsPage({ page = cupPrintsPage } = {}) {
+  const request = ++cupPrintsRequest;
   const params = new URLSearchParams();
-  params.set("limit", String(limit || CUP_PRINTS_PAGE_SIZE));
+  params.set("limit", String(cupPrintsPageSize));
+  params.set("page", String(page));
   if (cupPrintsQuery.trim()) params.set("q", cupPrintsQuery.trim());
-  if (!reset && cupPrintsOrders.length) {
-    params.set("before_id", cupPrintsOrders[cupPrintsOrders.length - 1].id);
-  }
+  Object.entries(cupPrintsFilterValues()).forEach(([key, value]) => { if (value) params.set(key, value); });
 
   try {
     const res = await fetch(`/api/print/orders/history?${params.toString()}`);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || "Could not load Cup Prints.");
-    }
-    const data = await res.json();
-    cupPrintsOrders = reset ? data.orders : cupPrintsOrders.concat(data.orders);
-    cupPrintsHasMore = data.has_more;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || "Could not load Cup Prints.");
+    if (request !== cupPrintsRequest) return; // a newer filter change is already on its way
+    cupPrintsOrders = data.orders;
+    cupPrintsTotal = data.total;
+    cupPrintsToPrint = data.cups_to_print || 0;
+    cupPrintsPages = data.pages;
+    cupPrintsPage = data.page;
   } catch (err) {
-    cupPrintsLoading = false;
-    if (reset) {
-      document.getElementById("cupPrintsBody").innerHTML =
-        `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
-    }
+    if (request !== cupPrintsRequest) return;
+    document.getElementById("cupPrintsBody").innerHTML =
+      `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
-  cupPrintsLoading = false;
   renderCupPrints();
 }
 
-// After an inline edit, re-fetch from the top rather than just the one
-// changed order - but keep however many rows were already loaded, so the
-// edit doesn't collapse an already-scrolled list back to a single page.
+// After an inline edit, re-fetch the page being looked at (an edit can change
+// what a filter matches, so the page is re-asked rather than patched).
 async function reloadCupPrintsSamePage() {
-  const keep = Math.max(cupPrintsOrders.length, CUP_PRINTS_PAGE_SIZE);
-  await loadMoreCupPrints({ reset: true, limit: keep });
+  await loadCupPrintsPage({ page: cupPrintsPage });
 }
 
-// A plain scroll listener rather than an IntersectionObserver: the
-// scrolling element (.overflow-auto, fixed max-height) is static markup -
-// only cupPrintsBody's innerHTML changes on re-render - so this only
-// needs binding once, ever.
-let cupPrintsScrollBound = false;
-function ensureCupPrintsScrollListener() {
-  if (cupPrintsScrollBound) return;
-  const container = document.getElementById("cupPrintsBody")?.closest(".overflow-auto");
-  if (!container) return;
-  cupPrintsScrollBound = true;
-  container.addEventListener("scroll", () => {
-    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 300) {
-      loadMoreCupPrints();
-    }
+function cupPrintsPagerItems(page, pages) {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const set = new Set([1, pages, page - 1, page, page + 1]);
+  const nums = [...set].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out = [];
+  nums.forEach((n, i) => {
+    if (i && n - nums[i - 1] > 1) out.push("…");
+    out.push(n);
+  });
+  return out;
+}
+
+function renderCupPrintsPager() {
+  const range = document.getElementById("cupPrintsRange");
+  const box = document.getElementById("cupPrintsPages");
+  const pager = document.getElementById("cupPrintsPager");
+  const first = cupPrintsTotal ? (cupPrintsPage - 1) * cupPrintsPageSize + 1 : 0;
+  const last = Math.min(cupPrintsPage * cupPrintsPageSize, cupPrintsTotal);
+  range.textContent = cupPrintsTotal
+    ? `Orders ${first.toLocaleString("en-PH")}–${last.toLocaleString("en-PH")} of ${cupPrintsTotal.toLocaleString("en-PH")}`
+    : "No orders";
+  pager.style.display = cupPrintsTotal ? "" : "none";
+  document.getElementById("cupPrintsToPrint").textContent = cupPrintsToPrint.toLocaleString("en-PH");
+  const btn = (label, target, { active = false, disabled = false } = {}) =>
+    `<button type="button" data-page="${target}" ${disabled ? "disabled" : ""} class="min-w-[2rem] px-2 py-1 rounded-md border text-sm ${
+      active ? "bg-brand-blue text-white border-brand-blue" : "border-gray-300 text-gray-700 hover:bg-gray-50"
+    } ${disabled ? "opacity-40 cursor-default" : ""}">${label}</button>`;
+  box.innerHTML = btn("‹ Prev", cupPrintsPage - 1, { disabled: cupPrintsPage <= 1 }) +
+    cupPrintsPagerItems(cupPrintsPage, cupPrintsPages).map((n) =>
+      n === "…" ? `<span class="px-1 text-gray-400">…</span>` : btn(n, n, { active: n === cupPrintsPage })).join("") +
+    btn("Next ›", cupPrintsPage + 1, { disabled: cupPrintsPage >= cupPrintsPages });
+  box.querySelectorAll("button[data-page]:not([disabled])").forEach((b) => {
+    b.addEventListener("click", async () => {
+      await loadCupPrintsPage({ page: Number(b.dataset.page) });
+      document.getElementById("cupPrintsBody").closest(".overflow-auto").scrollTop = 0;
+    });
   });
 }
 
@@ -5457,11 +5495,6 @@ async function loadPrintPeople() {
 function personOptionsHtml(current) {
   const names = current && !printPeople.includes(current) ? [...printPeople, current] : printPeople;
   return `<option value="">—</option>` + names.map((n) => `<option value="${escapeHtml(n)}"${n === current ? " selected" : ""}>${escapeHtml(n)}</option>`).join("");
-}
-
-function cupPersonSelect(kind, o) {
-  const current = o[kind] || "";
-  return `<select class="cps-select cps-sel-person ${current ? "v-yes" : "v-no"}" data-kind="${kind}" data-order="${o.id}" title="Who placed this order">${personOptionsHtml(current)}</select>`;
 }
 
 function cupYesNoSelect(kind, orderId, current) {
@@ -5554,7 +5587,6 @@ function cupPrintsRowsHTML(list) {
       const cells = [];
       if (first) cells.push(`<td rowspan="${o.items.length}" class="text-[11px] text-gray-500 whitespace-nowrap${flagged ? " cps-flag-not-started" : ""}">${printShortDate(o.order_date)}</td>`);
       if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}${badges ? ` ${badges}` : ""}</td>`);
-      if (first) cells.push(`<td rowspan="${o.items.length}">${cupPersonSelect("placed_by", o)}</td>`);
       cells.push(cupItemCellHTML(i));
       cells.push(cupLidCellHTML(i));
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
@@ -5574,29 +5606,22 @@ function cupPrintsRowsHTML(list) {
       }
       out.push(`<tr class="${first && gi > 0 ? "group-start" : ""}">${cells.join("")}</tr>`);
     });
-    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="13"></td></tr>`);
+    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="12"></td></tr>`);
   });
   return out.join("");
 }
 
 function renderCupPrints() {
-  // already sorted newest-first and search-filtered server-side - no
-  // client-side filter/sort needed against a page that might not hold
-  // every matching order anyway
-  const visible = cupPrintsOrders;
-
+  // already sorted newest-first and filtered server-side - no client-side
+  // filter/sort needed against a page that holds only part of the matches
   const body = document.getElementById("cupPrintsBody");
-  body.innerHTML = visible.length
-    ? cupPrintsRowsHTML(visible)
-    : `<tr><td colspan="13" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
-
-  const total = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + i.quantity * Number(i.unit_price || 0), 0), 0);
-  document.getElementById("cupPrintsTotal").textContent = printMoney(total);
-
-  const cups = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + Number(i.quantity || 0), 0), 0);
-  document.getElementById("cupPrintsCups").textContent = cups.toLocaleString("en-PH");
-
-  ensureCupPrintsScrollListener();
+  body.innerHTML = cupPrintsOrders.length
+    ? cupPrintsRowsHTML(cupPrintsOrders)
+    : `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${
+        cupPrintsFiltersActive() ? "No orders match these filters." : "No orders yet."}</td></tr>`;
+  const clear = document.getElementById("cupPrintsClear");
+  if (clear) clear.style.display = cupPrintsFiltersActive() ? "" : "none";
+  renderCupPrintsPager();
   wireCupPrints();
 }
 
@@ -5629,7 +5654,6 @@ function wireCupPrints() {
       try {
         if (kind === "logo") await postJSON(`/api/print/orders/${orderId}`, { needs_new_frame: sel.value === "Yes" });
         else if (kind === "paid") await postJSON(`/api/print/orders/${orderId}`, { is_paid: sel.value === "Yes" });
-        else if (kind === "placed_by") await postJSON(`/api/print/orders/${orderId}`, { placed_by: sel.value });
         else if (kind === "status") await setItemStatus(sel.dataset.item, sel.value);
         await reloadCupPrintsSamePage();
       } catch (err) {
@@ -5677,10 +5701,22 @@ function wireCupPrints() {
 if (document.getElementById("cupPrintsSearch")) {
   document.getElementById("cupPrintsSearch").addEventListener("input", (e) => {
     cupPrintsQuery = e.target.value;
-    // debounced and server-side now: a paginated view can't just filter
-    // in memory, since the matching order might not be loaded yet
+    // debounced and server-side: the matching order may not be on this page
     clearTimeout(cupPrintsSearchTimer);
-    cupPrintsSearchTimer = setTimeout(() => loadMoreCupPrints({ reset: true }), 250);
+    cupPrintsSearchTimer = setTimeout(() => loadCupPrintsPage({ page: 1 }), 250);
+  });
+  CUP_PRINTS_FILTERS.forEach(([, id]) => {
+    document.getElementById(id).addEventListener("change", () => loadCupPrintsPage({ page: 1 }));
+  });
+  document.getElementById("cupPrintsPageSize").addEventListener("change", (e) => {
+    cupPrintsPageSize = Number(e.target.value) || 50;
+    loadCupPrintsPage({ page: 1 });
+  });
+  document.getElementById("cupPrintsClear").addEventListener("click", () => {
+    cupPrintsQuery = "";
+    document.getElementById("cupPrintsSearch").value = "";
+    CUP_PRINTS_FILTERS.forEach(([, id]) => { document.getElementById(id).value = ""; });
+    loadCupPrintsPage({ page: 1 });
   });
 }
 if (document.getElementById("cupPrintsNewBtn")) {
