@@ -274,6 +274,9 @@ def init_db():
     # EXISTS above, since that's a no-op once the table exists - add them
     # explicitly, idempotently
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS monthly_salary REAL")
+    # the day they started working here (ISO date text, like birthday); filled in
+    # at hire, and blank for people who were here before it was asked
+    cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS start_date TEXT")
     cur.execute("ALTER TABLE staff ADD COLUMN IF NOT EXISTS pto_entitlement INTEGER")
     # employees are archived, never deleted - payroll history, past
     # schedules and 13th month all reference these rows
@@ -3169,9 +3172,16 @@ def index():
     )
 
 
+def normalize_employment(value):
+    """Employment is one of two choices. Older records spell the second one
+    "Part-time"; both spellings read as the same thing."""
+    key = re.sub(r"[\s_-]+", " ", (value or "").strip()).lower()
+    return {"permanent": "Permanent", "part time": "Part time"}.get(key)
+
+
 STAFF_EDITABLE_FIELDS = {
     "full_name", "role", "employment", "target", "daily_rate", "monthly_salary", "pto_entitlement",
-    "address", "phone", "email", "birthday",
+    "address", "phone", "email", "birthday", "start_date",
     "default_sss", "default_pagibig", "default_philhealth", "default_hmo",
     "sss_id", "pagibig_id", "philhealth_id", "hmo_id",
     "bank_name", "bank_account_name", "bank_account_number",
@@ -3189,7 +3199,7 @@ def api_staff_list():
     cur = db.cursor()
     cur.execute(
         """SELECT staff.name, full_name, role, category, employment, target, daily_rate, monthly_salary, pto_entitlement,
-                  address, phone, email, photo_filename, birthday,
+                  address, phone, email, photo_filename, birthday, start_date,
                   default_sss, default_pagibig, default_philhealth, default_hmo,
                   sss_id, pagibig_id, philhealth_id, hmo_id,
                   bank_name, bank_account_name, bank_account_number,
@@ -3223,25 +3233,41 @@ def api_staff_create():
     spaces, hyphens and apostrophes, and has to be unique."""
     data = request.get_json(force=True)
     name = (data.get("name") or "").strip()
-    full_name = (data.get("full_name") or "").strip()
+    # the form sends first and last name separately; the record keeps one
+    # full_name (what payslips and the roster show), so they are joined here
+    first_name = " ".join((data.get("first_name") or "").split())
+    last_name = " ".join((data.get("last_name") or "").split())
+    full_name = (
+        f"{first_name} {last_name}".strip()
+        if ("first_name" in data or "last_name" in data)
+        else (data.get("full_name") or "").strip()
+    )
     category = data.get("category")
 
     if not name:
-        return jsonify({"status": "error", "message": "Short name is required"}), 400
+        return jsonify({"status": "error", "message": "Nickname is required"}), 400
     if len(name) > 20:
-        return jsonify({"status": "error", "message": "Short name must be 20 characters or fewer"}), 400
+        return jsonify({"status": "error", "message": "Nickname must be 20 characters or fewer"}), 400
     if not re.fullmatch(r"[A-Za-z0-9 '\-]+", name):
-        return jsonify({"status": "error", "message": "Short name can only use letters, numbers, spaces, - and '"}), 400
+        return jsonify({"status": "error", "message": "Nickname can only use letters, numbers, spaces, - and '"}), 400
     # these are routes of their own (/api/staff/new, /api/staff/me), so a
     # person with either short name would be unreachable at /api/staff/<name>
     if name.lower() in ("new", "me"):
         return jsonify(
-            {"status": "error", "message": f"'{name}' is reserved - pick a different short name"}
+            {"status": "error", "message": f"'{name}' is reserved - pick a different nickname"}
         ), 400
     if category not in STAFF_CATEGORIES:
         return jsonify({"status": "error", "message": "Pick a valid category"}), 400
+    if "first_name" in data or "last_name" in data:
+        if not first_name:
+            return jsonify({"status": "error", "message": "First name is required"}), 400
+        if not last_name:
+            return jsonify({"status": "error", "message": "Last name is required"}), 400
     if not full_name:
         return jsonify({"status": "error", "message": "Full name is required"}), 400
+    employment = normalize_employment(data.get("employment") or "Permanent")
+    if employment is None:
+        return jsonify({"status": "error", "message": "Employment must be Permanent or Part time"}), 400
 
     db = get_db()
     cur = db.cursor()
@@ -3261,20 +3287,54 @@ def api_staff_create():
         value = data.get(field)
         return int(value) if value not in (None, "") else None
 
+    start_date = (data.get("start_date") or "").strip()
+    if not start_date:
+        return jsonify({"status": "error", "message": "Start date is required"}), 400
+    try:
+        date.fromisoformat(start_date)
+    except ValueError:
+        return jsonify({"status": "error", "message": "Start date isn't a valid date"}), 400
+    birthday = (data.get("birthday") or "").strip()
+    if not birthday:
+        return jsonify({"status": "error", "message": "Birthday is required"}), 400
+    try:
+        date.fromisoformat(birthday)
+    except ValueError:
+        return jsonify({"status": "error", "message": "Birthday isn't a valid date"}), 400
+    phone = (data.get("phone") or "").strip()
+    if not phone:
+        return jsonify({"status": "error", "message": "Phone is required"}), 400
+    email = (data.get("email") or "").strip()
+    if not email:
+        return jsonify({"status": "error", "message": "Email is required"}), 400
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return jsonify({"status": "error", "message": "Email doesn't look right"}), 400
+    address = (data.get("address") or "").strip()
+    if not address:
+        return jsonify({"status": "error", "message": "Address is required"}), 400
+    # the pay terms (rate, salary, target) are set on their card afterwards;
+    # leave days start at the usual 5 unless the request says otherwise
+    pto = 5 if "pto_entitlement" not in data else _int("pto_entitlement")
+
     cur.execute(
         """INSERT INTO staff (name, full_name, role, category, employment, target, daily_rate,
-                              monthly_salary, pto_entitlement, active)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
+                              monthly_salary, pto_entitlement, start_date, birthday, phone, email, address, active)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
         (
             name,
             full_name,
             (data.get("role") or STAFF_CATEGORIES[category]).strip(),
             category,
-            (data.get("employment") or "Permanent").strip(),
+            employment,
             _int("target"),
             _num("daily_rate"),
             _num("monthly_salary"),
-            _int("pto_entitlement"),
+            pto,
+            start_date,
+            birthday,
+            phone,
+            email,
+            address,
         ),
     )
     record_audit(
@@ -3372,7 +3432,20 @@ def api_staff_update(name):
         if field not in data:
             continue
         value = data[field]
-        if field in STAFF_INTEGER_FIELDS:
+        if field == "start_date":
+            value = (value or "").strip()
+            if value:
+                try:
+                    date.fromisoformat(value)
+                except ValueError:
+                    return jsonify({"status": "error", "message": "Start date isn't a valid date"}), 400
+            updates[field] = value
+        elif field == "employment":
+            value = normalize_employment(value)
+            if value is None:
+                return jsonify({"status": "error", "message": "Employment must be Permanent or Part time"}), 400
+            updates[field] = value
+        elif field in STAFF_INTEGER_FIELDS:
             updates[field] = int(value) if value not in (None, "") else None
         elif field in STAFF_NUMERIC_FIELDS:
             updates[field] = float(value) if value not in (None, "") else 0

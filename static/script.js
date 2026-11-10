@@ -3273,18 +3273,23 @@ function employeeCardHtml(s) {
   const basicInfoHtml = `
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
       <label class="block"><span class="text-gray-500">Employment</span>
-        <input class="employment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.employment)}" /></label>
+        <select class="employment-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm">
+          <option value="Permanent"${/part/i.test(s.employment || "") ? "" : " selected"}>Permanent</option>
+          <option value="Part time"${/part/i.test(s.employment || "") ? " selected" : ""}>Part time</option>
+        </select></label>
       <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
         <input type="number" step="0.01" min="0" class="daily-rate-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.daily_rate ?? 0}" /></label>
       <label class="block"><span class="text-gray-500">Fixed monthly salary (₱)</span>
         <input type="number" step="0.01" min="0" class="monthly-salary-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.monthly_salary ?? ""}" placeholder="—" /></label>
       <label class="block"><span class="text-gray-500">Monthly target (days)</span>
         <input type="number" min="0" class="target-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${s.target ?? ""}" placeholder="—" /></label>
+      <label class="block"><span class="text-gray-500">Start date</span>
+        <input type="date" class="start-date-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.start_date)}" /></label>
       <label class="block"><span class="text-gray-500">Birthday</span>
         <input type="date" class="birthday-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.birthday)}" /></label>
       <label class="block"><span class="text-gray-500">Phone</span>
         <input class="phone-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.phone)}" /></label>
-      <label class="block col-span-2"><span class="text-gray-500">Email</span>
+      <label class="block"><span class="text-gray-500">Email</span>
         <input type="email" class="email-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" value="${escapeHtml(s.email)}" /></label>
       <label class="block col-span-2 md:col-span-4"><span class="text-gray-500">Address</span>
         <textarea class="address-input w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" rows="2">${escapeHtml(s.address)}</textarea></label>
@@ -3407,6 +3412,15 @@ function employeeCardHtml(s) {
     <p class="text-[11px] text-gray-400 mt-2">Payroll &amp; HRMS always stays available.</p>
   `;
 
+  // one box for how they sign in and what they can open
+  const subHeading = (text) => `<p class="text-[11px] uppercase tracking-wide font-mono text-gray-400 mb-2">${text}</p>`;
+  const loginAccessHtml = `
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
+      <div>${subHeading("Login")}${loginHtml}</div>
+      ${accessHtml ? `<div class="md:border-l md:border-gray-200 md:pl-8">${subHeading("Apps")}${accessHtml}</div>` : ""}
+    </div>
+  `;
+
   return `
     <div class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm" data-name="${escapeHtml(s.name)}">
       <div class="flex items-start gap-4 mb-5">
@@ -3442,8 +3456,7 @@ function employeeCardHtml(s) {
           '<select class="pto-year-select text-xs border border-gray-300 rounded-md px-2 py-1"></select>'
         )}
         ${sectionHtml("Cash Advances", advancesHtml)}
-        <div class="lg:col-span-2">${sectionHtml("Login Access", loginHtml)}</div>
-        ${accessHtml ? `<div class="lg:col-span-2">${sectionHtml("App Access", accessHtml)}</div>` : ""}
+        <div class="lg:col-span-2">${sectionHtml("Login &amp; App Access", loginAccessHtml)}</div>
       </div>
 
       <div class="flex items-center gap-3 mt-5 flex-wrap">
@@ -3765,12 +3778,14 @@ const STAFF_POSITIONS = [
 
 const NEW_STAFF_INPUTS = {
   name: "newStaffName",
-  full_name: "newStaffFullName",
+  first_name: "newStaffFirstName",
+  last_name: "newStaffLastName",
   employment: "newStaffEmployment",
-  daily_rate: "newStaffDailyRate",
-  monthly_salary: "newStaffMonthlySalary",
-  target: "newStaffTarget",
-  pto_entitlement: "newStaffPto",
+  start_date: "newStaffStartDate",
+  birthday: "newStaffBirthday",
+  phone: "newStaffPhone",
+  email: "newStaffEmail",
+  address: "newStaffAddress",
 };
 
 if (addEmployeeBtn) {
@@ -3810,7 +3825,6 @@ if (addEmployeeBtn) {
       }
       Object.values(NEW_STAFF_INPUTS).forEach((id) => (document.getElementById(id).value = ""));
       document.getElementById("newStaffEmployment").value = "Permanent";
-      document.getElementById("newStaffPto").value = "5";
       addEmployeeForm.style.display = "none";
       newStaffStatus.textContent = "";
       selectedEmployeeName = data.name;
@@ -3902,6 +3916,7 @@ async function saveEmployee(card, name) {
       pto_entitlement: card.querySelector(".pto-entitlement-input").value,
       phone: card.querySelector(".phone-input").value,
       email: card.querySelector(".email-input").value,
+      start_date: card.querySelector(".start-date-input").value,
       birthday: card.querySelector(".birthday-input").value,
       address: card.querySelector(".address-input").value,
       default_sss: card.querySelector(".sss-default-input").value,

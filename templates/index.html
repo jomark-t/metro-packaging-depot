@@ -2160,28 +2160,35 @@
     <div id="addEmployeeForm" class="bg-white border border-gray-200 rounded-xl p-5 shadow-sm mb-6 max-w-4xl" style="display:none">
       <h2 class="font-display font-semibold text-base mb-1">Add employee</h2>
       <p class="text-xs text-gray-500 mb-4">
-        The short name is the schedule column header — keep it brief and
-        unique. Position decides how they're scheduled (a Machine Operator gets
-        Printer and Checker shifts), so pick it carefully: it can't be changed
-        afterwards.
+        The nickname is the schedule column header — keep it brief and unique
+        (it can be changed later from their card). Position decides how
+        they're scheduled (a Machine Operator gets Printer and Checker shifts),
+        so pick it carefully: it can't be changed afterwards.
       </p>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-        <label class="block"><span class="text-gray-500">Short name *</span>
+        <label class="block"><span class="text-gray-500">Nickname *</span>
           <input id="newStaffName" maxlength="20" placeholder="e.g. Ana" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
-        <label class="block"><span class="text-gray-500">Full name *</span>
-          <input id="newStaffFullName" placeholder="e.g. Ana Reyes" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">First name *</span>
+          <input id="newStaffFirstName" placeholder="e.g. Ana Marie" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Last name *</span>
+          <input id="newStaffLastName" placeholder="e.g. Reyes" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
         <label class="block"><span class="text-gray-500">Position *</span>
           <select id="newStaffPosition" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></select></label>
-        <label class="block"><span class="text-gray-500">Employment</span>
-          <input id="newStaffEmployment" value="Permanent" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
-        <label class="block"><span class="text-gray-500">Daily rate (₱)</span>
-          <input type="number" min="0" step="0.01" id="newStaffDailyRate" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
-        <label class="block"><span class="text-gray-500">Fixed monthly salary (₱)</span>
-          <input type="number" min="0" step="0.01" id="newStaffMonthlySalary" placeholder="leave blank if daily-rate" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
-        <label class="block"><span class="text-gray-500">Monthly target (days)</span>
-          <input type="number" min="0" id="newStaffTarget" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
-        <label class="block"><span class="text-gray-500">PTO entitlement (days/yr)</span>
-          <input type="number" min="0" id="newStaffPto" value="5" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Employment *</span>
+          <select id="newStaffEmployment" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm">
+            <option value="Permanent">Permanent</option>
+            <option value="Part time">Part time</option>
+          </select></label>
+        <label class="block"><span class="text-gray-500">Start date *</span>
+          <input type="date" id="newStaffStartDate" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Birthday *</span>
+          <input type="date" id="newStaffBirthday" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Phone *</span>
+          <input id="newStaffPhone" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block"><span class="text-gray-500">Email *</span>
+          <input type="email" id="newStaffEmail" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm" /></label>
+        <label class="block sm:col-span-2 lg:col-span-3"><span class="text-gray-500">Address *</span>
+          <textarea id="newStaffAddress" rows="2" class="w-full border border-gray-300 rounded-md px-2 py-1.5 mt-0.5 text-sm"></textarea></label>
       </div>
       <div class="flex items-center gap-3 mt-4 flex-wrap">
         <button id="saveNewStaffBtn" class="bg-brand-green text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition disabled:opacity-60">Add employee</button>
