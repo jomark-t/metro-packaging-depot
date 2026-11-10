@@ -5376,6 +5376,7 @@ async function loadCupPrints() {
     body.innerHTML = `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
+  await loadPrintPeople();
   await loadMoreCupPrints({ reset: true });
 }
 
@@ -5438,6 +5439,29 @@ function ensureCupPrintsScrollListener() {
       loadMoreCupPrints();
     }
   });
+}
+
+// Who can be named as having placed an order: the sales side of the roster
+// and the owner, from the server. Fetched once, and again whenever
+// the order form opens.
+let printPeople = [];
+async function loadPrintPeople() {
+  try {
+    const res = await fetch("/api/print/order-people");
+    if (res.ok) printPeople = (await res.json()).people || [];
+  } catch (err) {
+    // the dropdowns just fall back to whoever is already on the orders
+  }
+}
+
+function personOptionsHtml(current) {
+  const names = current && !printPeople.includes(current) ? [...printPeople, current] : printPeople;
+  return `<option value="">—</option>` + names.map((n) => `<option value="${escapeHtml(n)}"${n === current ? " selected" : ""}>${escapeHtml(n)}</option>`).join("");
+}
+
+function cupPersonSelect(kind, o) {
+  const current = o[kind] || "";
+  return `<select class="cps-select cps-sel-person ${current ? "v-yes" : "v-no"}" data-kind="${kind}" data-order="${o.id}" title="Who placed this order">${personOptionsHtml(current)}</select>`;
 }
 
 function cupYesNoSelect(kind, orderId, current) {
@@ -5530,6 +5554,7 @@ function cupPrintsRowsHTML(list) {
       const cells = [];
       if (first) cells.push(`<td rowspan="${o.items.length}" class="text-[11px] text-gray-500 whitespace-nowrap${flagged ? " cps-flag-not-started" : ""}">${printShortDate(o.order_date)}</td>`);
       if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}${badges ? ` ${badges}` : ""}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}">${cupPersonSelect("placed_by", o)}</td>`);
       cells.push(cupItemCellHTML(i));
       cells.push(cupLidCellHTML(i));
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
@@ -5549,7 +5574,7 @@ function cupPrintsRowsHTML(list) {
       }
       out.push(`<tr class="${first && gi > 0 ? "group-start" : ""}">${cells.join("")}</tr>`);
     });
-    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="12"></td></tr>`);
+    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="13"></td></tr>`);
   });
   return out.join("");
 }
@@ -5563,7 +5588,7 @@ function renderCupPrints() {
   const body = document.getElementById("cupPrintsBody");
   body.innerHTML = visible.length
     ? cupPrintsRowsHTML(visible)
-    : `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
+    : `<tr><td colspan="13" class="text-center text-sm text-gray-400 italic py-8">No orders match "${escapeHtml(cupPrintsQuery.trim())}".</td></tr>`;
 
   const total = visible.reduce((sum, o) => sum + o.items.reduce((s, i) => s + i.quantity * Number(i.unit_price || 0), 0), 0);
   document.getElementById("cupPrintsTotal").textContent = printMoney(total);
@@ -5604,6 +5629,7 @@ function wireCupPrints() {
       try {
         if (kind === "logo") await postJSON(`/api/print/orders/${orderId}`, { needs_new_frame: sel.value === "Yes" });
         else if (kind === "paid") await postJSON(`/api/print/orders/${orderId}`, { is_paid: sel.value === "Yes" });
+        else if (kind === "placed_by") await postJSON(`/api/print/orders/${orderId}`, { placed_by: sel.value });
         else if (kind === "status") await setItemStatus(sel.dataset.item, sel.value);
         await reloadCupPrintsSamePage();
       } catch (err) {
@@ -6359,6 +6385,7 @@ async function openPrintOrderForm(order) {
   poEditing = order && Array.isArray(order.items) ? order : null;
   await loadPrintCatalogue();
   await loadPrintClients(); // fresh, in case one was added since page load
+  await loadPrintPeople();
   const o = poEditing;
   document.getElementById("poClient").value = o ? o.client_name : "";
   document.getElementById("poClientDropdown").classList.add("hidden");
@@ -6368,6 +6395,9 @@ async function openPrintOrderForm(order) {
   document.getElementById("poRush").checked = !!(o && o.is_rush);
   document.getElementById("poFrame").checked = !!(o && o.needs_new_frame);
   document.getElementById("poPaid").checked = !!(o && o.is_paid);
+  // empty on a new order: whoever is logged in is often not the one who took
+  // it, so nothing is guessed
+  document.getElementById("poPlacedBy").innerHTML = personOptionsHtml(o ? o.placed_by || "" : "");
 
   document.getElementById("poTitle").textContent = !o
     ? "New print order"
@@ -6506,6 +6536,7 @@ async function savePrintOrder({ draft } = {}) {
       is_rush: document.getElementById("poRush").checked,
       needs_new_frame: document.getElementById("poFrame").checked,
       is_paid: document.getElementById("poPaid").checked,
+      placed_by: document.getElementById("poPlacedBy").value,
       remarks: document.getElementById("poRemarks").value,
       items,
     }),

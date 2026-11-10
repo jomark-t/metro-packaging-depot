@@ -707,6 +707,9 @@ def init_db():
     # an order still being worked out with the client - saved so it isn't
     # lost, but not yet confirmed. Finalizing just clears the flag.
     cur.execute("ALTER TABLE print_orders ADD COLUMN IF NOT EXISTS is_draft BOOLEAN NOT NULL DEFAULT FALSE")
+    # who took the order - picked by hand, because created_by is just whoever
+    # was logged in (usually the manager, with other staff using her session)
+    cur.execute("ALTER TABLE print_orders ADD COLUMN IF NOT EXISTS placed_by TEXT")
     cur.execute("CREATE INDEX IF NOT EXISTS print_orders_scheduled_idx ON print_orders(scheduled_date)")
     for col in ("discounted_1k", "discounted_no_min"):
         cur.execute(f"ALTER TABLE print_product_prices ADD COLUMN IF NOT EXISTS {col} NUMERIC(10,2)")
@@ -4492,6 +4495,38 @@ def _attach_items_and_totals(orders):
     return orders
 
 
+def print_order_people(cur):
+    """Who can be named on an order as having placed it: the sales side of the
+    roster (the manager included) and the owner."""
+    cur.execute("SELECT name, category, role FROM staff WHERE active ORDER BY id")
+    names = [r["name"] for r in cur.fetchall() if schedule_group(dict(r)) == "sales"]
+    cur.execute(
+        "SELECT display_name FROM app_users WHERE is_superuser AND staff_name IS NULL AND NOT full_access ORDER BY id LIMIT 1"
+    )
+    owner = cur.fetchone()
+    if owner and owner["display_name"] not in names:
+        names.append(owner["display_name"])
+    return names
+
+
+def _checked_person(people, value, current=None):
+    """A cleaned who-placed value: blank means nobody yet. It has
+    to be someone on the list - or whoever is already on the order, so an old
+    order naming someone who has since left can still be saved."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value in people or value == current:
+        return value
+    raise ValueError(f"'{value}' isn't someone who can be picked here.")
+
+
+@app.route("/api/print/order-people")
+@login_required
+def api_print_order_people():
+    return jsonify({"people": print_order_people(get_db().cursor())})
+
+
 def _print_order_rows(where="", params=()):
     """Orders with their line items attached, in queue order (status rank,
     then date) - what the Board and Status board want. Cup Prints' own
@@ -4502,7 +4537,7 @@ def _print_order_rows(where="", params=()):
     cur.execute(
         f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
                    o.is_rush, o.needs_new_frame, o.is_draft,
-                   o.is_paid, o.remarks, o.created_by,
+                   o.is_paid, o.remarks, o.created_by, o.placed_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
                    c.logo_filename, c.is_discounted
             FROM print_orders o
@@ -4582,7 +4617,7 @@ def api_print_orders_history():
     cur.execute(
         f"""SELECT o.id, o.order_date, o.due_date, o.scheduled_date,
                    o.is_rush, o.needs_new_frame, o.is_draft,
-                   o.is_paid, o.remarks, o.created_by,
+                   o.is_paid, o.remarks, o.created_by, o.placed_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
                    c.logo_filename, c.is_discounted,
                    (SELECT COUNT(*) FROM print_orders o2 WHERE o2.client_id = o.client_id)
@@ -4677,6 +4712,11 @@ def api_print_order_create():
 
     db = get_db()
     cur = db.cursor()
+    people = print_order_people(cur)
+    try:
+        placed_by = _checked_person(people, data.get("placed_by"))
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     # an unknown name creates the client rather than blocking the order -
     # the contact details get filled in from the client drawer afterwards
     cur.execute("SELECT id FROM print_clients WHERE LOWER(name)=LOWER(%s)", (client_name,))
@@ -4689,14 +4729,15 @@ def api_print_order_create():
 
     cur.execute(
         """INSERT INTO print_orders
-             (client_id, order_date, due_date, is_rush, needs_new_frame, is_paid, is_draft, remarks, created_by)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+             (client_id, order_date, due_date, is_rush, needs_new_frame, is_paid, is_draft, remarks, created_by,
+              placed_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (
             client_id, order_date, data.get("due_date") or None,
             bool(data.get("is_rush")), bool(data.get("needs_new_frame")),
             bool(data.get("is_paid")), bool(data.get("is_draft")),
             (data.get("remarks") or "").strip() or None,
-            session.get("display_name"),
+            session.get("display_name"), placed_by,
         ),
     )
     order_id = cur.fetchone()["id"]
@@ -4753,19 +4794,28 @@ def api_print_order_update(order_id):
             except ValueError:
                 return jsonify({"status": "error", "message": "That date is not a real date."}), 400
 
-    if not fields:
+    who_keys = [k for k in ("placed_by",) if k in data]
+    if not fields and not who_keys:
         return jsonify({"status": "ok"})
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        """SELECT o.id, c.name FROM print_orders o
+        """SELECT o.id, c.name, o.placed_by FROM print_orders o
            JOIN print_clients c ON c.id = o.client_id WHERE o.id=%s""",
         (order_id,),
     )
     row = cur.fetchone()
     if row is None:
         return jsonify({"status": "error", "message": "That order no longer exists."}), 404
+
+    if who_keys:
+        people = print_order_people(cur)
+        for k in who_keys:
+            try:
+                fields[k] = _checked_person(people, data[k], row[k])
+            except ValueError as exc:
+                return jsonify({"status": "error", "message": str(exc)}), 400
 
     sets = ", ".join(f"{k}=%s" for k in fields)
     cur.execute(f"UPDATE print_orders SET {sets} WHERE id=%s", (*fields.values(), order_id))
@@ -4811,9 +4861,16 @@ def api_print_order_edit(order_id):
 
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id FROM print_orders WHERE id=%s", (order_id,))
-    if cur.fetchone() is None:
+    cur.execute("SELECT id, placed_by FROM print_orders WHERE id=%s", (order_id,))
+    current_order = cur.fetchone()
+    if current_order is None:
         return jsonify({"status": "error", "message": "That order no longer exists."}), 404
+    people = print_order_people(cur)
+    try:
+        placed_by = (_checked_person(people, data["placed_by"], current_order["placed_by"])
+                     if "placed_by" in data else current_order["placed_by"])
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
 
     cur.execute(
         """SELECT id, product_id, lid_product_id, quantity, qty_delivered, status
@@ -4837,13 +4894,14 @@ def api_print_order_edit(order_id):
     cur.execute(
         """UPDATE print_orders
            SET client_id=%s, order_date=%s, due_date=%s, is_rush=%s,
-               needs_new_frame=%s, is_paid=%s, is_draft=%s, remarks=%s
+               needs_new_frame=%s, is_paid=%s, is_draft=%s, remarks=%s,
+               placed_by=%s
            WHERE id=%s""",
         (
             client_id, order_date, data.get("due_date") or None,
             bool(data.get("is_rush")), bool(data.get("needs_new_frame")),
             bool(data.get("is_paid")), is_draft,
-            (data.get("remarks") or "").strip() or None, order_id,
+            (data.get("remarks") or "").strip() or None, placed_by, order_id,
         ),
     )
 
