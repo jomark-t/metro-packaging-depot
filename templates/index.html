@@ -203,6 +203,22 @@
 
   /* Cup Prints: a spreadsheet over the same orders. Every row's own top
      border marks a new order's block now that there's no colour band. */
+  /* Products: the price list view, shaped like the sheet it replaced */
+  .psheet { border-collapse: separate; border-spacing: 0; min-width: 1550px; width: 100%; font-size: .8rem; }
+  .psheet thead th { position: sticky; top: 0; z-index: 3; background: #1c33bb; color: #fff; font-weight: 700; padding: .55rem .5rem; text-align: center; font-size: .75rem; border-right: 1px solid rgba(255,255,255,.18); }
+  .psheet thead th.ph-orange { background: #ff9a00; }
+  .pband td { background: #3f3f3f; color: #fff; font-weight: 700; font-size: .95rem; padding: .3rem .6rem; cursor: pointer; user-select: none; }
+  .pband-caret { display: inline-block; width: 1rem; color: #bbb; }
+  .pband-count { font-weight: 400; color: #bbb; font-size: .75rem; margin-left: .35rem; }
+  .pband-add { float: right; font-size: .7rem; font-weight: 600; color: #d1d5db; border: 1px solid #6b7280; border-radius: .35rem; padding: .05rem .45rem; background: transparent; }
+  .pband-add:hover { color: #fff; border-color: #fff; }
+  .pband-add + .pband-add { margin-right: .4rem; }
+  .pc { padding: .28rem .5rem; border-bottom: 1px solid #eceef3; white-space: nowrap; background: #fff; vertical-align: middle; }
+  .pc[data-k="name"] { max-width: 15rem; overflow: hidden; }
+  .pc[data-k="name"] button { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pc[data-k="note"] { max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
+  .pc-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .prow:hover .pc { background: #f7f8ff; }
   .cps-table { width: 100%; border-collapse: collapse; min-width: 62rem; }
   .cps-table thead th {
     font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase;
@@ -321,7 +337,7 @@
        named the app, so it names whichever one you are in and the whole
        block opens the menu. People with one app get the plain brand. #}
     <div class="flex items-center gap-3 min-w-0 sm:order-1 relative">
-      <span class="text-3xl text-brand-green leading-none shrink-0">⟡</span>
+      <img src="{{ url_for('static', filename='icons/android-chrome-192x192.png') }}" alt="" class="w-10 h-10 shrink-0 rounded-lg">
       {% if current_user.has_app_switcher %}
       <button id="appSwitchBtn" type="button" class="min-w-0 text-left rounded-lg px-2 py-1 -mx-2 hover:bg-white/10 transition">
         <h1 class="font-display font-semibold text-base sm:text-xl tracking-tight leading-tight sm:leading-tight sm:truncate">{{ business_name }}</h1>
@@ -354,6 +370,15 @@
           <span class="flex-1">
             <span class="block text-sm text-gray-900">Clients</span>
             <span class="block text-[11px] text-gray-400">Contacts, logos, discounts, balances</span>
+          </span>
+          <span class="app-tick text-brand-blue hidden">&#10003;</span>
+        </button>
+        {% endif %}
+        {% if current_user.has_products_app %}
+        <button type="button" class="app-choice w-full text-left px-3 py-2 hover:bg-gray-50 transition flex items-center gap-2" data-app="products">
+          <span class="flex-1">
+            <span class="block text-sm text-gray-900">Products</span>
+            <span class="block text-[11px] text-gray-400">Price list and the client catalog</span>
           </span>
           <span class="app-tick text-brand-blue hidden">&#10003;</span>
         </button>
@@ -473,6 +498,10 @@
       {% if current_user.has_clients_app %}
       <button id="tabClientsDashBtn" data-app="clients" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Dashboard</button>
       <button id="tabPrintClientsBtn" data-app="clients" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Clients</button>
+      {% endif %}
+      {# Products - the price list, and the catalogue clients browse at /shop #}
+      {% if current_user.has_products_app %}
+      <button id="tabProductsBtn" data-app="products" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Products</button>
       {% endif %}
       {# Admin app - back-office record-keeping (collections, expenses,
          inventory, notes). Touches real money, so unlike Cup Printing it
@@ -1367,6 +1396,88 @@
     </div>
   </div>
 
+  {# Products: the price list and the public catalogue (/shop) - see static/products.js #}
+  {% if current_user.has_products_app %}
+  <div id="productsView" style="display:none">
+    <div id="productsTop" class="flex flex-wrap items-end justify-between gap-3 mb-4">
+      <div>
+        <h2 class="font-display font-semibold text-xl leading-tight">Products</h2>
+        <p id="productsSubtitle" class="text-sm text-gray-500">What you change here is what clients see in the catalog.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <a href="/shop" target="_blank" rel="noopener" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition">View catalog &#8599;</a>
+        <button id="productsCopyLink" type="button" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition">Copy link</button>
+        <button id="productsSettingsBtn" type="button" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition">Catalog settings</button>
+        <button id="productsImportBtn" type="button" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition" style="display:none">Import price list</button>
+        <button id="productsAddBtn" type="button" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ Add product</button>
+      </div>
+    </div>
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-3 mb-3 flex flex-wrap items-end gap-x-3 gap-y-2">
+      <label class="text-xs text-gray-500">Search
+        <input id="productsSearch" type="search" placeholder="Name or SKU…" class="block border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-48 text-gray-900" />
+      </label>
+      <label class="text-xs text-gray-500">Category
+        <select id="productsSection" class="block border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white text-gray-900 max-w-[14rem]"></select>
+      </label>
+      <button id="productsRenameSection" type="button" class="text-xs text-brand-blue hover:underline pb-2" style="display:none">Rename category</button>
+      <button id="productsCategoryPhoto" type="button" class="text-xs text-brand-blue hover:underline pb-2" style="display:none">Category photo</button>
+      <label class="text-xs text-gray-500">Show
+        <select id="productsShow" class="block border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white text-gray-900">
+          <option value="">Everything</option><option value="shown">Shown in catalog</option><option value="hidden">Hidden from catalog</option>
+          <option value="noprice">Missing a price</option><option value="nophoto">No photo</option>
+        </select>
+      </label>
+      <div class="ml-auto flex bg-gray-100 rounded-lg p-0.5 self-end">
+        <button id="productsViewSheet" type="button">Price list</button>
+        <button id="productsViewGrouped" type="button">Products</button>
+      </div>
+    </div>
+    <div id="productsSheetWrap" class="border border-gray-200 rounded-xl bg-white shadow-sm overflow-auto" style="max-height: calc(100vh - 17rem)">
+      <table class="psheet">
+        <thead id="productsSheetHead"></thead>
+        <tbody id="productsSheetBody"></tbody>
+      </table>
+    </div>
+    <p id="productsSheetCount" class="text-xs text-gray-400 mt-2"></p>
+    <div id="productsGroupedWrap" style="display:none">
+      <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
+              <th class="px-3 py-2"></th><th class="text-left px-3 py-2">Product</th><th class="text-left px-3 py-2">Options</th>
+              <th class="text-right px-3 py-2">Price</th><th class="text-center px-3 py-2">Catalog</th><th class="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody id="productsBody" class="divide-y divide-gray-100"></tbody>
+        </table>
+        <div id="productsPager" class="border-t border-gray-200 px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap text-sm" style="display:none">
+          <span id="productsRange" class="text-gray-500"></span>
+          <div id="productsPages" class="flex items-center gap-1"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="productEditModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div id="productEditBody" class="bg-white rounded-2xl w-full max-w-5xl max-h-[92vh] overflow-auto p-5"></div>
+  </div>
+  <div id="productOptionModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div id="productOptionBody" class="bg-white rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-auto p-5"></div>
+  </div>
+  <div id="productCategoryModal" class="fixed inset-0 bg-black/50 z-[60] hidden items-center justify-center p-4">
+    <div id="productCategoryBody" class="bg-white rounded-2xl w-full max-w-sm p-5"></div>
+  </div>
+  <div id="productNewModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div id="productNewBody" class="bg-white rounded-2xl w-full max-w-md p-5"></div>
+  </div>
+  <div id="productsImportModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div id="productsImportBody" class="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-5"></div>
+  </div>
+  <div id="productsSettingsModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div id="productsSettingsBody" class="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-5"></div>
+  </div>
+  {% endif %}
+
   <div id="inventoryView" style="display:none">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
       <div>
@@ -2247,6 +2358,7 @@
 <script>
   window.CURRENT_USER = {{ current_user | tojson }};
 </script>
+{% if current_user.has_products_app %}<script src="{{ url_for('static', filename='products.js') }}"></script>{% endif %}
 <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

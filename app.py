@@ -996,6 +996,88 @@ def init_db():
         )"""
     )
 
+    # Products: the catalogue clients browse at /shop. A family is what a
+    # client sees as one card ("Double Wall Cup"); its variants are the sizes
+    # and colours it comes in. What the shop pays for them lives in its own
+    # table, which no public route ever selects from.
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_families (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            section TEXT NOT NULL DEFAULT 'Others',
+            description TEXT,
+            photo_filename TEXT,
+            is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_variants (
+            id SERIAL PRIMARY KEY,
+            family_id INTEGER NOT NULL REFERENCES catalog_families(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            sku TEXT,
+            size TEXT,
+            color TEXT,
+            note TEXT,
+            unit_type TEXT,
+            qty_per_unit NUMERIC(12,2),
+            qty_per_box NUMERIC(12,2),
+            price NUMERIC(12,2),
+            box_price NUMERIC(12,2),
+            min_qty NUMERIC(12,2),
+            status TEXT NOT NULL DEFAULT '',
+            is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS catalog_variants_family_idx ON catalog_variants(family_id)")
+    # the sheet's own columns: Product and Sub, and the Unit Price (per piece)
+    # that Price is worked out from
+    cur.execute("ALTER TABLE catalog_variants ADD COLUMN IF NOT EXISTS product TEXT")
+    cur.execute("ALTER TABLE catalog_variants ADD COLUMN IF NOT EXISTS sub TEXT")
+    cur.execute("ALTER TABLE catalog_variants ADD COLUMN IF NOT EXISTS unit_price NUMERIC(12,4)")
+    cur.execute(
+        """UPDATE catalog_variants SET unit_price = price / COALESCE(NULLIF(qty_per_unit, 0), 1)
+           WHERE unit_price IS NULL AND price IS NOT NULL"""
+    )
+    cur.execute("ALTER TABLE catalog_variants ADD COLUMN IF NOT EXISTS photo_filename TEXT")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_categories (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            photo_filename TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_costs (
+            variant_id INTEGER PRIMARY KEY REFERENCES catalog_variants(id) ON DELETE CASCADE,
+            supplier TEXT,
+            unit_cost NUMERIC(12,2)
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_price_history (
+            id SERIAL PRIMARY KEY,
+            variant_id INTEGER NOT NULL REFERENCES catalog_variants(id) ON DELETE CASCADE,
+            field TEXT NOT NULL,
+            old_value NUMERIC(14,4),
+            new_value NUMERIC(14,4),
+            changed_by TEXT,
+            changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"""
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS catalog_price_history_variant_idx ON catalog_price_history(variant_id, changed_at)")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )"""
+    )
+
     cur.execute("SELECT COUNT(*) AS c FROM staff")
     roster_is_empty = cur.fetchone()["c"] == 0
     for s in STAFF:
@@ -3266,6 +3348,9 @@ def index():
     view_only = is_coowner_viewer()
     has_office_app = True if (manager or view_only) else access["can_access_admin_app"]
     has_ops_app = is_owner()
+    # Products (the price list and the public catalogue): the people who
+    # maintain it - managers and the owners
+    has_products_app = manager or is_owner()
     # Clients is its own module, shared by Cup Printing (who the orders are
     # for) and Admin (who the POs are owed by) - so anyone with either one
     # has it, and no separate permission to hand out.
@@ -3283,9 +3368,10 @@ def index():
         "has_office_app": has_office_app,
         "has_ops_app": has_ops_app,
         "has_clients_app": has_clients_app,
+        "has_products_app": has_products_app,
         # whether the app-switcher shows at all - no point offering it for
         # a single available app
-        "has_app_switcher": has_cup_printing_app or has_office_app or has_ops_app or has_clients_app,
+        "has_app_switcher": has_cup_printing_app or has_office_app or has_ops_app or has_clients_app or has_products_app,
         "payroll_unlocked": payroll_unlocked(),
         # branch-wide figures (per-person day totals) - the people running
         # the place and the owners, not the team
@@ -10150,6 +10236,939 @@ def api_schedule_pdf():
         mimetype="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+# ---------------------------------------------------------------------------
+# Products - the price list, and the catalogue clients browse at /shop.
+#
+# One source of truth: the staff screens write these tables and /shop reads
+# them, so a change here is what a client sees next time they open the page.
+# Costs and suppliers sit in catalog_costs, which only the superuser's
+# screens read; /shop selects from the other three tables and nothing else.
+# ---------------------------------------------------------------------------
+
+CATALOG_STATUSES = ("", "new", "repriced", "incoming", "shelfed")
+CATALOG_PUBLIC_BADGES = ("new", "incoming")  # the others are for the team
+CATALOG_UNIT_TYPES = ("Pcs", "Pack (pcs)", "Bundle (pcs)", "Box", "Roll", "Meter", "Kilo", "Bag", "Set")
+CATALOG_SETTING_DEFAULTS = {
+    "show_box_prices": "1",
+    "show_sku": "0",
+    "intro": "Pick a category, then swipe through our products to see sizes, colors and prices.",
+    "contact_url": "",
+    "contact_label": "Message us",
+    "contact_phone": "",
+}
+PRODUCT_PHOTO_MAX_PX = 900
+
+
+def products_required(view):
+    """The people who maintain the price list: managers and the owners.
+    Co-owners stay view-only through the app-wide guard on writes."""
+
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        if not (is_manager() or is_owner()):
+            return jsonify({"status": "error", "message": "Not allowed"}), 403
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def _num_or_none(value, label):
+    """A blank box means "not set"; anything else must be a number >= 0."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        number = float(str(value).replace(",", "").strip())
+    except ValueError:
+        raise ValueError(f"{label} must be a number.")
+    if number < 0:
+        raise ValueError(f"{label} can't be negative.")
+    return round(number, 2)
+
+
+def _catalog_touch(cur):
+    """Stamp the catalogue as changed, so /shop (in any worker) knows to
+    rebuild. A DB stamp rather than an in-memory flag: the app runs more
+    than one worker, and a flag only reaches the one that saw the edit."""
+    cur.execute(
+        """INSERT INTO catalog_settings (key, value) VALUES ('version', %s)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+        (secrets.token_hex(6),),
+    )
+
+
+def _catalog_settings(cur):
+    out = dict(CATALOG_SETTING_DEFAULTS)
+    cur.execute("SELECT key, value FROM catalog_settings WHERE key <> 'version'")
+    for r in cur.fetchall():
+        if r["key"] in out:
+            out[r["key"]] = r["value"] if r["value"] is not None else ""
+    return out
+
+
+def _photo_url(row_photo, updated_at):
+    if not row_photo:
+        return None
+    stamp = int(updated_at.timestamp()) if updated_at else 0
+    return f"/static/uploads/{row_photo}?v={stamp}"
+
+
+def _variant_json(r, with_costs):
+    v = {
+        "id": r["id"], "family_id": r["family_id"], "name": r["name"], "sku": r["sku"] or "",
+        "product": r.get("product") or "", "sub": r.get("sub") or "", "sort_order": r.get("sort_order") or 0,
+        "unit_price": float(r["unit_price"]) if r.get("unit_price") is not None else None,
+        "size": r["size"] or "", "color": r["color"] or "", "note": r["note"] or "",
+        "unit_type": r["unit_type"] or "", "qty_per_unit": float(r["qty_per_unit"]) if r["qty_per_unit"] is not None else None,
+        "qty_per_box": float(r["qty_per_box"]) if r["qty_per_box"] is not None else None,
+        "price": float(r["price"]) if r["price"] is not None else None,
+        "box_price": float(r["box_price"]) if r["box_price"] is not None else None,
+        "min_qty": float(r["min_qty"]) if r["min_qty"] is not None else None,
+        "status": r["status"] or "", "is_visible": r["is_visible"],
+        "photo": _photo_url(r.get("photo_filename"), r.get("updated_at")),
+    }
+    if with_costs:
+        v["supplier"] = r.get("supplier") or ""
+        v["unit_cost"] = float(r["unit_cost"]) if r.get("unit_cost") is not None else None
+    return v
+
+
+@app.route("/api/products")
+@products_required
+def api_products_list():
+    cur = get_db().cursor()
+    costs = bool(session.get("is_superuser"))
+    cur.execute(
+        """SELECT id, name, section, description, photo_filename, is_visible, sort_order, updated_at
+           FROM catalog_families ORDER BY sort_order, id"""
+    )
+    families = [dict(r) for r in cur.fetchall()]
+    by_id = {}
+    for f in families:
+        f["photo"] = _photo_url(f.pop("photo_filename"), f["updated_at"])
+        f["updated_at"] = f["updated_at"].isoformat() if f["updated_at"] else None
+        f["variants"] = []
+        by_id[f["id"]] = f
+    cost_cols = ", c.supplier, c.unit_cost" if costs else ""
+    cost_join = "LEFT JOIN catalog_costs c ON c.variant_id = v.id" if costs else ""
+    cur.execute(
+        f"""SELECT v.*{cost_cols} FROM catalog_variants v {cost_join}
+            ORDER BY v.sort_order, v.id"""
+    )
+    for r in cur.fetchall():
+        if r["family_id"] in by_id:
+            by_id[r["family_id"]]["variants"].append(_variant_json(dict(r), costs))
+    cur.execute("SELECT name, photo_filename, updated_at FROM catalog_categories WHERE photo_filename IS NOT NULL")
+    category_photos = {r["name"]: _photo_url(r["photo_filename"], r["updated_at"]) for r in cur.fetchall()}
+    return jsonify({
+        "families": families,
+        "category_photos": category_photos,
+        "settings": _catalog_settings(cur),
+        "can_see_costs": costs,
+        "can_import": costs,
+        "unit_types": list(CATALOG_UNIT_TYPES),
+    })
+
+
+def _next_sort(cur, table):
+    cur.execute(f"SELECT COALESCE(MAX(sort_order), 0) + 1 AS n FROM {table}")
+    return cur.fetchone()["n"]
+
+
+def _clean_variant(data, qty=None):
+    """Validated variant columns from a request body. Only keys that were
+    sent are returned, so a partial update leaves the rest alone.
+
+    The selling price is never stored from outside: it is Unit Price x Qty
+    Per Unit, worked out after every save. A request that sends a pack
+    `price` anyway (the add-product form does) is turned into the unit price
+    that gives it; `qty` is the quantity to divide by when the request does
+    not carry its own."""
+    out = {}
+    for key in ("name", "sku", "size", "color", "note", "unit_type", "product", "sub"):
+        if key in data:
+            out[key] = (data.get(key) or "").strip() or None
+    if "name" in out and not out["name"]:
+        raise ValueError("A product needs a name.")
+    for key, label in (("qty_per_unit", "Qty per unit"), ("qty_per_box", "Qty per box"),
+                       ("box_price", "Box price"), ("min_qty", "Minimum qty")):
+        if key in data:
+            out[key] = _num_or_none(data.get(key), label)
+    if "unit_price" in data:
+        value = _num_or_none(data.get("unit_price"), "Unit price")
+        out["unit_price"] = None if value is None else round(float(str(data.get("unit_price")).replace(",", "")), 4)
+    elif "price" in data:
+        price = _num_or_none(data.get("price"), "Price")
+        per = out.get("qty_per_unit") or qty or 1
+        out["unit_price"] = None if price is None else round(price / per, 4)
+    if "status" in data:
+        status = (data.get("status") or "").strip().lower()
+        if status not in CATALOG_STATUSES:
+            raise ValueError("Unknown status.")
+        out["status"] = status
+    if "is_visible" in data:
+        out["is_visible"] = bool(data.get("is_visible"))
+    return out
+
+
+def _recompute_price(cur, variant_id):
+    """Price = Unit Price x Qty Per Unit, the same rule as the sheet's Price
+    column. Done in SQL after every write so a change to either number can
+    never leave the price behind."""
+    cur.execute(
+        """UPDATE catalog_variants
+           SET price = ROUND(unit_price * COALESCE(NULLIF(qty_per_unit, 0), 1), 2)
+           WHERE id = %s""",
+        (variant_id,),
+    )
+
+
+def _save_cost(cur, variant_id, data):
+    """Supplier and unit cost - only ever from the superuser."""
+    if not session.get("is_superuser") or not ("supplier" in data or "unit_cost" in data):
+        return
+    # only what was sent changes: setting the cost must not blank the supplier
+    cur.execute("SELECT supplier, unit_cost FROM catalog_costs WHERE variant_id=%s", (variant_id,))
+    had = cur.fetchone() or {}
+    supplier = ((data.get("supplier") or "").strip() or None) if "supplier" in data else had.get("supplier")
+    unit_cost = _num_or_none(data.get("unit_cost"), "Unit cost") if "unit_cost" in data else had.get("unit_cost")
+    cur.execute(
+        """INSERT INTO catalog_costs (variant_id, supplier, unit_cost) VALUES (%s,%s,%s)
+           ON CONFLICT (variant_id) DO UPDATE SET supplier = EXCLUDED.supplier, unit_cost = EXCLUDED.unit_cost""",
+        (variant_id, supplier, unit_cost),
+    )
+
+
+def _insert_variant(cur, family_id, clean, data):
+    cols = {"name": clean.get("name"), "sku": None, "size": None, "color": None, "note": None, "unit_type": None,
+            "product": None, "sub": None, "qty_per_unit": None, "qty_per_box": None, "unit_price": None,
+            "box_price": None, "min_qty": None, "status": "", "is_visible": True}
+    cols.update(clean)
+    cur.execute(
+        """INSERT INTO catalog_variants
+             (family_id, name, sku, size, color, note, unit_type, product, sub, qty_per_unit, qty_per_box,
+              unit_price, box_price, min_qty, status, is_visible, sort_order)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (family_id, cols["name"], cols["sku"], cols["size"], cols["color"], cols["note"], cols["unit_type"],
+         cols["product"], cols["sub"], cols["qty_per_unit"], cols["qty_per_box"], cols["unit_price"],
+         cols["box_price"], cols["min_qty"], cols["status"], cols["is_visible"], _next_sort(cur, "catalog_variants")),
+    )
+    variant_id = cur.fetchone()["id"]
+    _recompute_price(cur, variant_id)
+    _save_cost(cur, variant_id, data)
+    return variant_id
+
+
+@app.route("/api/products/families", methods=["POST"])
+@products_required
+def api_product_family_create():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    section = (data.get("section") or "").strip() or "Others"
+    if not name:
+        return jsonify({"status": "error", "message": "Give the product a name."}), 400
+    variant = dict(data.get("variant") or {})
+    variant["name"] = (variant.get("name") or "").strip() or name
+    db = get_db()
+    cur = db.cursor()
+    try:
+        clean = _clean_variant(variant)
+        cur.execute(
+            """INSERT INTO catalog_families (name, section, description, is_visible, sort_order)
+               VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+            (name, section, (data.get("description") or "").strip() or None,
+             bool(data.get("is_visible", True)), _next_sort(cur, "catalog_families")),
+        )
+        family_id = cur.fetchone()["id"]
+        _insert_variant(cur, family_id, clean, variant)
+    except ValueError as err:
+        db.rollback()
+        return jsonify({"status": "error", "message": str(err)}), 400
+    _catalog_touch(cur)
+    record_audit(cur, "Added product", name, {"section": section})
+    db.commit()
+    return jsonify({"status": "ok", "id": family_id})
+
+
+@app.route("/api/products/families/<int:family_id>", methods=["POST"])
+@products_required
+def api_product_family_update(family_id):
+    data = request.get_json(silent=True) or {}
+    sets, params = [], []
+    for key in ("name", "section", "description"):
+        if key in data:
+            value = (data.get(key) or "").strip()
+            if key in ("name", "section") and not value:
+                return jsonify({"status": "error", "message": f"A product needs a {key}."}), 400
+            sets.append(f"{key}=%s")
+            params.append(value or None)
+    if "is_visible" in data:
+        sets.append("is_visible=%s")
+        params.append(bool(data.get("is_visible")))
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM catalog_families WHERE id=%s", (family_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such product."}), 404
+    if sets:
+        cur.execute(f"UPDATE catalog_families SET {', '.join(sets)}, updated_at=NOW() WHERE id=%s", (*params, family_id))
+        _catalog_touch(cur)
+        record_audit(cur, "Edited product", row["name"], {k: data.get(k) for k in ("name", "section", "description", "is_visible") if k in data})
+    db.commit()
+    return jsonify({"status": "ok"})
+
+
+def _drop_family_photo(photo_filename):
+    if photo_filename:
+        path = os.path.join(UPLOAD_DIR, photo_filename)
+        if os.path.exists(path):
+            os.remove(path)
+
+
+@app.route("/api/products/families/<int:family_id>", methods=["DELETE"])
+@products_required
+def api_product_family_delete(family_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name, photo_filename FROM catalog_families WHERE id=%s", (family_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such product."}), 404
+    cur.execute("SELECT photo_filename FROM catalog_variants WHERE family_id=%s AND photo_filename IS NOT NULL", (family_id,))
+    option_photos = [r["photo_filename"] for r in cur.fetchall()]
+    cur.execute("DELETE FROM catalog_families WHERE id=%s", (family_id,))
+    _catalog_touch(cur)
+    record_audit(cur, "Deleted product", row["name"])
+    db.commit()
+    _drop_family_photo(row["photo_filename"])
+    for fn in option_photos:
+        _drop_family_photo(fn)
+    return jsonify({"status": "ok"})
+
+
+def _store_catalog_photo(file, stem):
+    """Shrink an uploaded picture to web size and save it as <stem>.jpg.
+    Returns (filename, None), or (None, (json, status)) when it can't be used."""
+    if not file or not file.filename:
+        return None, (jsonify({"status": "error", "message": "No photo uploaded."}), 400)
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ALLOWED_PHOTO_EXTENSIONS:
+        return None, (jsonify({"status": "error", "message": "Photo must be a PNG, JPG or WEBP image."}), 400)
+    filename = f"{stem}.jpg"
+    path = os.path.join(UPLOAD_DIR, filename)
+    try:
+        # a phone photo is several MB; the catalogue wants a few dozen KB
+        from PIL import Image, ImageOps
+
+        img = ImageOps.exif_transpose(Image.open(file.stream))
+        img.thumbnail((PRODUCT_PHOTO_MAX_PX, PRODUCT_PHOTO_MAX_PX))
+        if img.mode in ("RGBA", "LA", "P"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            rgba = img.convert("RGBA")
+            background.paste(rgba, mask=rgba.split()[-1])
+            img = background
+        else:
+            img = img.convert("RGB")
+        img.save(path, "JPEG", quality=82, optimize=True)
+    except ImportError:
+        filename = f"{stem}.{ext}"
+        path = os.path.join(UPLOAD_DIR, filename)
+        file.stream.seek(0)
+        file.save(path)
+    except Exception:
+        return None, (jsonify({"status": "error", "message": "That file couldn't be read as an image."}), 400)
+    return filename, None
+
+
+@app.route("/api/products/families/<int:family_id>/photo", methods=["POST"])
+@products_required
+def api_product_photo_upload(family_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name, photo_filename FROM catalog_families WHERE id=%s", (family_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such product."}), 404
+    filename, err = _store_catalog_photo(request.files.get("photo"), f"catalog-{family_id}")
+    if err:
+        return err
+    if row["photo_filename"] and row["photo_filename"] != filename:
+        _drop_family_photo(row["photo_filename"])
+    cur.execute("UPDATE catalog_families SET photo_filename=%s, updated_at=NOW() WHERE id=%s", (filename, family_id))
+    _catalog_touch(cur)
+    record_audit(cur, "Updated product photo", row["name"])
+    db.commit()
+    cur.execute("SELECT photo_filename, updated_at FROM catalog_families WHERE id=%s", (family_id,))
+    r = cur.fetchone()
+    return jsonify({"status": "ok", "photo": _photo_url(r["photo_filename"], r["updated_at"])})
+
+
+@app.route("/api/products/variants/<int:variant_id>/photo", methods=["POST"])
+@products_required
+def api_product_variant_photo_upload(variant_id):
+    """A picture of one size or color - sizes often look different, so an
+    option can have its own photo instead of the product's."""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT v.name, v.photo_filename, f.name AS family_name FROM catalog_variants v
+           JOIN catalog_families f ON f.id = v.family_id WHERE v.id=%s""",
+        (variant_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such option."}), 404
+    filename, err = _store_catalog_photo(request.files.get("photo"), f"catalog-v{variant_id}")
+    if err:
+        return err
+    if row["photo_filename"] and row["photo_filename"] != filename:
+        _drop_family_photo(row["photo_filename"])
+    cur.execute("UPDATE catalog_variants SET photo_filename=%s, updated_at=NOW() WHERE id=%s", (filename, variant_id))
+    _catalog_touch(cur)
+    record_audit(cur, "Updated product option photo", f"{row['family_name']} - {row['name']}")
+    db.commit()
+    cur.execute("SELECT photo_filename, updated_at FROM catalog_variants WHERE id=%s", (variant_id,))
+    r = cur.fetchone()
+    return jsonify({"status": "ok", "photo": _photo_url(r["photo_filename"], r["updated_at"])})
+
+
+@app.route("/api/products/variants/<int:variant_id>/photo", methods=["DELETE"])
+@products_required
+def api_product_variant_photo_delete(variant_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT v.name, v.photo_filename, f.name AS family_name FROM catalog_variants v
+           JOIN catalog_families f ON f.id = v.family_id WHERE v.id=%s""",
+        (variant_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such option."}), 404
+    cur.execute("UPDATE catalog_variants SET photo_filename=NULL, updated_at=NOW() WHERE id=%s", (variant_id,))
+    _catalog_touch(cur)
+    record_audit(cur, "Removed product option photo", f"{row['family_name']} - {row['name']}")
+    db.commit()
+    _drop_family_photo(row["photo_filename"])
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/products/categories/photo", methods=["POST"])
+@products_required
+def api_product_category_photo_upload():
+    """The picture on a category's card on the catalog's home page."""
+    name = (request.form.get("name") or "").strip()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT 1 FROM catalog_families WHERE section=%s LIMIT 1", (name,))
+    if not name or cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "No such category."}), 404
+    cur.execute(
+        """INSERT INTO catalog_categories (name) VALUES (%s)
+           ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id, photo_filename""",
+        (name,),
+    )
+    row = cur.fetchone()
+    filename, err = _store_catalog_photo(request.files.get("photo"), f"catalog-cat-{row['id']}")
+    if err:
+        db.rollback()
+        return err
+    if row["photo_filename"] and row["photo_filename"] != filename:
+        _drop_family_photo(row["photo_filename"])
+    cur.execute("UPDATE catalog_categories SET photo_filename=%s, updated_at=NOW() WHERE id=%s", (filename, row["id"]))
+    _catalog_touch(cur)
+    record_audit(cur, "Updated category photo", name)
+    db.commit()
+    cur.execute("SELECT photo_filename, updated_at FROM catalog_categories WHERE id=%s", (row["id"],))
+    r = cur.fetchone()
+    return jsonify({"status": "ok", "photo": _photo_url(r["photo_filename"], r["updated_at"])})
+
+
+@app.route("/api/products/categories/photo", methods=["DELETE"])
+@products_required
+def api_product_category_photo_delete():
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, photo_filename FROM catalog_categories WHERE name=%s", (name,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "ok"})
+    cur.execute("UPDATE catalog_categories SET photo_filename=NULL, updated_at=NOW() WHERE id=%s", (row["id"],))
+    _catalog_touch(cur)
+    record_audit(cur, "Removed category photo", name)
+    db.commit()
+    _drop_family_photo(row["photo_filename"])
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/products/families/<int:family_id>/photo", methods=["DELETE"])
+@products_required
+def api_product_photo_delete(family_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name, photo_filename FROM catalog_families WHERE id=%s", (family_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such product."}), 404
+    cur.execute("UPDATE catalog_families SET photo_filename=NULL, updated_at=NOW() WHERE id=%s", (family_id,))
+    _catalog_touch(cur)
+    record_audit(cur, "Removed product photo", row["name"])
+    db.commit()
+    _drop_family_photo(row["photo_filename"])
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/products/families/<int:family_id>/variants", methods=["POST"])
+@products_required
+def api_product_variant_create(family_id):
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT name FROM catalog_families WHERE id=%s", (family_id,))
+    fam = cur.fetchone()
+    if fam is None:
+        return jsonify({"status": "error", "message": "No such product."}), 404
+    data = dict(data)
+    data["name"] = (data.get("name") or "").strip() or fam["name"]
+    try:
+        clean = _clean_variant(data)
+        variant_id = _insert_variant(cur, family_id, clean, data)
+    except ValueError as err:
+        db.rollback()
+        return jsonify({"status": "error", "message": str(err)}), 400
+    cur.execute("UPDATE catalog_families SET updated_at=NOW() WHERE id=%s", (family_id,))
+    _catalog_touch(cur)
+    record_audit(cur, "Added product option", f"{fam['name']} - {clean['name']}", {"price": clean.get("price")})
+    db.commit()
+    return jsonify({"status": "ok", "id": variant_id})
+
+
+@app.route("/api/products/variants/<int:variant_id>", methods=["POST"])
+@products_required
+def api_product_variant_update(variant_id):
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT v.*, f.name AS family_name FROM catalog_variants v
+           JOIN catalog_families f ON f.id = v.family_id WHERE v.id=%s""",
+        (variant_id,),
+    )
+    old = cur.fetchone()
+    if old is None:
+        return jsonify({"status": "error", "message": "No such option."}), 404
+    try:
+        clean = _clean_variant(data, qty=float(old["qty_per_unit"]) if old["qty_per_unit"] else None)
+    except ValueError as err:
+        return jsonify({"status": "error", "message": str(err)}), 400
+    if clean:
+        sets = ", ".join(f"{k}=%s" for k in clean)
+        cur.execute(f"UPDATE catalog_variants SET {sets}, updated_at=NOW() WHERE id=%s", (*clean.values(), variant_id))
+    _recompute_price(cur, variant_id)
+    cur.execute("SELECT unit_cost FROM catalog_costs WHERE variant_id=%s", (variant_id,))
+    old_cost_row = cur.fetchone()
+    old_cost = float(old_cost_row["unit_cost"]) if old_cost_row and old_cost_row["unit_cost"] is not None else None
+    try:
+        _save_cost(cur, variant_id, data)
+    except ValueError as err:
+        db.rollback()
+        return jsonify({"status": "error", "message": str(err)}), 400
+    cur.execute("UPDATE catalog_families SET updated_at=NOW() WHERE id=%s", (old["family_id"],))
+    _catalog_touch(cur)
+
+    costs = bool(session.get("is_superuser"))
+    cost_cols = ", c.supplier, c.unit_cost" if costs else ""
+    cost_join = "LEFT JOIN catalog_costs c ON c.variant_id = v.id" if costs else ""
+    cur.execute(f"SELECT v.*{cost_cols} FROM catalog_variants v {cost_join} WHERE v.id=%s", (variant_id,))
+    new = cur.fetchone()
+
+    target = f"{old['family_name']} - {old['name']}"
+    as_float = lambda x: float(x) if x is not None else None
+    price_changes = {k: {"before": as_float(old[k]), "after": as_float(new[k])}
+                     for k in ("price", "unit_price", "box_price") if as_float(old[k]) != as_float(new[k])}
+    if price_changes:
+        record_audit(cur, "Changed product price", target, price_changes)
+    # the per-option history shown in the popup (one stamp for the whole save)
+    cur.execute("SELECT unit_cost FROM catalog_costs WHERE variant_id=%s", (variant_id,))
+    new_cost_row = cur.fetchone()
+    new_cost = float(new_cost_row["unit_cost"]) if new_cost_row and new_cost_row["unit_cost"] is not None else None
+    history = [(k, v["before"], v["after"]) for k, v in price_changes.items()]
+    if old_cost != new_cost:
+        history.append(("unit_cost", old_cost, new_cost))
+    if history:
+        cur.execute("SELECT NOW() AS t")
+        stamp = cur.fetchone()["t"]
+        for field, before, after in history:
+            cur.execute(
+                """INSERT INTO catalog_price_history (variant_id, field, old_value, new_value, changed_by, changed_at)
+                   VALUES (%s,%s,%s,%s,%s,%s)""",
+                (variant_id, field, before, after, session.get("display_name") or "Unknown", stamp),
+            )
+    other = [k for k in clean if k not in ("unit_price", "box_price")]
+    if other:
+        record_audit(cur, "Edited product option", target, {k: clean[k] for k in other})
+    db.commit()
+    return jsonify({"status": "ok", "variant": _variant_json(dict(new), costs)})
+
+
+@app.route("/api/products/variants/<int:variant_id>/history")
+@products_required
+def api_product_variant_history(variant_id):
+    """Every change to this option's prices, newest first. Cost changes are
+    private, so only the superuser gets them."""
+    cur = get_db().cursor()
+    cur.execute("SELECT 1 FROM catalog_variants WHERE id=%s", (variant_id,))
+    if cur.fetchone() is None:
+        return jsonify({"status": "error", "message": "No such option."}), 404
+    fields = ["unit_price", "price", "box_price"] + (["unit_cost"] if session.get("is_superuser") else [])
+    cur.execute(
+        """SELECT field, old_value, new_value, changed_by, changed_at FROM catalog_price_history
+           WHERE variant_id=%s AND field = ANY(%s) ORDER BY changed_at DESC, id""",
+        (variant_id, fields),
+    )
+    events = []
+    for r in cur.fetchall():
+        if not events or events[-1]["_at"] != r["changed_at"] or events[-1]["by"] != r["changed_by"]:
+            events.append({"_at": r["changed_at"], "at": r["changed_at"].isoformat(), "by": r["changed_by"], "changes": []})
+        events[-1]["changes"].append({
+            "field": r["field"],
+            "old": float(r["old_value"]) if r["old_value"] is not None else None,
+            "new": float(r["new_value"]) if r["new_value"] is not None else None,
+        })
+    for e in events:
+        e.pop("_at")
+    return jsonify({"status": "ok", "events": events})
+
+
+def _drop_family_if_empty(cur, family_id):
+    cur.execute("SELECT COUNT(*) AS c FROM catalog_variants WHERE family_id=%s", (family_id,))
+    if cur.fetchone()["c"]:
+        return None
+    cur.execute("DELETE FROM catalog_families WHERE id=%s RETURNING photo_filename", (family_id,))
+    row = cur.fetchone()
+    return row["photo_filename"] if row else None
+
+
+@app.route("/api/products/variants/<int:variant_id>", methods=["DELETE"])
+@products_required
+def api_product_variant_delete(variant_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT v.name, v.family_id, v.photo_filename, f.name AS family_name FROM catalog_variants v
+           JOIN catalog_families f ON f.id = v.family_id WHERE v.id=%s""",
+        (variant_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such option."}), 404
+    cur.execute("DELETE FROM catalog_variants WHERE id=%s", (variant_id,))
+    leftover_photo = _drop_family_if_empty(cur, row["family_id"])
+    _catalog_touch(cur)
+    record_audit(cur, "Deleted product option", f"{row['family_name']} - {row['name']}")
+    db.commit()
+    _drop_family_photo(leftover_photo)
+    _drop_family_photo(row["photo_filename"])
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/products/variants/<int:variant_id>/move", methods=["POST"])
+@products_required
+def api_product_variant_move(variant_id):
+    """Put an option under another product, or - with no target - break it out
+    into a product of its own. This is how a wrong grouping from the import is
+    put right."""
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT v.name, v.family_id, f.name AS family_name, f.section FROM catalog_variants v
+           JOIN catalog_families f ON f.id = v.family_id WHERE v.id=%s""",
+        (variant_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({"status": "error", "message": "No such option."}), 404
+    target = data.get("family_id")
+    if target:
+        cur.execute("SELECT id, name FROM catalog_families WHERE id=%s", (target,))
+        dest = cur.fetchone()
+        if dest is None:
+            return jsonify({"status": "error", "message": "No such product to move it to."}), 404
+        new_id, new_name = dest["id"], dest["name"]
+    else:
+        new_name = (data.get("name") or row["name"]).strip()
+        section = (data.get("section") or "").strip() or row["section"]
+        if section != row["section"]:
+            cur.execute("SELECT COUNT(*) AS c FROM catalog_variants WHERE family_id=%s", (row["family_id"],))
+            if cur.fetchone()["c"] == 1:
+                # the only option of its product: the product itself changes category
+                cur.execute("UPDATE catalog_families SET section=%s, updated_at=NOW() WHERE id=%s", (section, row["family_id"]))
+                _catalog_touch(cur)
+                record_audit(cur, "Changed product category", f"{row['family_name']} - {row['name']}", {"from": row["section"], "to": section})
+                db.commit()
+                return jsonify({"status": "ok", "id": row["family_id"]})
+        cur.execute(
+            "INSERT INTO catalog_families (name, section, sort_order) VALUES (%s,%s,%s) RETURNING id",
+            (new_name, section, _next_sort(cur, "catalog_families")),
+        )
+        new_id = cur.fetchone()["id"]
+    if new_id == row["family_id"]:
+        return jsonify({"status": "ok", "id": new_id})
+    cur.execute("UPDATE catalog_variants SET family_id=%s, updated_at=NOW() WHERE id=%s", (new_id, variant_id))
+    cur.execute("UPDATE catalog_families SET updated_at=NOW() WHERE id IN (%s,%s)", (new_id, row["family_id"]))
+    leftover_photo = _drop_family_if_empty(cur, row["family_id"])
+    _catalog_touch(cur)
+    record_audit(cur, "Moved product option", f"{row['family_name']} - {row['name']}", {"to": new_name, "category": section if not target else None})
+    db.commit()
+    _drop_family_photo(leftover_photo)
+    return jsonify({"status": "ok", "id": new_id})
+
+
+@app.route("/api/products/families/<int:family_id>/merge", methods=["POST"])
+@products_required
+def api_product_family_merge(family_id):
+    """Fold every option of one product into another (two cards that should
+    have been one)."""
+    data = request.get_json(silent=True) or {}
+    target = data.get("into")
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, name, photo_filename FROM catalog_families WHERE id IN (%s,%s)", (family_id, target or 0))
+    found = {r["id"]: r for r in cur.fetchall()}
+    if family_id not in found or not target or int(target) not in found or int(target) == family_id:
+        return jsonify({"status": "error", "message": "Pick a different product to merge into."}), 400
+    src, dest = found[family_id], found[int(target)]
+    cur.execute("UPDATE catalog_variants SET family_id=%s, updated_at=NOW() WHERE family_id=%s", (dest["id"], src["id"]))
+    cur.execute("DELETE FROM catalog_families WHERE id=%s", (src["id"],))
+    cur.execute("UPDATE catalog_families SET updated_at=NOW() WHERE id=%s", (dest["id"],))
+    _catalog_touch(cur)
+    record_audit(cur, "Merged products", src["name"], {"into": dest["name"]})
+    db.commit()
+    _drop_family_photo(src["photo_filename"])
+    return jsonify({"status": "ok", "id": dest["id"]})
+
+
+@app.route("/api/products/sections/rename", methods=["POST"])
+@products_required
+def api_product_section_rename():
+    data = request.get_json(silent=True) or {}
+    old, new = (data.get("old") or "").strip(), (data.get("new") or "").strip()
+    if not old or not new:
+        return jsonify({"status": "error", "message": "Give the category a name."}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("UPDATE catalog_families SET section=%s, updated_at=NOW() WHERE section=%s", (new, old))
+    count = cur.rowcount
+    leftover_photo = None
+    cur.execute("SELECT id, photo_filename FROM catalog_categories WHERE name=%s", (old,))
+    old_cat = cur.fetchone()
+    if old_cat:
+        cur.execute("SELECT id, photo_filename FROM catalog_categories WHERE name=%s", (new,))
+        new_cat = cur.fetchone()
+        if new_cat is None:
+            cur.execute("UPDATE catalog_categories SET name=%s, updated_at=NOW() WHERE id=%s", (new, old_cat["id"]))
+        else:
+            # merging into a category that exists: keep its picture unless it has none
+            if not new_cat["photo_filename"] and old_cat["photo_filename"]:
+                cur.execute("UPDATE catalog_categories SET photo_filename=%s, updated_at=NOW() WHERE id=%s", (old_cat["photo_filename"], new_cat["id"]))
+            else:
+                leftover_photo = old_cat["photo_filename"]
+            cur.execute("DELETE FROM catalog_categories WHERE id=%s", (old_cat["id"],))
+    _catalog_touch(cur)
+    record_audit(cur, "Renamed product category", old, {"to": new, "products": count})
+    db.commit()
+    _drop_family_photo(leftover_photo)
+    return jsonify({"status": "ok", "count": count})
+
+
+@app.route("/api/products/settings", methods=["POST"])
+@products_required
+def api_product_settings():
+    data = request.get_json(silent=True) or {}
+    clean = {}
+    for key in CATALOG_SETTING_DEFAULTS:
+        if key not in data:
+            continue
+        value = data[key]
+        if key in ("show_box_prices", "show_sku"):
+            clean[key] = "1" if value in (True, "1", 1, "true") else "0"
+        else:
+            value = (str(value) if value is not None else "").strip()
+            if key == "contact_url" and value and not re.match(r"^https?://", value, re.I):
+                return jsonify({"status": "error", "message": "The contact link must start with https://"}), 400
+            clean[key] = value[:600]
+    db = get_db()
+    cur = db.cursor()
+    for key, value in clean.items():
+        cur.execute(
+            """INSERT INTO catalog_settings (key, value) VALUES (%s,%s)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            (key, value),
+        )
+    _catalog_touch(cur)
+    record_audit(cur, "Changed catalog settings", None, clean)
+    db.commit()
+    return jsonify({"status": "ok", "settings": _catalog_settings(cur)})
+
+
+@app.route("/api/products/import", methods=["POST"])
+@superuser_required
+def api_products_import():
+    """Load the price-list CSV. Safe to run again: it only adds options that
+    are not already in Products (matched on category + name) and never
+    overwrites one that is, so edits made here are not undone. Without
+    commit=1 it only reports what it would do."""
+    import catalog_import
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"status": "error", "message": "Choose the price list CSV first."}), 400
+    parsed = catalog_import.parse_price_list(catalog_import.decode(file.read()))
+    rows = parsed["rows"]
+    if not rows:
+        return jsonify({"status": "error", "message": (parsed["warnings"] or ["Nothing to import."])[0]}), 400
+    commit = request.form.get("commit") == "1"
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """SELECT f.id AS family_id, f.name AS family_name, f.section, v.name AS variant_name
+           FROM catalog_families f LEFT JOIN catalog_variants v ON v.family_id = f.id"""
+    )
+    families, have = {}, set()
+    for r in cur.fetchall():
+        families.setdefault((r["section"].lower(), r["family_name"].lower()), r["family_id"])
+        if r["variant_name"]:
+            have.add((r["section"].lower(), r["variant_name"].lower()))
+
+    new_families, added, skipped = set(), 0, 0
+    sort_f, sort_v = _next_sort(cur, "catalog_families"), _next_sort(cur, "catalog_variants")
+    for row in rows:
+        section = row["section"]
+        if (section.lower(), row["name"].lower()) in have:
+            skipped += 1
+            continue
+        fkey = (section.lower(), row["family"].lower())
+        added += 1
+        if fkey not in families:
+            new_families.add(fkey)
+            if commit:
+                cur.execute(
+                    "INSERT INTO catalog_families (name, section, sort_order) VALUES (%s,%s,%s) RETURNING id",
+                    (row["family"], section, sort_f),
+                )
+                families[fkey] = cur.fetchone()["id"]
+                sort_f += 1
+            else:
+                families[fkey] = -1
+        have.add((section.lower(), row["name"].lower()))
+        if commit:
+            cur.execute(
+                """INSERT INTO catalog_variants
+                     (family_id, name, sku, size, color, note, unit_type, product, sub, qty_per_unit, qty_per_box,
+                      unit_price, price, box_price, min_qty, status, sort_order)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (families[fkey], row["name"], row["sku"] or None, row["size"] or None, row["color"] or None,
+                 row["note"] or None, row["unit_type"] or None, row["product"] or None, row["sub"] or None,
+                 row["qty_per_unit"], row["qty_per_box"], row["unit_price"], row["price"], row["box_price"],
+                 row["min_qty"], row["status"], sort_v),
+            )
+            sort_v += 1
+            if row["supplier"] or row["unit_cost"] is not None:
+                cur.execute(
+                    "INSERT INTO catalog_costs (variant_id, supplier, unit_cost) VALUES (%s,%s,%s)",
+                    (cur.fetchone()["id"], row["supplier"] or None, row["unit_cost"]),
+                )
+    summary = {
+        "rows_in_file": len(rows), "new_options": added, "already_there": skipped,
+        "new_products": len(new_families), "warnings": parsed["warnings"],
+    }
+    if commit:
+        _catalog_touch(cur)
+        record_audit(cur, "Imported price list", file.filename, {k: v for k, v in summary.items() if k != "warnings"})
+        db.commit()
+    return jsonify({"status": "ok", "committed": commit, **summary})
+
+
+# --- what a client sees ----------------------------------------------------
+
+def _shop_data(cur):
+    """Everything /shop shows, and nothing else: visible products, their
+    visible options, selling prices. Costs are never selected."""
+    settings = _catalog_settings(cur)
+    show_box = settings["show_box_prices"] == "1"
+    show_sku = settings["show_sku"] == "1"
+    cur.execute(
+        """SELECT id, name, section, description, photo_filename, updated_at
+           FROM catalog_families WHERE is_visible ORDER BY sort_order, id"""
+    )
+    fams = {}
+    for r in cur.fetchall():
+        fams[r["id"]] = {
+            "id": r["id"], "name": r["name"], "section": r["section"], "description": r["description"] or "",
+            "photo": _photo_url(r["photo_filename"], r["updated_at"]), "variants": [],
+        }
+    cur.execute(
+        """SELECT id, family_id, name, sku, size, color, note, unit_type, qty_per_unit, qty_per_box, price,
+                  box_price, min_qty, status, photo_filename, updated_at
+           FROM catalog_variants WHERE is_visible ORDER BY sort_order, id"""
+    )
+    for r in cur.fetchall():
+        fam = fams.get(r["family_id"])
+        if fam is None:
+            continue
+        fam["variants"].append({
+            "id": r["id"], "name": r["name"], "sku": (r["sku"] or "") if show_sku else "",
+            "size": r["size"] or "", "color": r["color"] or "", "note": r["note"] or "",
+            "unit": r["unit_type"] or "",
+            "per_unit": float(r["qty_per_unit"]) if r["qty_per_unit"] is not None else None,
+            "per_box": float(r["qty_per_box"]) if r["qty_per_box"] is not None else None,
+            "price": float(r["price"]) if r["price"] is not None else None,
+            "box_price": float(r["box_price"]) if (show_box and r["box_price"] is not None) else None,
+            "moq": float(r["min_qty"]) if r["min_qty"] is not None else None,
+            "status": r["status"] if r["status"] in CATALOG_PUBLIC_BADGES else "",
+            "photo": _photo_url(r["photo_filename"], r["updated_at"]),
+        })
+    cur.execute("SELECT name, photo_filename, updated_at FROM catalog_categories WHERE photo_filename IS NOT NULL")
+    category_photos = {r["name"]: _photo_url(r["photo_filename"], r["updated_at"]) for r in cur.fetchall()}
+    return {
+        "families": [f for f in fams.values() if f["variants"]],
+        "category_photos": category_photos,
+        "contact": {"url": settings["contact_url"], "label": settings["contact_label"], "phone": settings["contact_phone"]},
+        "intro": settings["intro"],
+        "show_box_prices": show_box,
+    }
+
+
+_SHOP_CACHE = {"version": None, "data": None}
+
+
+@app.route("/shop")
+def shop_page():
+    """The public catalogue: no login, read-only, nothing from the session.
+    Rebuilt only when the version stamp changes, and answered with a 304 when
+    the browser already has that version."""
+    cur = get_db().cursor()
+    cur.execute("SELECT value FROM catalog_settings WHERE key='version'")
+    row = cur.fetchone()
+    version = (row["value"] if row else None) or "0"
+    if request.if_none_match.contains(version):
+        resp = app.response_class(status=304)
+        resp.set_etag(version)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    if _SHOP_CACHE["version"] != version or _SHOP_CACHE["data"] is None:
+        _SHOP_CACHE["data"] = _shop_data(cur)
+        _SHOP_CACHE["version"] = version
+    resp = app.make_response(render_template("shop.html", data=_SHOP_CACHE["data"], business_name=BUSINESS_NAME))
+    resp.set_etag(version)
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 
 
 init_db()

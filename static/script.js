@@ -522,6 +522,8 @@ const tabInventoryBtn = document.getElementById("tabInventoryBtn");
 const inventoryView = document.getElementById("inventoryView");
 const tabDiscountsBtn = document.getElementById("tabDiscountsBtn");
 const discountsView = document.getElementById("discountsView");
+const tabProductsBtn = document.getElementById("tabProductsBtn");
+const productsView = document.getElementById("productsView");
 const tabNotesBtn = document.getElementById("tabNotesBtn");
 const notesView = document.getElementById("notesView");
 const OPS_TAB_DEFS = [
@@ -567,6 +569,7 @@ if (tabExpensesBtn) TABS.expenses = { btn: tabExpensesBtn, view: expensesView, c
 if (tabInventoryBtn) TABS.inventory = { btn: tabInventoryBtn, view: inventoryView, controls: null };
 if (tabDiscountsBtn) TABS.discounts = { btn: tabDiscountsBtn, view: discountsView, controls: null };
 if (tabNotesBtn) TABS.notes = { btn: tabNotesBtn, view: notesView, controls: null };
+if (tabProductsBtn) TABS.products = { btn: tabProductsBtn, view: productsView, controls: null };
 // Operations only exists for the superuser and co-owners.
 OPS_TAB_DEFS.forEach(([name, btnId, viewId]) => {
   const btn = document.getElementById(btnId);
@@ -640,6 +643,7 @@ function showTab(tab) {
   if (tab === "notes") {
     loadNotes();
   }
+  if (tab === "products") loadProducts(); // static/products.js
   if (tab === "masterSales") loadMasterSales();
   if (tab === "monthlySales") loadMonthlySales();
   if (tab === "monthlyOpex") loadMonthlyOpex();
@@ -686,6 +690,7 @@ if (tabExpensesBtn) tabExpensesBtn.addEventListener("click", () => showTab("expe
 if (tabInventoryBtn) tabInventoryBtn.addEventListener("click", () => showTab("inventory"));
 if (tabDiscountsBtn) tabDiscountsBtn.addEventListener("click", () => showTab("discounts"));
 if (tabNotesBtn) tabNotesBtn.addEventListener("click", () => showTab("notes"));
+if (tabProductsBtn) tabProductsBtn.addEventListener("click", () => showTab("products"));
 OPS_TAB_DEFS.forEach(([name, btnId]) => {
   const btn = document.getElementById(btnId);
   if (btn) btn.addEventListener("click", () => showTab(name));
@@ -10476,9 +10481,9 @@ const appMenu = document.getElementById("appMenu");
 const appLabel = document.getElementById("appLabel");
 const payrollLockModal = document.getElementById("payrollLockModal");
 
-const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", clients: "Clients", office: "Admin", ops: "Operations" };
+const APP_NAMES = { payroll: "Payroll and HRMS", admin: "Cup Printing", clients: "Clients", products: "Products", office: "Admin", ops: "Operations" };
 // where each app opens: the first thing you want to see in it
-const APP_HOME = { payroll: "dashboard", admin: "status", clients: "clientsdash", office: "collections", ops: "masterSales" };
+const APP_HOME = { payroll: "dashboard", admin: "status", clients: "clientsdash", products: "products", office: "collections", ops: "masterSales" };
 
 let currentApp = "payroll";
 // seeded from the server so a reload inside the unlock window doesn't
@@ -10535,7 +10540,7 @@ function switchApp(app) {
     openPayrollLock();
     return;
   }
-  if ((app === "admin" || app === "clients") && payrollUnlocked && !payrollAlwaysUnlocked) {
+  if ((app === "admin" || app === "clients" || app === "products") && payrollUnlocked && !payrollAlwaysUnlocked) {
     // leaving payroll drops the unlock, so coming back asks again
     fetch("/api/payroll/lock", { method: "POST" }).catch(() => {});
     payrollUnlocked = false;
