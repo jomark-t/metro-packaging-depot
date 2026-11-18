@@ -4977,7 +4977,6 @@ const STATUS_COLUMNS = [
   { key: "not_started", label: "Not started", dot: "#9ca3af" },
   { key: "ongoing", label: "Ongoing", dot: "#1c33bb" },
   { key: "done", label: "Done", dot: "#07c067" },
-  { key: "done_paid", label: "Done & paid", dot: "#b88c53" },
 ];
 
 // The API already rolls a whole order up to one status (ongoing wins over
@@ -4985,7 +4984,7 @@ const STATUS_COLUMNS = [
 // that rather than re-deriving it from the lines here. Cancelled orders
 // sit outside all four buckets, the same way "open" already excludes them.
 function statusBucket(o) {
-  if (o.status === "done") return o.is_paid ? "done_paid" : "done";
+  if (o.status === "done") return "done";
   if (o.status === "ongoing" || o.status === "partial") return "ongoing";
   if (o.status === "not_started") return "not_started";
   return null;
@@ -5144,6 +5143,7 @@ async function postJSON(url, body) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.message || "That didn't save.");
   }
+  return res.json().catch(() => ({}));
 }
 
 // Board, Status and Cup Prints each keep their own copy of the same
@@ -5166,13 +5166,12 @@ async function setOrderPaid(orderId, isPaid) {
 }
 
 // Dragging a card onto a column bulk-sets every line on the order to
-// match, and done & paid marks it paid in the same move - the four
-// columns are meant to be a complete description of the order, not just
-// its first line.
+// match - the three columns are meant to be a complete description of the
+// order, not just its first line. Payment is not tracked here; that lives
+// in the POS.
 async function applyStatusBucket(order, bucketKey) {
   const lineStatus = bucketKey === "not_started" ? "not_started" : bucketKey === "ongoing" ? "ongoing" : "done";
   await Promise.all(order.items.map((i) => setItemStatus(i.id, lineStatus)));
-  await setOrderPaid(order.id, bucketKey === "done_paid");
 }
 
 async function loadStatusBoard() {
@@ -5203,16 +5202,6 @@ function statusCardHTML(o) {
     )
     .join("");
 
-  let payRow = "";
-  if (bucket === "done" || bucket === "done_paid") {
-    const paid = bucket === "done_paid";
-    payRow = `
-      <div class="flex justify-end">
-        <button type="button" class="kb-pay-btn text-[11px] font-mono uppercase tracking-wide rounded-lg px-2.5 py-1 ${paid ? "is-paid" : "text-gray-400"}"
-                data-paytoggle="${o.id}">${paid ? "Paid ✓" : "Mark paid"}</button>
-      </div>`;
-  }
-
   return `
     <article class="kb-card bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" draggable="true" data-order-card="${o.id}">
       <button type="button" class="kb-card-face flex items-center gap-2.5 w-full text-left px-2.5 py-2" data-toggle="${o.id}">
@@ -5229,7 +5218,6 @@ function statusCardHTML(o) {
         </div>
         <div class="flex flex-col gap-1 text-[12.5px] border-t border-gray-100 pt-2">${linesHTML}</div>
         ${o.remarks ? `<p class="text-[11.5px] text-gray-600 italic bg-gray-50 rounded-md px-2 py-1.5">${escapeHtml(o.remarks)}</p>` : ""}
-        ${payRow}
       </div></div></div>
     </article>`;
 }
@@ -5238,8 +5226,9 @@ function renderStatusBoard() {
   const q = statusQuery.trim().toLowerCase();
   const visible = printAllOrders.filter((o) => !q || o.client_name.toLowerCase().includes(q));
 
+  const open = visible.filter((o) => ["not_started", "ongoing"].includes(statusBucket(o))).length;
   document.getElementById("statusSubtitle").textContent =
-    `${visible.filter((o) => statusBucket(o) && statusBucket(o) !== "done_paid").length} open job${visible.length === 1 ? "" : "s"} · drag a card, or click it open`;
+    `${open} open job${open === 1 ? "" : "s"} · drag a card, or click it open`;
 
   const board = document.getElementById("statusBoard");
   board.innerHTML = STATUS_COLUMNS.map((col) => {
@@ -5313,14 +5302,6 @@ function wireStatusBoard() {
     });
   });
 
-  board.querySelectorAll("[data-paytoggle]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const order = printAllOrders.find((o) => String(o.id) === btn.dataset.paytoggle);
-      if (order) withStatusFlip(() => setOrderPaid(order.id, !order.is_paid));
-    });
-  });
-
   board.querySelectorAll(".kb-card").forEach((card) => {
     card.addEventListener("dragstart", (e) => {
       e.dataTransfer.setData("text/plain", card.dataset.orderCard);
@@ -5377,7 +5358,7 @@ let cupPrintsRequest = 0;
 let cupPrintsSearchTimer = null;
 const CUP_PRINTS_FILTERS = [
   ["date_from", "cupPrintsFrom"], ["date_to", "cupPrintsTo"], ["status", "cupPrintsStatus"],
-  ["paid", "cupPrintsPaid"], ["logo", "cupPrintsLogo"], ["placed_by", "cupPrintsPlacedBy"],
+  ["logo", "cupPrintsLogo"], ["placed_by", "cupPrintsPlacedBy"],
 ];
 
 function cupPrintsFilterValues() {
@@ -5395,7 +5376,7 @@ async function loadCupPrints() {
   try {
     await loadPrintCatalogue();
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
   await loadPrintPeople();
@@ -5433,7 +5414,7 @@ async function loadCupPrintsPage({ page = cupPrintsPage } = {}) {
   } catch (err) {
     if (request !== cupPrintsRequest) return;
     document.getElementById("cupPrintsBody").innerHTML =
-      `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
+      `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
   renderCupPrints();
@@ -5591,17 +5572,19 @@ function cupPrintsRowsHTML(list) {
       const first = li === 0;
       const cells = [];
       if (first) cells.push(`<td rowspan="${o.items.length}" class="text-[11px] text-gray-500 whitespace-nowrap${flagged ? " cps-flag-not-started" : ""}">${printShortDate(o.order_date)}</td>`);
-      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}${badges ? ` ${badges}` : ""}</td>`);
+      if (first) cells.push(`<td rowspan="${o.items.length}" class="font-semibold text-[13px] whitespace-nowrap">${escapeHtml(o.client_name)}${o.is_discounted ? ` <span class="disc-badge" title="Discounted client - has special prices under Discounts">% Disc</span>` : ""}${badges ? ` ${badges}` : ""}</td>`);
       cells.push(cupItemCellHTML(i));
       cells.push(cupLidCellHTML(i));
       if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("logo", o.id, o.needs_new_frame)}</td>`);
       cells.push(cupQtyCellHTML(i));
       cells.push(cupInkCellHTML(i));
-      if (first) cells.push(`<td rowspan="${o.items.length}">${cupYesNoSelect("paid", o.id, o.is_paid)}</td>`);
       cells.push(`<td>${cupStatusSelect(o.id, i.id, i.status)}</td>`);
       if (first) {
         cells.push(`<td rowspan="${o.items.length}" class="whitespace-nowrap">${o.due_date ? printShortDate(o.due_date) : "—"}</td>`);
-        cells.push(`<td rowspan="${o.items.length}"><button type="button" class="cps-edit-btn" data-order="${o.id}" title="Edit this order - add, change or remove cups">Edit</button></td>`);
+        cells.push(`<td rowspan="${o.items.length}"><div class="flex items-center gap-1">` +
+          `<button type="button" class="cps-edit-btn" data-order="${o.id}" title="Edit this order - add, change or remove cups">Edit</button>` +
+          `<button type="button" class="cps-quote-btn" data-order="${o.id}" title="Price this order from the price list and prepare a receipt for the client">Quote</button>` +
+          `</div></td>`);
         cells.push(
           `<td rowspan="${o.items.length}" style="max-width:14rem">` +
             `<div class="flex items-start gap-1.5">${cupRemarksHTML(o)}` +
@@ -5611,7 +5594,7 @@ function cupPrintsRowsHTML(list) {
       }
       out.push(`<tr class="${first && gi > 0 ? "group-start" : ""}">${cells.join("")}</tr>`);
     });
-    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="12"></td></tr>`);
+    if (gi < list.length - 1) out.push(`<tr class="spacer"><td colspan="11"></td></tr>`);
   });
   return out.join("");
 }
@@ -5622,7 +5605,7 @@ function renderCupPrints() {
   const body = document.getElementById("cupPrintsBody");
   body.innerHTML = cupPrintsOrders.length
     ? cupPrintsRowsHTML(cupPrintsOrders)
-    : `<tr><td colspan="12" class="text-center text-sm text-gray-400 italic py-8">${
+    : `<tr><td colspan="11" class="text-center text-sm text-gray-400 italic py-8">${
         cupPrintsFiltersActive() ? "No orders match these filters." : "No orders yet."}</td></tr>`;
   const clear = document.getElementById("cupPrintsClear");
   if (clear) clear.style.display = cupPrintsFiltersActive() ? "" : "none";
@@ -5649,6 +5632,13 @@ function wireCupPrints() {
     btn.addEventListener("click", () => {
       const order = cupPrintsOrders.find((o) => String(o.id) === btn.dataset.order);
       if (order) openPrintOrderForm(order);
+    });
+  });
+
+  body.querySelectorAll(".cps-quote-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const order = cupPrintsOrders.find((o) => String(o.id) === btn.dataset.order);
+      if (order) openCupQuote(order);
     });
   });
 
@@ -6012,6 +6002,7 @@ async function openPrintClient(clientId) {
     <div class="flex flex-col gap-1">${sectionHead("Agreed prices")}${deals}</div>
     <div class="flex flex-col gap-2">
       ${sectionHead("Special discounts")}
+      <p class="text-[11px] text-gray-400 -mt-1">Link each one to a cup or lid under Discounts so quotes use it.</p>
       <div id="clientDiscountsBody">${discounts}</div>
       <div class="flex items-center gap-2">
         <input id="newDiscountItem" type="text" placeholder="Item" class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm" />
@@ -6067,13 +6058,12 @@ async function openPrintClient(clientId) {
 
   // ---- column 3: cup prints, when they have any
   const history = data.history.length
-    ? `<table class="w-full text-sm"><thead><tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400"><th class="text-left font-normal pb-1">Date</th><th class="text-right font-normal pb-1">Cups</th><th class="text-right font-normal pb-1">Total</th><th class="text-right font-normal pb-1">&nbsp;</th></tr></thead>${data.history
+    ? `<table class="w-full text-sm"><thead><tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400"><th class="text-left font-normal pb-1">Date</th><th class="text-right font-normal pb-1">Cups</th><th class="text-right font-normal pb-1">Total</th></tr></thead>${data.history
         .map(
           (h) => `<tr class="border-b border-gray-100 last:border-0">
             <td class="py-1 text-xs text-gray-400 whitespace-nowrap">${printShortDate(h.order_date)}</td>
             <td class="py-1 text-right">${Number(h.cups).toLocaleString("en-PH")}</td>
-            <td class="py-1 text-right">${printMoney(h.total)}</td>
-            <td class="py-1 text-right"><span class="text-[10px] rounded px-1.5 py-px ${h.is_paid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}">${h.is_paid ? "Paid" : "Unpaid"}</span></td></tr>`
+            <td class="py-1 text-right">${printMoney(h.total)}</td></tr>`
         )
         .join("")}</table>
        ${t.orders > data.history.length ? `<p class="text-[11px] text-gray-400 mt-1">Latest ${data.history.length} of ${t.orders}.</p>` : ""}`
@@ -6084,7 +6074,6 @@ async function openPrintClient(clientId) {
         ${tile("Orders", t.orders)}
         ${tile("Cups", Number(t.cups).toLocaleString("en-PH"))}
         ${tile("Order value", printMoney(t.value))}
-        ${tile("Owed", Number(t.owed) > 0 ? printMoney(t.owed) : "—", Number(t.owed) > 0 ? "text-red-600" : "")}
       </div>
       <div>${history}</div>`)
     : "";
@@ -7997,15 +7986,92 @@ document.getElementById("inventoryAddBtn").addEventListener("click", async () =>
 // ("3.80") and a percentage ("10% off") both live here.
 let officeDiscounts = [];
 
+// A row's link to the price list: what it prices (a cup or a lid) and, for a
+// cup, whether the amount covers the cup alone or the cup with a lid.
+function discountProductOptions(selected) {
+  const cat = printCatalogue;
+  if (!cat) return `<option value="">Not linked</option>`;
+  const opt = (id, label) => `<option value="${id}"${String(id) === String(selected) ? " selected" : ""}>${escapeHtml(label)}</option>`;
+  return `<option value="">Not linked</option>
+    <optgroup label="Cups">${cat.cups.map((c) => opt(c.id, c.label)).join("")}</optgroup>
+    <optgroup label="Lids">${cat.lids.map((l) => opt(l.id, l.family)).join("")}</optgroup>`;
+}
+
+function discountIsCup(id) {
+  return !!(printCatalogue && id && printCatalogue.cups.some((c) => c.id === Number(id)));
+}
+
+function discountLidOptions(cupId, row) {
+  const cat = printCatalogue;
+  const allowed = (cat.fits[String(cupId)] || []).map(String);
+  const cur = row && row.includes_lid ? (row.lid_product_id ? String(row.lid_product_id) : "any") : "";
+  const o = (v, label) => `<option value="${v}"${v === cur ? " selected" : ""}>${label}</option>`;
+  return o("", "price is for the cup alone") + o("any", "price is cup + any lid") +
+    cat.lids.filter((l) => allowed.includes(String(l.id))).map((l) => o(String(l.id), `price is cup + ${escapeHtml(l.family)}`)).join("");
+}
+
+// the typed item, read for a cup it plainly names: "PPY 16oz w/ Strawless" is
+// PPY 16oz with a lid. Only offered when exactly one cup fits, never applied.
+function suggestDiscountLink(item) {
+  const cat = printCatalogue;
+  if (!cat) return null;
+  const s = String(item || "").toLowerCase();
+  const size = (s.match(/(\d+)\s*oz/) || [])[1];
+  if (!size) return null;
+  const families = [
+    [/\bppy\b/, "PPY"], [/\bppu\b/, "PPU"], [/dabba/, "Dabba"], [/paper\s*cup/, "Paper Cup"],
+    [/double\s*wall|d\.?\s*wall|dwall/, /blue/.test(s) ? "Double Wall BLUE" : "Double Wall"],
+    [/pet\s*u\s*90/, /black/.test(s) ? "PET U 90 Black  - Thick" : "PET U 90 - Thick"],
+    [/pet\s*-?\s*98/, /black/.test(s) ? "PET 98 Black - Thick" : "PET 98mm"],
+    [/pet\s*-?\s*95/, "PET 95mm"],
+  ];
+  const hit = families.find(([re]) => re.test(s));
+  if (!hit) return null;
+  const cup = cat.cups.find((c) => c.family === hit[1] && c.size === `${size}oz`);
+  if (!cup) return null;
+  return { cup, withLid: /\bw\/|\bwith\b/.test(s) };
+}
+
 async function loadDiscounts() {
   const body = document.getElementById("discountsBody");
+  await loadPrintCatalogue();
   const res = await fetch("/api/office/discounts");
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    body.innerHTML = `<tr><td colspan="4" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load discounts.")}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="5" class="text-sm text-gray-500 py-6 text-center">${escapeHtml(err.message || "Could not load discounts.")}</td></tr>`;
     return;
   }
   officeDiscounts = (await res.json()).discounts;
+  renderDiscounts();
+}
+
+const discountSel = "border border-gray-200 hover:border-gray-300 focus:border-brand-blue rounded px-1 py-0.5 text-xs bg-white w-full max-w-[15rem]";
+
+function discountLinkCell(d) {
+  const linked = !!d.product_id;
+  const sug = !linked ? suggestDiscountLink(d.item) : null;
+  return `
+    <select class="discount-link ${discountSel}" data-id="${d.id}">${discountProductOptions(d.product_id)}</select>
+    ${linked && discountIsCup(d.product_id)
+      ? `<select class="discount-lid ${discountSel} mt-1" data-id="${d.id}">${discountLidOptions(d.product_id, d)}</select>` : ""}
+    ${sug
+      ? `<button type="button" class="discount-suggest block text-[11px] text-brand-blue hover:underline mt-0.5 text-left" data-id="${d.id}"
+                 data-product="${sug.cup.id}" data-lid="${sug.withLid ? 1 : 0}">Link to ${escapeHtml(sug.cup.label)}${sug.withLid ? " + any lid" : ""}?</button>`
+      : ""}`;
+}
+
+async function saveDiscountLink(row, payload) {
+  try {
+    await postJSON(`/api/print/clients/${row.client_id}/discounts/${row.id}`, payload);
+  } catch (err) {
+    alert(err.message);
+    renderDiscounts();
+    return;
+  }
+  if ("product_id" in payload) row.product_id = payload.product_id;
+  if ("includes_lid" in payload) row.includes_lid = payload.includes_lid;
+  if ("lid_product_id" in payload) row.lid_product_id = payload.lid_product_id;
+  if (payload.includes_lid === false) row.lid_product_id = null;
   renderDiscounts();
 }
 
@@ -8021,7 +8087,7 @@ function renderDiscounts() {
     : "Special prices by client.";
 
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="4" class="text-sm text-gray-400 py-6 text-center">${
+    body.innerHTML = `<tr><td colspan="5" class="text-sm text-gray-400 py-6 text-center">${
       officeDiscounts.length ? "Nothing matches that search." : "No special prices yet - add one with \u201c+ Add\u201d."
     }</td></tr>`;
     return;
@@ -8037,6 +8103,7 @@ function renderDiscounts() {
       <tr class="${first ? "border-t border-gray-200" : ""}">
         <td class="px-3 py-1.5 font-medium text-gray-900 align-middle">${first ? escapeHtml(d.client_name) : ""}</td>
         <td class="px-3 py-1.5"><input class="discount-field ${cell}" data-id="${d.id}" data-field="item" value="${escapeHtml(d.item)}" /></td>
+        <td class="px-3 py-1.5 align-top">${discountLinkCell(d)}</td>
         <td class="px-3 py-1.5"><div class="flex items-center justify-end gap-0.5">${
           /^\d+(\.\d+)?$/.test(d.discount) ? `<span class="text-gray-500">₱</span>` : ""
         }<input class="discount-field ${cell} text-right" style="width:4.25rem" data-id="${d.id}" data-field="discount" value="${escapeHtml(d.discount)}" /></div></td>
@@ -8065,6 +8132,19 @@ function renderDiscounts() {
       row.discount = next.discount;
     });
   });
+  body.querySelectorAll(".discount-link").forEach((sel) => sel.addEventListener("change", () => {
+    const row = officeDiscounts.find((d) => String(d.id) === sel.dataset.id);
+    saveDiscountLink(row, { product_id: sel.value ? Number(sel.value) : null, includes_lid: false, lid_product_id: null });
+  }));
+  body.querySelectorAll(".discount-lid").forEach((sel) => sel.addEventListener("change", () => {
+    const row = officeDiscounts.find((d) => String(d.id) === sel.dataset.id);
+    const v = sel.value;
+    saveDiscountLink(row, v === "" ? { includes_lid: false } : v === "any" ? { includes_lid: true, lid_product_id: null } : { includes_lid: true, lid_product_id: Number(v) });
+  }));
+  body.querySelectorAll(".discount-suggest").forEach((btn) => btn.addEventListener("click", () => {
+    const row = officeDiscounts.find((d) => String(d.id) === btn.dataset.id);
+    saveDiscountLink(row, { product_id: Number(btn.dataset.product), includes_lid: btn.dataset.lid === "1", lid_product_id: null });
+  }));
   body.querySelectorAll(".discount-delete").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const row = officeDiscounts.find((d) => String(d.id) === btn.dataset.id);
@@ -8079,9 +8159,20 @@ function renderDiscounts() {
   });
 }
 
+function syncDiscountModalLink() {
+  const product = document.getElementById("discountProduct");
+  const wrap = document.getElementById("discountLidWrap");
+  const isCup = discountIsCup(product.value);
+  wrap.classList.toggle("hidden", !isCup);
+  if (isCup) document.getElementById("discountLidMode").innerHTML = discountLidOptions(product.value, null);
+}
+
 async function openDiscountModal() {
   await loadPrintClients();
+  await loadPrintCatalogue();
   ["discountClient", "discountItem", "discountValue"].forEach((id) => (document.getElementById(id).value = ""));
+  document.getElementById("discountProduct").innerHTML = discountProductOptions("");
+  syncDiscountModalLink();
   document.getElementById("discountError").classList.add("hidden");
   const modal = document.getElementById("discountModal");
   modal.classList.remove("hidden");
@@ -8118,7 +8209,14 @@ async function saveDiscount() {
       if (!res.ok) throw new Error(data.message || "Could not add that client.");
       client = { id: data.id, name };
     }
-    await postJSON(`/api/print/clients/${client.id}/discounts`, { item, discount });
+    const productId = document.getElementById("discountProduct").value;
+    const lidMode = document.getElementById("discountLidMode").value;
+    const link = productId ? { product_id: Number(productId) } : {};
+    if (productId && discountIsCup(productId) && lidMode) {
+      link.includes_lid = true;
+      link.lid_product_id = lidMode === "any" ? null : Number(lidMode);
+    }
+    await postJSON(`/api/print/clients/${client.id}/discounts`, { item, discount, ...link });
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.classList.remove("hidden");
@@ -8135,6 +8233,16 @@ attachCombo(
   true
 );
 document.getElementById("discountAddBtn").addEventListener("click", openDiscountModal);
+document.getElementById("discountProduct").addEventListener("change", syncDiscountModalLink);
+// typing "PPY 16oz w/ Strawless" offers the matching cup, same as the list does
+document.getElementById("discountItem").addEventListener("change", (e) => {
+  const product = document.getElementById("discountProduct");
+  const sug = !product.value && suggestDiscountLink(e.target.value);
+  if (!sug) return;
+  product.value = String(sug.cup.id);
+  syncDiscountModalLink();
+  if (sug.withLid) document.getElementById("discountLidMode").value = "any";
+});
 document.getElementById("discountCancel").addEventListener("click", closeDiscountModal);
 document.getElementById("discountSave").addEventListener("click", saveDiscount);
 document.getElementById("discountsSearch").addEventListener("input", renderDiscounts);
@@ -10678,13 +10786,64 @@ async function loadPrintCatalogue() {
   return printCatalogue;
 }
 
-// what a line costs: the print tier for its quantity, plus the lid
-function priceFor(cup, lid, qty) {
-  if (!cup) return 0;
-  const tier = qty >= 1000 ? cup.print_only_1k : cup.print_only_sub1k;
-  const print = tier != null ? tier : (cup.print_only_sub1k != null ? cup.print_only_sub1k : cup.print_only_1k) || 0;
-  const lidPrice = lid ? (lid.wholesale != null ? lid.wholesale : lid.retail) || 0 : 0;
-  return Math.round((print + lidPrice) * 100) / 100;
+// A client's special price is typed into Clients > Discounts: "3.80" is the
+// price itself, "10% off" is a percentage. Anything else is only a note.
+function parseDiscountValue(text) {
+  const s = String(text || "").trim().replace(/^₱\s*/, "");
+  let m = s.match(/^(\d+(?:\.\d+)?)$/);
+  if (m) return { type: "price", n: Number(m[1]) };
+  m = s.match(/^(\d+(?:\.\d+)?)\s*%/);
+  if (m) return { type: "percent", n: Number(m[1]) };
+  return null;
+}
+function applyDiscountValue(v, regular) {
+  return v.type === "price" ? v.n : regular * (1 - v.n / 100);
+}
+
+// what a line costs: the print tier for its quantity, plus the lid. With a
+// client's discount rows (`rules`), a row linked to this cup or lid replaces
+// the matching part - or the whole line, when its price covers cup and lid
+// together. `discountApplied` says one did; `source` names the row.
+function priceBreakdown(cup, lid, qty, rules) {
+  if (!cup) return { print: 0, lid: 0, unit: 0, regularUnit: 0, regularPrint: 0, discountApplied: false, fallback: false, source: "" };
+  const regular = qty >= 1000 ? cup.print_only_1k : cup.print_only_sub1k;
+  const regularPrint = regular != null ? regular : (cup.print_only_sub1k != null ? cup.print_only_sub1k : cup.print_only_1k) || 0;
+  const regularLid = lid ? (lid.wholesale != null ? lid.wholesale : lid.retail) || 0 : 0;
+  const regularUnit = Math.round((regularPrint + regularLid) * 100) / 100;
+  let print = regularPrint;
+  let lidPrice = regularLid;
+  let source = "";
+  let discountApplied = false;
+
+  if (rules && rules.length) {
+    const usable = rules
+      .map((r) => ({ r, v: parseDiscountValue(r.discount) }))
+      .filter((x) => x.v && x.r.product_id);
+    const bundled = lid
+      ? usable
+          .filter((x) => x.r.product_id === cup.id && x.r.includes_lid && (x.r.lid_product_id == null || x.r.lid_product_id === lid.id))
+          .sort((a, b) => (b.r.lid_product_id != null) - (a.r.lid_product_id != null))[0]
+      : null;
+    if (bundled) {
+      const unit = Math.round(applyDiscountValue(bundled.v, regularPrint + regularLid) * 100) / 100;
+      return { print: unit, lid: 0, unit, regularUnit, regularPrint, discountApplied: true, fallback: false, source: bundled.r.item };
+    }
+    const cupRule = usable.find((x) => x.r.product_id === cup.id && !x.r.includes_lid);
+    const lidRule = lid ? usable.find((x) => x.r.product_id === lid.id && !x.r.includes_lid) : null;
+    if (cupRule) print = applyDiscountValue(cupRule.v, regularPrint);
+    if (lidRule) lidPrice = applyDiscountValue(lidRule.v, regularLid);
+    discountApplied = !!(cupRule || lidRule);
+    source = [cupRule && cupRule.r.item, lidRule && lidRule.r.item].filter(Boolean).join(" + ");
+  }
+  return {
+    print, lid: lidPrice, regularUnit, regularPrint, discountApplied, source,
+    fallback: !!(rules && rules.length) && !discountApplied,
+    unit: Math.round((print + lidPrice) * 100) / 100,
+  };
+}
+
+function priceFor(cup, lid, qty, rules) {
+  return priceBreakdown(cup, lid, qty, rules).unit;
 }
 
 // ---------------------------------------------------------------------------
@@ -10897,7 +11056,6 @@ function renderClientsDashboard(d) {
     tile("New this month", t.new_this_month.toLocaleString("en-PH"), "first purchase this month"),
     tile("Repeat clients", t.repeat_rate === null ? "—" : t.repeat_rate + "%", "bought more than once", t.repeat_rate !== null && t.repeat_rate < 40 ? "text-amber-600" : ""),
     tile("Avg purchase", t.avg_order_value === null ? "—" : printMoney(t.avg_order_value), `${t.orders_12} sales, last 12 months`),
-    tile("Unpaid orders", printMoney(t.unpaid_total), `${t.unpaid_orders} order${t.unpaid_orders === 1 ? "" : "s"} not marked paid`, t.unpaid_total > 0 ? "text-red-600" : "text-gray-400"),
   ].join("");
 
   // --- best clients, last 12 months
@@ -10982,21 +11140,6 @@ function renderClientsDashboard(d) {
         .join("")
     : `<tr><td colspan="4" class="py-6 text-center text-gray-400">Nobody is overdue to reorder.</td></tr>`;
 
-  // --- unpaid
-  const unpaidRows = d.unpaid.length
-    ? d.unpaid
-        .map(
-          (u) => `
-      <tr class="cursor-pointer hover:bg-gray-50" data-dash-client="${u.id}">
-        <td class="py-1.5 pr-2 font-medium text-gray-900 truncate max-w-[9rem]">${escapeHtml(u.name)}</td>
-        <td class="py-1.5 pr-2 text-gray-400 whitespace-nowrap">${u.orders} order${u.orders === 1 ? "" : "s"}</td>
-        <td class="py-1.5 pr-2 text-right whitespace-nowrap text-red-600 font-medium">${printMoney(u.amount)}</td>
-        <td class="py-1.5 text-right whitespace-nowrap text-gray-500">oldest ${u.oldest_days}d</td>
-      </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="4" class="py-6 text-center text-gray-400">Every order is marked paid.</td></tr>`;
-
   // --- how complete the client file is
   const health = (label, n, of, hint) => {
     const p = pct(n, of);
@@ -11019,7 +11162,7 @@ function renderClientsDashboard(d) {
     </div>`;
 
   host.innerHTML = `
-    <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-3">${tiles}</div>
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">${tiles}</div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
       ${card(
         "Who brings in the sales",
@@ -11032,13 +11175,12 @@ function renderClientsDashboard(d) {
         `<div class="flex gap-1 pt-1 flex-1">${chart}</div>`
       )}
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
       ${card(
         "Due to reorder",
         d.reorder_count > 8 ? `Quiet well past their usual rhythm · top 8 of ${d.reorder_count}` : "Quiet well past their usual rhythm (3+ orders)",
         `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${reorderRows}</tbody></table>`
       )}
-      ${card("Unpaid orders", "Biggest amounts not marked paid", `<table class="w-full text-xs"><tbody class="divide-y divide-gray-100">${unpaidRows}</tbody></table>`)}
       ${card("Client file health", "Among clients who have ordered", healthHTML)}
     </div>
     ${
@@ -11203,21 +11345,18 @@ const CLIENT_COLUMNS = [
   { key: "sales", label: "Cup sales · 12 mo", align: "right" },
   { key: "store", label: "Store purchases", align: "right" },
   { key: "last", label: "Last activity", align: "left" },
-  { key: "owed", label: "Owed", align: "right" },
 ];
 const CLIENT_CHIPS = [
   ["all", "All"],
   ["active", "Active"],
   ["new", "New"],
   ["quiet", "Gone quiet"],
-  ["owing", "Owes us"],
   ["never", "Never bought"],
 ];
 const CLIENT_CHIP_HINTS = {
   active: "Ordered or bought something in the last 90 days",
   new: "First cup order was in the last 30 days",
   quiet: "Has bought before, but nothing in the last 90 days",
-  owing: "Has cup orders not marked paid",
   never: "No cup orders and no store purchases yet",
 };
 
@@ -11236,7 +11375,7 @@ async function loadPrintClientsPage() {
     if (!res.ok) throw new Error("Could not load the clients.");
     data = await res.json();
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-500">${escapeHtml(err.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-500">${escapeHtml(err.message)}</td></tr>`;
     return;
   }
   st.page = data.page; // the server clamps it if a filter left fewer pages
@@ -11269,7 +11408,7 @@ function renderPrintClients(data) {
   const rows = data.clients;
 
   document.getElementById("printClientsSubtitle").textContent =
-    `${data.counts.all} client${data.counts.all === 1 ? "" : "s"} · ${printMoney(data.totals.owed)} outstanding`;
+    `${data.counts.all} client${data.counts.all === 1 ? "" : "s"}`;
 
   // headline figures for whatever the search matches (not just this page)
   const kpi = (label, value, sub) => `
@@ -11282,7 +11421,6 @@ function renderPrintClients(data) {
     kpi("Clients", data.counts.all.toLocaleString("en-PH"), `${data.counts.active} active · ${data.counts.quiet} gone quiet`),
     kpi("Cup sales · 12 mo", printMoney(data.totals.value_12), "drafts and cancelled lines left out"),
     kpi("Store purchases", printMoney(data.totals.store_net), "from imported StoreHub receipts, net of returns"),
-    kpi("Outstanding", `<span class="${data.totals.owed > 0 ? "text-red-600" : "text-gray-400"}">${printMoney(data.totals.owed)}</span>`, `${data.counts.owing} client${data.counts.owing === 1 ? "" : "s"} with unpaid orders`),
   ].join("");
 
   // filter chips, each with how many it would show
@@ -11324,7 +11462,7 @@ function renderPrintClients(data) {
 
   const body = document.getElementById("printClientsBody");
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-400 italic">Nobody matches that.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400 italic">Nobody matches that.</td></tr>`;
   } else {
     body.innerHTML = rows
       .map((c) => {
@@ -11348,7 +11486,7 @@ function renderPrintClients(data) {
         <td class="px-3 py-2 text-right ${c.value_12 > 0 ? "" : "text-gray-300"}">${c.value_12 > 0 ? printMoney(c.value_12) : "—"}</td>
         <td class="px-3 py-2 text-right ${c.store_net !== 0 ? "" : "text-gray-300"}" ${c.store_receipts ? `title="${c.store_receipts} receipt${c.store_receipts === 1 ? "" : "s"}"` : ""}>${c.store_net !== 0 ? printMoney(c.store_net) : "—"}</td>
         <td class="px-3 py-2 whitespace-nowrap text-xs ${ago ? "text-gray-600" : "text-gray-300"}" ${lastBits.length ? `title="${c.last_order ? "Last order " + printShortDate(c.last_order) : ""}${c.last_order && c.last_store ? " · " : ""}${c.last_store ? "Last store purchase " + printShortDate(c.last_store) : ""}"` : ""}>${ago || "—"}</td>
-        <td class="px-3 py-2 text-right ${c.owed > 0 ? "text-red-600" : "text-gray-300"}">${c.owed > 0 ? printMoney(c.owed) : "—"}</td>
+
       </tr>`;
       })
       .join("");
@@ -11473,15 +11611,18 @@ document.getElementById("addClientSave").addEventListener("click", saveAddClient
 // Cup pricing page
 // ---------------------------------------------------------------------------
 
-// Cost is the one figure a client must never see, so it is superuser-only
-// server-side and simply absent here for everyone else.
-const PRICE_COLUMNS = [
-  ["cost", "Cost"],
-  ["retail", "Retail"],
-  ["wholesale", "Wholesale"],
-  ["print_only_1k", "Print 1,000+"],
-  ["print_only_sub1k", "Print <1,000"],
-];
+// The price list as staff use it: one table per cup family, a row for the
+// cup on its own and one per lid that fits it, a final price in every cell
+// (print price plus that lid). Changing a price is a separate "Edit prices"
+// view, so a lookup can't turn into an accidental edit.
+//
+// Shelf prices (retail, wholesale, cost) are deliberately not shown here.
+
+// the cups that get quoted most come first; everything else follows A-Z
+const PRIORITY_FAMILIES = ["Dabba", "PPY", "PET 95mm", "Double Wall"];
+let pricingTab = PRIORITY_FAMILIES[0];
+let pricingEdit = false;
+let pricingSize = null; // the size picked within the current tab
 
 async function loadPricing() {
   const cat = await loadPrintCatalogue();
@@ -11491,61 +11632,88 @@ async function loadPricing() {
     return;
   }
   renderPricing();
-  renderQuote();
+  renderFees();
 }
 
-function usageFor(id) {
-  const u = (printCatalogue.usage || {})[String(id)];
-  return u || { lines: 0, cups: 0 };
+function renderFees() {
+  const fees = (printCatalogue && printCatalogue.fees) || {};
+  document.getElementById("feeRush").value = fees.rush_fee != null ? fees.rush_fee : "";
+  document.getElementById("feeFrame").value = fees.frame_fee != null ? fees.frame_fee : "";
 }
 
-// one family at a time - PPY's four sizes belong together, and a run of
-// sizes down a short table reads faster than the same rows in one long one
-function familyBlock(family, items, columns) {
-  const rows = items
-    .map((p) => {
-      const used = usageFor(p.id);
-      const cells = columns
-        .map(([key]) => {
-          const missing = p[key] == null;
-          return `<td class="px-3 py-1.5 text-right">
-            <span class="print-edit price-cell ${missing ? "text-gray-300" : ""}"
-                  tabindex="0" role="button" data-product="${p.id}" data-field="${key}"
-                  title="Click to edit">${missing ? "—" : Number(p[key]).toFixed(2)}</span>
-          </td>`;
-        })
-        .join("");
-      return `<tr class="hover:bg-gray-50">
-        <td class="px-3 py-1.5 font-medium whitespace-nowrap">${escapeHtml(p.size || p.family)}</td>
-        ${cells}
-        <td class="px-3 py-1.5 text-right text-xs ${used.cups ? "text-gray-500" : "text-gray-300"}">${
-          used.cups ? used.cups.toLocaleString("en-PH") : "—"
-        }</td>
-      </tr>`;
-    })
-    .join("");
+const money2 = (n) => Number(n).toFixed(2);
 
-  const familyCups = items.reduce((n, p) => n + usageFor(p.id).cups, 0);
-
+// One cup, one short list: the cup on its own, then every lid that fits it,
+// with the price per cup at each quantity. Nothing to read across.
+function priceCard(cup, cat, sizes) {
+  const fitIds = (cat.fits[String(cup.id)] || []).map(String);
+  const lids = cat.lids.filter((l) => fitIds.includes(String(l.id)));
+  const hasPrint = cup.print_only_1k != null || cup.print_only_sub1k != null;
+  // a small grey peso sign, so the figure itself stays the loudest thing
+  const peso = `<span style="font-size:.7em;font-weight:500;color:#9ca3af;margin-right:.2rem">₱</span>`;
+  const row = (label, lid, cls) => `
+    <tr class="${cls || ""}">
+      <th scope="row">${label}</th>
+      <td>${hasPrint ? `${peso}${money2(priceFor(cup, lid, 500))}` : "—"}</td>
+      <td>${hasPrint ? `${peso}${money2(priceFor(cup, lid, 1000))}` : "—"}</td>
+    </tr>`;
   return `
     <section class="border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
-      <div class="flex items-baseline gap-2 px-3 py-2 border-b border-gray-200 bg-gray-50">
-        <h4 class="font-semibold text-sm">${escapeHtml(family)}</h4>
-        <span class="text-[11px] text-gray-400">${items.length} size${items.length === 1 ? "" : "s"}</span>
-        <span class="ml-auto text-[11px] text-gray-400">${
-          familyCups ? familyCups.toLocaleString("en-PH") + " printed" : "not used yet"
-        }</span>
+      <div class="pm-family">
+        <h4 class="font-display font-semibold text-base">${escapeHtml(sizes ? cup.family : cup.label)}</h4>
+        <span class="text-[11px]">price per cup</span>
+        ${sizes && sizes.length > 1
+          ? `<nav class="pm-sizenav">${sizes.map((s) =>
+              `<button type="button" class="pm-sizebtn${s === (cup.size || cup.family) ? " is-on" : ""}" data-size="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}</nav>`
+          : ""}
+      </div>
+      <table class="pm-matrix pm-list">
+        <thead><tr>
+          <th class="pm-lidhead">Lid</th><th>Under 1,000</th><th>1,000 and up</th>
+        </tr></thead>
+        <tbody>
+          ${row("No lid <span>cup only</span>", null, "pm-nolid")}
+          ${lids.map((l) => row(escapeHtml(l.family), l)).join("")}
+        </tbody>
+      </table>
+    </section>`;
+}
+
+// the same family, as the figures themselves, for changing them
+function editBlock(family, items, isLids) {
+  const columns = isLids
+    ? [["wholesale", "Lid price"]]
+    : [["print_only_sub1k", "Under 1,000"], ["print_only_1k", "1,000+"]];
+  const rows = items
+    .map(
+      (p) => `<tr>
+        <td class="font-medium whitespace-nowrap">${escapeHtml(isLids ? p.family : p.size || p.family)}</td>
+        ${columns
+          .map(([key]) => {
+            const missing = p[key] == null;
+            return `<td class="text-right c-print">
+              <span class="print-edit price-cell ${missing ? "text-gray-300" : ""}"
+                    tabindex="0" role="button" data-product="${p.id}" data-field="${key}"
+                    title="Click to edit">${missing ? "—" : money2(p[key])}</span>
+            </td>`;
+          })
+          .join("")}
+      </tr>`
+    )
+    .join("");
+  return `
+    <section class="border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
+      <div class="pm-family">
+        <h4 class="font-display font-semibold text-base">${escapeHtml(family)}</h4>
+        <span class="text-[11px] text-gray-400">${isLids ? "the price a lid adds to a cup" : "print price per cup, lid not included"}</span>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 border-b border-gray-100">
-              <th class="text-left px-3 py-1.5">Size</th>
-              ${columns.map(([, label]) => `<th class="text-right px-3 py-1.5 whitespace-nowrap">${label}</th>`).join("")}
-              <th class="text-right px-3 py-1.5">Printed</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-100">${rows}</tbody>
+        <table class="pm-table">
+          <thead><tr class="text-[10px]">
+            <th class="text-left">${isLids ? "Lid" : "Size"}</th>
+            ${columns.map(([, label]) => `<th class="text-right">${label}</th>`).join("")}
+          </tr></thead>
+          <tbody>${rows}</tbody>
         </table>
       </div>
     </section>`;
@@ -11554,146 +11722,742 @@ function familyBlock(family, items, columns) {
 function renderPricing() {
   const cat = printCatalogue;
   const q = (document.getElementById("pricingSearch").value || "").trim().toLowerCase();
-  const cols = PRICE_COLUMNS.filter(([k]) => cat.shows_cost || k !== "cost");
-  const lidCols = cols.filter(([k]) => ["cost", "retail", "wholesale"].includes(k));
 
-  const cups = cat.cups.filter((p) => !q || p.label.toLowerCase().includes(q));
-  const lids = cat.lids.filter((p) => !q || p.family.toLowerCase().includes(q));
-
-  const gaps =
-    cat.cups.filter((p) => p.print_only_1k == null && p.print_only_sub1k == null).length;
+  const gaps = cat.cups.filter((p) => p.print_only_1k == null && p.print_only_sub1k == null).length;
   document.getElementById("pricingSubtitle").textContent =
     `${cat.cups.length} cups · ${cat.lids.length} lids` + (gaps ? ` · ${gaps} without a print price` : "");
 
-  const families = [];
+  const editBtn = document.getElementById("pricingEditBtn");
+  editBtn.textContent = pricingEdit ? "Done editing" : "Edit prices";
+  editBtn.classList.toggle("is-on", pricingEdit);
+  document.getElementById("pricingHint").textContent = pricingEdit
+    ? "Click any figure to change it. It saves as soon as you click away."
+    : "Pick a cup size, then find the lid. Every price is per cup and already includes that lid.";
+
+  // the tabs: the priority families first, then the rest; lids only to edit
+  const families = [...new Set(cat.cups.map((p) => p.family))];
+  const priority = PRIORITY_FAMILIES.filter((f) => families.includes(f));
+  const others = families.filter((f) => !PRIORITY_FAMILIES.includes(f)).sort();
+  const tabs = [...priority, ...others, ...(pricingEdit && cat.lids.length ? ["Lids"] : [])];
+  if (!tabs.includes(pricingTab)) pricingTab = tabs[0];
+
+  // the four you quote most are always on show; every other family lives in
+  // one dropdown, and the lids join the main group only while editing
+  const tabsEl = document.getElementById("pricingTabs");
+  const mainTabs = [...priority, ...(pricingEdit && cat.lids.length ? ["Lids"] : [])];
+  const moreOn = others.includes(pricingTab);
+  tabsEl.innerHTML = q
+    ? `<span class="text-xs text-gray-500">Showing matches from every tab.
+         <button type="button" id="pricingClearSearch" class="text-brand-blue hover:underline">Clear search</button></span>`
+    : `<div class="pm-seg">${mainTabs.map((name) =>
+         `<button type="button" class="pm-segbtn${name === pricingTab ? " is-on" : ""}" data-tab="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}</div>` +
+      (others.length
+        ? `<select id="pricingMore" class="pm-more${moreOn ? " is-on" : ""}" aria-label="More cups">
+             <option value="">More cups</option>
+             ${others.map((name) => `<option value="${escapeHtml(name)}"${name === pricingTab ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")}
+           </select>`
+        : "");
+  tabsEl.querySelectorAll("[data-tab]").forEach((btn) => btn.addEventListener("click", () => {
+    pricingTab = btn.dataset.tab;
+    pricingSize = null;
+    renderPricing();
+  }));
+  const more = document.getElementById("pricingMore");
+  if (more) more.addEventListener("change", () => {
+    if (!more.value) return;
+    pricingTab = more.value;
+    pricingSize = null;
+    renderPricing();
+  });
+  const clear = document.getElementById("pricingClearSearch");
+  if (clear) clear.addEventListener("click", () => {
+    document.getElementById("pricingSearch").value = "";
+    renderPricing();
+  });
+
+  // one tab at a time; a search looks across all of them
+  const cups = cat.cups.filter((p) => (q ? p.label.toLowerCase().includes(q) : p.family === pricingTab));
+  const lids = pricingEdit ? cat.lids.filter((p) => (q ? p.family.toLowerCase().includes(q) : pricingTab === "Lids")) : [];
+
+  const groups = [];
   cups.forEach((p) => {
-    const hit = families.find((f) => f.name === p.family);
+    const hit = groups.find((f) => f.name === p.family);
     if (hit) hit.items.push(p);
-    else families.push({ name: p.family, items: [p] });
+    else groups.push({ name: p.family, items: [p] });
   });
 
   const host = document.getElementById("pricingTables");
-  if (!families.length && !lids.length) {
+  if (!groups.length && !lids.length) {
     host.innerHTML = `<p class="text-sm text-gray-400 italic py-8 text-center">Nothing matches that.</p>`;
     return;
   }
 
-  host.innerHTML =
-    families.map((f) => familyBlock(f.name, f.items, cols)).join("") +
-    (lids.length ? familyBlock("Lids", lids, lidCols) : "");
+  if (pricingEdit) {
+    host.innerHTML = groups.map((f) => editBlock(f.name, f.items, false)).join("") + (lids.length ? editBlock("Lids", lids, true) : "");
+    host.querySelectorAll(".print-edit").forEach(wireEditCell);
+    return;
+  }
 
-  host.querySelectorAll(".print-edit").forEach(wireEditCell);
+  // the staff view: pick a size, read its list. A search skips the picking
+  // and lists every cup it matches.
+  let shown = cups;
+  let sizes = null;
+  if (!q) {
+    const sizeOf = (c) => c.size || c.family;
+    sizes = [...cups].sort((a, b) => parseInt(a.size) - parseInt(b.size)).map(sizeOf);
+    if (!sizes.includes(pricingSize)) pricingSize = sizes[0];
+    shown = cups.filter((c) => sizeOf(c) === pricingSize);
+  }
+  host.innerHTML = shown.map((c) => priceCard(c, cat, sizes)).join("");
+  host.querySelectorAll("[data-size]").forEach((btn) => btn.addEventListener("click", () => {
+    pricingSize = btn.dataset.size;
+    renderPricing();
+  }));
 }
 
 // ---------------------------------------------------------------------------
-// Quote calculator
+// Order quote - the "Quote" button on Cup Prints.
 //
-// Same arithmetic the order form and the server use - print tier for the
-// quantity, plus the lid - so a number quoted here is the number that will
-// appear on the order.
+// A working copy of one order, priced from the price list (the discounted
+// columns when the client is a discounted one) plus the rush and new-frame
+// fees. Every line, fee and amount can be edited or removed; none of it
+// touches the order itself. "View receipt" turns the same numbers into the
+// page that goes to the client.
 // ---------------------------------------------------------------------------
 
-let quoteRows = [{ cup: "", lid: "", qty: 500 }];
+// a negative charge (a discount line) reads -₱50.00, not ₱-50.00
+function cqMoney(n) {
+  return Number(n) < 0 ? "-" + printMoney(-Number(n)) : printMoney(n);
+}
 
-function quoteLineTotals() {
-  const cat = printCatalogue || { cups: [], lids: [] };
-  return quoteRows.map((r) => {
-    const cup = cat.cups.find((c) => String(c.id) === String(r.cup));
-    const lid = cat.lids.find((l) => String(l.id) === String(r.lid));
-    const qty = Number(r.qty || 0);
-    const unit = cup ? priceFor(cup, lid, qty) : 0;
-    return { cup, lid, qty, unit, amount: Math.round(unit * qty * 100) / 100 };
+let cq = null;
+
+function cqLine(l) {
+  const qty = Number(l.qty || 0);
+  if (l.kind === "cup") {
+    const cat = printCatalogue;
+    const cup = cat.cups.find((c) => String(c.id) === String(l.cup));
+    const lid = cat.lids.find((x) => String(x.id) === String(l.lid));
+    const auto = priceBreakdown(cup, lid, qty, cq.discounted ? cq.rules : null);
+    const edited = l.unit != null && l.unit !== "";
+    const unit = edited ? Number(l.unit) : auto.unit;
+    const label = cup ? [cup.label, lid ? lid.family : ""].filter(Boolean).join(" + ") : "";
+    return { cup, lid, qty, unit, auto, edited, label, custom: false,
+             amount: Math.round(unit * qty * 100) / 100 };
+  }
+  const unit = Number(l.unit || 0);
+  return { qty, unit, edited: false, label: l.desc || "", custom: true,
+           amount: Math.round(unit * qty * 100) / 100 };
+}
+
+function cqTotals() {
+  const lines = cq.lines.map(cqLine);
+  const items = lines.reduce((n, l) => n + l.amount, 0);
+  const rush = cq.rush.on ? Math.round(Number(cq.rush.amount || 0) * 100) / 100 : 0;
+  const frame = cq.frame.on ? Math.round(Number(cq.frame.amount || 0) * 100) / 100 : 0;
+  const cups = lines.reduce((n, l) => n + (l.custom ? 0 : l.qty), 0);
+  return { lines, items, rush, frame, cups, total: Math.round((items + rush + frame) * 100) / 100 };
+}
+
+function cqDiscBadge() {
+  return `<span class="disc-badge" title="This client is on the discounted price list">% Discounted</span>`;
+}
+
+// A quote with no order behind it - opened from Cup Pricing. Same popup, same
+// pricing, same receipt; the client is typed or picked here instead.
+function cqBlankOrder() {
+  return {
+    id: null, is_blank: true, client_id: null, client_name: "", logo_filename: null,
+    order_date: isoDate(new Date()), due_date: null, items: [],
+    is_rush: false, needs_new_frame: false, is_paid: false, is_draft: false, is_discounted: false,
+  };
+}
+
+async function cqSetClient(name) {
+  if (!cq || !cq.order.is_blank) return;
+  const typed = (name || "").trim();
+  const hit = printClients.find((c) => c.name.toLowerCase() === typed.toLowerCase());
+  const id = hit ? hit.id : null;
+  const shown = hit ? hit.name : typed;
+  if ((cq.order.client_id || null) === id && cq.order.client_name === shown) return;   // nothing changed
+  cq.order.client_name = shown;
+  cq.order.client_id = id;
+  cq.order.logo_filename = hit ? hit.logo_filename : null;
+  let rules = [];
+  if (id) {
+    try {
+      const res = await fetch(`/api/print/clients/${id}/discounts`);
+      if (res.ok) rules = (await res.json()).discounts;
+    } catch (e) { /* regular rates are the safe fallback */ }
+  }
+  if (!cq) return;
+  cq.rules = rules;
+  cq.discounted = rules.length > 0;
+  cq.order.is_discounted = rules.length > 0;
+  cqRender();
+}
+
+function cqRender() {
+  const o = cq.order;
+  const header = document.getElementById("cqHeader");
+  const typing = o.is_blank && cq.view !== "receipt";
+  const dates = o.is_blank
+    ? `New quote · ${escapeHtml(printShortDate(o.order_date))}`
+    : `${cq.view === "receipt" ? "Receipt preview" : "Quote"} · ordered ${escapeHtml(printShortDate(o.order_date))}${
+        o.due_date ? ` · due ${escapeHtml(printShortDate(o.due_date))}` : ""}`;
+  header.innerHTML = `
+    ${printLogo(o.client_name, false, o.logo_filename)}
+    ${typing ? `
+    <div class="min-w-0 flex-1">
+      <div class="relative">
+        <input id="cqClientInput" autocomplete="off" value="${escapeHtml(o.client_name)}" placeholder="Client (optional) - type a name"
+               class="w-full max-w-sm border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm font-semibold" />
+        <div id="cqClientDrop" class="hidden absolute z-20 left-0 mt-1 w-full max-w-sm bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-y-auto text-sm py-1"></div>
+      </div>
+      <p class="text-xs text-gray-500 mt-1">${dates} ${cq.discounted ? cqDiscBadge() : ""}</p>
+    </div>` : `
+    <div class="min-w-0 flex-1">
+      <h3 class="font-display font-semibold text-lg leading-tight truncate">
+        ${escapeHtml(o.client_name || (o.is_blank ? "Customer" : ""))} ${cq.discounted ? cqDiscBadge() : ""}
+        ${o.is_draft ? `<span class="cps-draft ml-1">Draft</span>` : ""}
+      </h3>
+      <p class="text-xs text-gray-500">${dates}</p>
+    </div>`}
+    <button type="button" id="cqClose" class="text-gray-400 hover:text-gray-700 text-xl leading-none px-1" aria-label="Close">&#10005;</button>`;
+
+  const body = document.getElementById("cqBody");
+  const footer = document.getElementById("cqFooter");
+  if (cq.view === "receipt") {
+    body.innerHTML = `<div class="max-w-xl mx-auto border border-gray-200 rounded-xl shadow-sm p-6 bg-white">${cqReceiptHtml()}</div>`;
+    footer.innerHTML = `
+      <button type="button" id="cqBack" class="border border-gray-300 rounded-lg px-4 py-2 text-sm hover:border-gray-400 transition bg-white">&larr; Back to quote</button>
+      <span id="cqCopied" class="text-xs text-green-700"></span>
+      <span class="flex-1"></span>
+      <button type="button" id="cqCopy" class="border border-gray-300 rounded-lg px-4 py-2 text-sm hover:border-gray-400 transition bg-white">Copy as text</button>
+      <button type="button" id="cqPrint" class="border border-gray-300 rounded-lg px-4 py-2 text-sm hover:border-gray-400 transition bg-white">Print / PDF</button>
+      <button type="button" id="cqCopyImg" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Copy as image</button>`;
+  } else {
+    body.innerHTML = cqQuoteHtml();
+    footer.innerHTML = `
+      <span class="text-[11px] text-gray-400 flex-1 min-w-[10rem]">${o.is_blank ? "Nothing here is saved." : "Changes here only affect this quote, not the order."}</span>
+      <button type="button" id="cqReset" class="border border-gray-300 rounded-lg px-4 py-2 text-sm hover:border-gray-400 transition bg-white">${o.is_blank ? "Start over" : "Reset to order"}</button>
+      <button type="button" id="cqReceipt" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">View receipt</button>`;
+  }
+  cqWire();
+}
+
+function cqQuoteHtml() {
+  const cat = printCatalogue;
+  const rows = cq.lines.map((l, i) => {
+    const c = cqLine(l);
+    const del = `<button type="button" class="cq-del text-gray-300 hover:text-red-600 text-base leading-none" data-i="${i}" title="Remove this line" aria-label="Remove">&#10005;</button>`;
+    const unitCell = `<td class="text-right align-top" data-l="Unit price">
+        <input class="cq-unit w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="0.01"
+               data-i="${i}" value="${c.unit ? c.unit.toFixed(2) : (l.kind === "cup" ? "" : "0.00")}" placeholder="0.00" />
+        <div class="cq-note text-[10px] mt-0.5 text-right" data-i="${i}"></div>
+      </td>`;
+    const tail = `${unitCell}
+      <td class="text-right align-top pt-2 font-medium whitespace-nowrap" data-l="Amount"><span class="cq-amount" data-i="${i}"></span></td>
+      <td class="text-right align-top pt-1.5">${del}</td>`;
+    if (l.kind === "custom") {
+      return `<tr class="cq-row border-t border-gray-100">
+        <td colspan="2" class="align-top pr-2"><input class="cq-desc w-full border border-gray-300 rounded px-2 py-1 text-sm" data-i="${i}" value="${escapeHtml(l.desc || "")}" placeholder="Description" /></td>
+        <td class="align-top" data-l="Qty"><input class="cq-qty w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="1" data-i="${i}" value="${l.qty}" /></td>
+        ${tail}</tr>`;
+    }
+    const allowed = (cat.fits[l.cup] || []).map(String);
+    const lids = cat.lids.filter((x) => allowed.includes(String(x.id)));
+    return `<tr class="cq-row border-t border-gray-100">
+      <td class="align-top pr-2">
+        <select class="cq-cup w-full border border-gray-300 rounded px-2 py-1 text-sm bg-white" data-i="${i}">
+          <option value="">Pick a cup…</option>
+          ${cat.cups.map((x) => `<option value="${x.id}"${String(x.id) === String(l.cup) ? " selected" : ""}>${escapeHtml(x.label)}</option>`).join("")}
+        </select>
+      </td>
+      <td class="align-top pr-2">
+        <select class="cq-lid w-full border border-gray-300 rounded px-2 py-1 text-sm bg-white" data-i="${i}" ${l.cup ? "" : "disabled"}>
+          <option value="">No lid</option>
+          ${lids.map((x) => `<option value="${x.id}"${String(x.id) === String(l.lid) ? " selected" : ""}>${escapeHtml(x.family)}</option>`).join("")}
+        </select>
+      </td>
+      <td class="align-top" data-l="Qty"><input class="cq-qty w-20 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="50" data-i="${i}" value="${l.qty}" /></td>
+      ${tail}</tr>`;
+  }).join("");
+
+  const feeRow = (key, icon, label) => cq[key].on
+    ? `<div class="flex items-center gap-2 py-1.5 border-t border-gray-100">
+         <span class="w-5 text-center">${icon}</span>
+         <span class="flex-1 text-sm">${label}</span>
+         <span class="text-gray-400 text-sm">₱</span>
+         <input class="cq-fee w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="0.01" data-fee="${key}"
+                value="${cq[key].amount != null && cq[key].amount !== "" ? cq[key].amount : ""}" placeholder="0.00" />
+         <button type="button" class="cq-fee-del text-gray-300 hover:text-red-600 text-base leading-none" data-fee="${key}" title="Remove this fee" aria-label="Remove">&#10005;</button>
+       </div>`
+    : "";
+  const addFee = (key, label) => !cq[key].on
+    ? `<button type="button" class="cq-fee-add text-xs border border-gray-300 rounded-full px-2.5 py-1 text-gray-600 hover:border-gray-400" data-fee="${key}">+ ${label}</button>`
+    : "";
+
+  return `
+    <div class="overflow-x-auto">
+      <table class="cq-table w-full text-sm">
+        <thead>
+          <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400">
+            <th class="text-left font-normal pb-1.5">Cup</th><th class="text-left font-normal pb-1.5">Lid</th>
+            <th class="text-left font-normal pb-1.5">Qty</th><th class="text-right font-normal pb-1.5">Unit price</th>
+            <th class="text-right font-normal pb-1.5">Amount</th><th></th>
+          </tr>
+        </thead>
+        <tbody>${rows || `<tr><td colspan="6" class="text-sm text-gray-400 italic py-4 text-center">No lines - add a cup below.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div class="flex flex-wrap gap-4 mt-3">
+      <button type="button" id="cqAddCup" class="text-sm text-brand-blue hover:underline">+ Add a cup</button>
+      <button type="button" id="cqAddOther" class="text-sm text-brand-blue hover:underline">+ Add another charge</button>
+    </div>
+
+    <div class="mt-4 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_17rem] gap-4 items-start">
+      <div>
+        <p class="text-[11px] text-gray-400 uppercase tracking-wide font-mono mb-1">Fees</p>
+        ${feeRow("rush", `<span class="text-amber-500">&#9889;</span>`, "Rush fee")}
+        ${feeRow("frame", `<span class="text-emerald-500">&#127381;</span>`, "New frame fee")}
+        <div class="flex flex-wrap gap-2 ${cq.rush.on && cq.frame.on ? "" : "pt-1.5 border-t border-gray-100"}">
+          ${addFee("rush", "Rush fee")}${addFee("frame", "New frame fee")}
+        </div>
+        ${cqDiscountBlock()}
+        <p id="cqFeeHint" class="text-[11px] text-amber-700 mt-2"></p>
+      </div>
+      <div id="cqTotals" class="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3"></div>
+    </div>`;
+}
+
+function cqDiscountBlock() {
+  const rules = cq.rules || [];
+  if (!rules.length) {
+    return cq.order.is_blank && !cq.order.client_id
+      ? `<p class="text-[11px] text-gray-400 mt-3">Pick a client above to use their special prices. Without one, regular rates apply.</p>`
+      : `<p class="text-[11px] text-gray-400 mt-3">${escapeHtml(cq.order.client_name)} has no special prices, so regular rates apply.</p>`;
+  }
+  const unused = rules.filter((r) => !r.product_id || !parseDiscountValue(r.discount));
+  return `
+    <label class="inline-flex items-center gap-2 text-sm text-gray-700 mt-3 cursor-pointer">
+      <input id="cqDisc" type="checkbox" class="rounded border-gray-300" ${cq.discounted ? "checked" : ""} />
+      Apply ${escapeHtml(cq.order.client_name)}'s special prices
+    </label>
+    ${unused.length ? `<p class="text-[11px] text-gray-500 mt-1.5">Not used here: ${unused.map((r) => `${escapeHtml(r.item)} (${escapeHtml(r.discount)})`).join(", ")}.
+      ${unused.some((r) => !r.product_id) ? "Link them to the price list under Clients &rarr; Discounts to use them." : ""}</p>` : ""}`;
+}
+
+function cqRefresh() {
+  const t = cqTotals();
+  document.querySelectorAll("#cqBody .cq-amount").forEach((el) => {
+    const c = t.lines[Number(el.dataset.i)];
+    el.textContent = c ? cqMoney(c.amount) : "";
+  });
+  document.querySelectorAll("#cqBody .cq-note").forEach((el) => {
+    const c = t.lines[Number(el.dataset.i)];
+    if (!c || c.custom) { el.textContent = ""; return; }
+    let msg = "", cls = "text-gray-400";
+    if (!c.cup) { msg = ""; }
+    else if (c.edited) {
+      msg = `edited · list ${c.auto.unit.toFixed(2)} (<button type="button" class="cq-unit-reset underline" data-i="${el.dataset.i}">reset</button>)`;
+      cls = "text-blue-700";
+    } else if (cq.discounted && c.auto.discountApplied) {
+      msg = `special price · ${escapeHtml(c.auto.source)} (regular ${c.auto.regularUnit.toFixed(2)})`;
+      cls = "text-amber-700 font-semibold";
+    } else if (cq.discounted && c.auto.fallback) {
+      msg = "no special price for this - regular rate";
+    }
+    el.className = `cq-note text-[10px] mt-0.5 text-right ${cls}`;
+    el.innerHTML = msg;
+  });
+  document.querySelectorAll("#cqBody .cq-unit-reset").forEach((b) => {
+    b.addEventListener("click", () => {
+      cq.lines[Number(b.dataset.i)].unit = null;
+      cqRender();
+    });
+  });
+  // keep the unit box in step with the list price until it is typed over
+  document.querySelectorAll("#cqBody .cq-unit").forEach((el) => {
+    const l = cq.lines[Number(el.dataset.i)];
+    const c = t.lines[Number(el.dataset.i)];
+    if (l && l.kind === "cup" && !c.edited && document.activeElement !== el) el.value = c.unit ? c.unit.toFixed(2) : "";
+  });
+
+  const row = (label, value) =>
+    `<div class="flex items-baseline justify-between text-sm py-0.5"><span class="text-gray-600">${label}</span><span>${value}</span></div>`;
+  document.getElementById("cqTotals").innerHTML =
+    row(`Items <span class="text-[11px] text-gray-400">· ${t.cups.toLocaleString("en-PH")} cup${t.cups === 1 ? "" : "s"}</span>`, cqMoney(t.items)) +
+    (cq.rush.on ? row(`<span class="text-amber-500">&#9889;</span> Rush fee`, cqMoney(t.rush)) : "") +
+    (cq.frame.on ? row(`<span class="text-emerald-500">&#127381;</span> New frame fee`, cqMoney(t.frame)) : "") +
+    `<div class="flex items-baseline justify-between border-t border-gray-300 mt-1.5 pt-1.5">
+       <span class="text-[11px] text-gray-500 uppercase tracking-wide font-mono">Total</span>
+       <span class="font-display font-semibold text-xl">${cqMoney(t.total)}</span></div>`;
+
+  const hint = document.getElementById("cqFeeHint");
+  if (hint) {
+    const unset = [cq.rush.on && !Number(cq.rush.amount) ? "rush" : "", cq.frame.on && !Number(cq.frame.amount) ? "new frame" : ""].filter(Boolean);
+    hint.textContent = unset.length
+      ? `The ${unset.join(" and ")} fee is ₱0 - set it on Cup Pricing (Order fees) or type it here.`
+      : "";
+  }
+}
+
+function cqWire() {
+  const body = document.getElementById("cqBody");
+  document.getElementById("cqClose").addEventListener("click", closeCupQuote);
+
+  const clientInput = document.getElementById("cqClientInput");
+  if (clientInput) {
+    attachClientPicker(clientInput, document.getElementById("cqClientDrop"), () => printClients);
+    clientInput.addEventListener("input", () => { cq.order.client_name = clientInput.value; });
+    // the picker fills the box without moving focus, so a click on a
+    // suggestion, Enter, or leaving the box each re-read what it says
+    const settle = () => setTimeout(() => cqSetClient(clientInput.value), 0);
+    clientInput.addEventListener("blur", settle);
+    clientInput.addEventListener("keydown", (e) => { if (e.key === "Enter") settle(); });
+    document.getElementById("cqClientDrop").addEventListener("mousedown", settle);
+  }
+
+  if (cq.view === "receipt") {
+    document.getElementById("cqBack").addEventListener("click", () => { cq.view = "quote"; cqRender(); });
+    document.getElementById("cqPrint").addEventListener("click", cqPrint);
+    document.getElementById("cqCopyImg").addEventListener("click", cqCopyImage);
+    document.getElementById("cqCopy").addEventListener("click", async () => {
+      const note = document.getElementById("cqCopied");
+      try {
+        await navigator.clipboard.writeText(cqReceiptText());
+        note.textContent = "Copied - paste it to the client.";
+      } catch (e) {
+        note.textContent = "";
+        alert(cqReceiptText());
+      }
+    });
+    return;
+  }
+
+  body.querySelectorAll(".cq-cup").forEach((el) => el.addEventListener("change", () => {
+    const l = cq.lines[Number(el.dataset.i)];
+    l.cup = el.value;
+    l.lid = "";   // the old lid may not fit the new cup
+    l.unit = null;
+    cqRender();
+  }));
+  body.querySelectorAll(".cq-lid").forEach((el) => el.addEventListener("change", () => {
+    cq.lines[Number(el.dataset.i)].lid = el.value;
+    cq.lines[Number(el.dataset.i)].unit = null;
+    cqRender();
+  }));
+  body.querySelectorAll(".cq-qty").forEach((el) => el.addEventListener("input", () => {
+    cq.lines[Number(el.dataset.i)].qty = Number(el.value || 0);
+    cqRefresh();
+  }));
+  body.querySelectorAll(".cq-desc").forEach((el) => el.addEventListener("input", () => {
+    cq.lines[Number(el.dataset.i)].desc = el.value;
+  }));
+  body.querySelectorAll(".cq-unit").forEach((el) => el.addEventListener("input", () => {
+    cq.lines[Number(el.dataset.i)].unit = el.value === "" ? null : Number(el.value);
+    cqRefresh();
+  }));
+  body.querySelectorAll(".cq-del").forEach((el) => el.addEventListener("click", () => {
+    cq.lines.splice(Number(el.dataset.i), 1);
+    cqRender();
+  }));
+  body.querySelectorAll(".cq-fee").forEach((el) => el.addEventListener("input", () => {
+    cq[el.dataset.fee].amount = el.value === "" ? null : Number(el.value);
+    cqRefresh();
+  }));
+  body.querySelectorAll(".cq-fee-del").forEach((el) => el.addEventListener("click", () => {
+    cq[el.dataset.fee].on = false;
+    cqRender();
+  }));
+  body.querySelectorAll(".cq-fee-add").forEach((el) => el.addEventListener("click", () => {
+    const key = el.dataset.fee;
+    const fees = (printCatalogue && printCatalogue.fees) || {};
+    cq[key].on = true;
+    if (cq[key].amount == null) cq[key].amount = key === "rush" ? fees.rush_fee : fees.frame_fee;
+    cqRender();
+  }));
+  document.getElementById("cqAddCup").addEventListener("click", () => {
+    cq.lines.push({ kind: "cup", cup: "", lid: "", qty: 500, unit: null });
+    cqRender();
+  });
+  document.getElementById("cqAddOther").addEventListener("click", () => {
+    cq.lines.push({ kind: "custom", desc: "", qty: 1, unit: 0 });
+    cqRender();
+    const inputs = document.querySelectorAll("#cqBody .cq-desc");
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  });
+  const discBox = document.getElementById("cqDisc");
+  if (discBox) discBox.addEventListener("change", (e) => {
+    cq.discounted = e.target.checked;
+    // an edited price stays; every list price is read again
+    cqRender();
+  });
+  document.getElementById("cqReset").addEventListener("click", async () => {
+    const blank = cq.order.is_blank;
+    if (!(await confirmDialog(
+      blank ? "The client, lines and fees are cleared." : "Lines and fees go back to what the order has, at list prices.",
+      { title: blank ? "Start this quote over?" : "Reset this quote?", confirmLabel: blank ? "Start over" : "Reset" }))) return;
+    openCupQuote(blank ? cqBlankOrder() : cq.order);
+  });
+  document.getElementById("cqReceipt").addEventListener("click", () => {
+    const bad = cq.lines.find((l) => l.kind === "cup" && !l.cup);
+    if (bad) {
+      alert("Pick a cup on every line, or remove the empty one.");
+      return;
+    }
+    cq.view = "receipt";
+    cqRender();
+  });
+  cqRefresh();
+}
+
+// the page that goes to the client - inline styles throughout, so it prints
+// the same whether it is shown in the popup or in the print layer
+function cqReceiptHtml() {
+  const o = cq.order;
+  const t = cqTotals();
+  const th = "text-align:right;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#6b7280;padding:6px 8px;border-bottom:2px solid #111827;";
+  const td = "padding:7px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;vertical-align:top;";
+  const lineRows = t.lines.filter((l) => (l.custom ? (l.label || l.amount) : true)).map((l) => `
+    <tr>
+      <td style="${td}">${escapeHtml(l.label || "Item")}${
+        !l.custom && cq.discounted && l.auto.discountApplied && !l.edited
+          ? ` <span style="font-size:9px;font-weight:700;color:#92400e;background:#fef3c7;border:1px solid #f5c26b;border-radius:99px;padding:0 5px;">SPECIAL PRICE</span>` : ""}</td>
+      <td style="${td}text-align:right;white-space:nowrap;">${l.qty.toLocaleString("en-PH")}</td>
+      <td style="${td}text-align:right;white-space:nowrap;">${cqMoney(l.unit)}</td>
+      <td style="${td}text-align:right;white-space:nowrap;font-weight:600;">${cqMoney(l.amount)}</td>
+    </tr>`).join("");
+  const feeRow = (on, label, amount) => on ? `
+    <tr><td style="${td}" colspan="3">${label}</td><td style="${td}text-align:right;font-weight:600;white-space:nowrap;">${cqMoney(amount)}</td></tr>` : "";
+  const name = window.BUSINESS_NAME || "Metro Packaging Depot";
+  return `
+    <div style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#111827;">
+      <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:3px solid #15268f;">
+        <img src="/static/icons/android-chrome-192x192.png" alt="" style="width:44px;height:44px;border-radius:9px;" />
+        <div style="flex:1;">
+          <div style="font-size:18px;font-weight:700;line-height:1.1;">${escapeHtml(name)}</div>
+          <div style="font-size:11px;color:#6b7280;">Cup printing</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:15px;font-weight:700;letter-spacing:.08em;color:#15268f;">ORDER RECEIPT</div>
+          <div style="font-size:11px;color:#6b7280;">${o.id ? `Order #${o.id}` : "Quote"}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;margin:14px 0;font-size:13px;">
+        <div>
+          <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#6b7280;">Billed to</div>
+          <div style="font-weight:600;font-size:15px;">${escapeHtml(o.client_name || "Customer")}</div>
+          ${cq.discounted ? `<div style="margin-top:3px;"><span style="font-size:10px;font-weight:700;letter-spacing:.05em;color:#92400e;background:#fef3c7;border:1px solid #f5c26b;border-radius:99px;padding:1px 7px;">DISCOUNTED CLIENT</span></div>` : ""}
+        </div>
+        <div style="text-align:right;">
+          <div><span style="color:#6b7280;">Order date</span> <b>${escapeHtml(cqLongDate(o.order_date))}</b></div>
+          ${o.due_date ? `<div><span style="color:#6b7280;">Needed by</span> <b>${escapeHtml(cqLongDate(o.due_date))}</b></div>` : ""}
+          ${o.is_rush ? `<div style="color:#b45309;font-weight:700;">&#9889; Rush order</div>` : ""}
+        </div>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="${th}text-align:left;">Item</th><th style="${th}">Qty</th>
+          <th style="${th}">Unit price</th><th style="${th}">Amount</th>
+        </tr></thead>
+        <tbody>
+          ${lineRows}
+          ${feeRow(cq.rush.on, `<span style="color:#d97706;">&#9889;</span> Rush fee`, t.rush)}
+          ${feeRow(cq.frame.on, `<span style="color:#059669;">&#127381;</span> New frame fee`, t.frame)}
+        </tbody>
+        <tfoot><tr>
+          <td colspan="3" style="padding:12px 8px 4px;text-align:right;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6b7280;">Total</td>
+          <td style="padding:10px 8px 4px;text-align:right;font-size:20px;font-weight:700;white-space:nowrap;">${cqMoney(t.total)}</td>
+        </tr></tfoot>
+      </table>
+
+      <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#6b7280;">
+        <span>${t.cups.toLocaleString("en-PH")} cup${t.cups === 1 ? "" : "s"} in this order</span>
+      </div>
+      <div style="margin-top:18px;text-align:center;font-size:12px;color:#6b7280;">Thank you for your order!</div>
+    </div>`;
+}
+
+function cqLongDate(iso) {
+  if (!iso) return "";
+  return new Date(`${iso}T00:00:00`).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function cqReceiptText() {
+  const o = cq.order;
+  const t = cqTotals();
+  const out = [`${window.BUSINESS_NAME || "Metro Packaging Depot"} - order receipt`, "",
+    `Client: ${o.client_name || "Customer"}${cq.discounted ? " (discounted client)" : ""}`,
+    `Order date: ${cqLongDate(o.order_date)}${o.due_date ? `   Needed by: ${cqLongDate(o.due_date)}` : ""}`, ""];
+  t.lines.forEach((l) => {
+    if (l.custom && !l.label && !l.amount) return;
+    out.push(`${l.qty.toLocaleString("en-PH")} x ${l.label || "Item"} - ${cqMoney(l.unit)} each - ${cqMoney(l.amount)}`);
+  });
+  if (cq.rush.on) out.push(`Rush fee - ${cqMoney(t.rush)}`);
+  if (cq.frame.on) out.push(`New frame fee - ${cqMoney(t.frame)}`);
+  out.push("", `Total: ${cqMoney(t.total)}`);
+  return out.join("\n");
+}
+
+// The receipt as a picture, for pasting into Messenger, Viber, WhatsApp and
+// the like. Drawn by html2canvas (loaded the first time it is needed) from
+// the same markup the preview and the print layer use.
+function loadHtml2Canvas() {
+  if (window.html2canvas) return Promise.resolve(window.html2canvas);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    s.onload = () => resolve(window.html2canvas);
+    s.onerror = () => reject(new Error("Couldn't load the image tool - check the internet connection."));
+    document.head.appendChild(s);
   });
 }
 
-function renderQuote() {
-  const cat = printCatalogue;
-  if (!cat) return;
-  const host = document.getElementById("quoteLines");
+async function cqReceiptBlob() {
+  const h2c = await loadHtml2Canvas();
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-10000px;top:0;width:680px;background:#fff;padding:28px;";
+  host.innerHTML = cqReceiptHtml();
+  document.body.appendChild(host);
+  try {
+    // let the logo finish loading before it is drawn
+    await Promise.all([...host.querySelectorAll("img")].map((img) => (img.complete ? null : new Promise((r) => { img.onload = img.onerror = r; }))));
+    const canvas = await h2c(host, { scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false });
+    return await new Promise((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not make the image."))), "image/png"));
+  } finally {
+    host.remove();
+  }
+}
 
-  host.innerHTML = quoteRows
-    .map((r, idx) => {
-      const allowed = (cat.fits[r.cup] || []).map(String);
-      const lidOptions = cat.lids.filter((l) => allowed.includes(String(l.id)));
-      return `
-      <div class="flex flex-col gap-1.5 pb-3 ${idx ? "border-t border-gray-100 pt-3" : ""}" data-row="${idx}">
-        <div class="flex items-center gap-1.5">
-          <select class="q-cup flex-1 min-w-0 border border-gray-300 rounded px-2 py-1 text-sm">
-            <option value="">Pick a cup…</option>
-            ${cat.cups.map((c) => `<option value="${c.id}"${String(c.id) === String(r.cup) ? " selected" : ""}>${escapeHtml(c.label)}</option>`).join("")}
-          </select>
-          ${quoteRows.length > 1 ? `<button class="q-remove text-gray-400 hover:text-red-600 shrink-0" title="Remove">&#10005;</button>` : ""}
-        </div>
-        <select class="q-lid border border-gray-300 rounded px-2 py-1 text-sm" ${r.cup ? "" : "disabled"}>
-          <option value="">${r.cup ? "No lid" : "Pick a cup first"}</option>
-          ${lidOptions.map((l) => `<option value="${l.id}"${String(l.id) === String(r.lid) ? " selected" : ""}>${escapeHtml(l.family)}</option>`).join("")}
-        </select>
-        <div class="flex items-center gap-2">
-          <input class="q-qty w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right" type="number" min="0" step="50" value="${r.qty}" />
-          <span class="text-xs text-gray-400">cups</span>
-          <span class="q-line ml-auto text-sm"></span>
-        </div>
-      </div>`;
-    })
-    .join("");
+async function cqCopyImage() {
+  const note = document.getElementById("cqCopied");
+  const btn = document.getElementById("cqCopyImg");
+  btn.disabled = true;
+  note.className = "text-xs text-gray-500";
+  note.textContent = "Making the image…";
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      // handing over the promise keeps the click's permission while it draws
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": cqReceiptBlob() })]);
+      note.className = "text-xs text-green-700";
+      note.textContent = "Image copied - paste it into your message.";
+    } else {
+      throw new Error("no-clipboard");
+    }
+  } catch (err) {
+    if (/image tool|make the image/.test(err.message || "")) {
+      note.className = "text-xs text-red-600";
+      note.textContent = err.message;
+    } else {
+      // this browser won't put an image on the clipboard: save it instead
+      try {
+        const blob = await cqReceiptBlob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${(cq.order.client_name || "quote").replace(/[^\w-]+/g, "-")}-receipt.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+        note.className = "text-xs text-green-700";
+        note.textContent = "Saved as a picture - attach it to your message.";
+      } catch (e2) {
+        note.className = "text-xs text-red-600";
+        note.textContent = e2.message || "Could not make the image.";
+      }
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
 
-  const totals = quoteLineTotals();
-  host.querySelectorAll("[data-row]").forEach((el, idx) => {
-    const t = totals[idx];
-    const line = el.querySelector(".q-line");
-    line.textContent = t.cup ? `${t.unit.toFixed(2)} × ${t.qty.toLocaleString("en-PH")}` : "";
-    line.title = t.cup ? printMoney(t.amount) : "";
+// Printing shows only the receipt: it is copied into its own layer on the
+// page, and the print stylesheet hides everything else while that is there.
+function cqPrint() {
+  let layer = document.getElementById("cupReceiptPrint");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.id = "cupReceiptPrint";
+    document.body.appendChild(layer);
+  }
+  layer.innerHTML = `<div style="max-width:680px;margin:0 auto;">${cqReceiptHtml()}</div>`;
+  document.body.classList.add("printing-receipt");
+  const done = () => {
+    document.body.classList.remove("printing-receipt");
+    window.removeEventListener("afterprint", done);
+  };
+  window.addEventListener("afterprint", done);
+  window.print();
+}
 
-    el.querySelector(".q-cup").addEventListener("change", (e) => {
-      quoteRows[idx].cup = e.target.value;
-      quoteRows[idx].lid = "";      // the old lid may not fit the new cup
-      renderQuote();
-    });
-    el.querySelector(".q-lid").addEventListener("change", (e) => {
-      quoteRows[idx].lid = e.target.value;
-      renderQuote();
-    });
-    el.querySelector(".q-qty").addEventListener("input", (e) => {
-      quoteRows[idx].qty = Number(e.target.value || 0);
-      updateQuoteTotals();
-    });
-    const rm = el.querySelector(".q-remove");
-    if (rm) {
-      rm.addEventListener("click", () => {
-        quoteRows.splice(idx, 1);
-        renderQuote();
-      });
+async function openCupQuote(order) {
+  const cat = await loadPrintCatalogue();
+  if (!cat) {
+    alert("Could not load the price list.");
+    return;
+  }
+  const fees = cat.fees || {};
+  const lines = [];
+  if (order.is_blank) {
+    await loadPrintClients();
+    lines.push({ kind: "cup", cup: "", lid: "", qty: 500, unit: null });
+  }
+  (order.items || []).filter((i) => i.status !== "cancelled").forEach((i) => {
+    const known = i.product_id && cat.cups.some((c) => c.id === i.product_id);
+    if (known) {
+      const lidKnown = i.lid_product_id && cat.lids.some((l) => l.id === i.lid_product_id);
+      lines.push({ kind: "cup", cup: String(i.product_id), lid: lidKnown ? String(i.lid_product_id) : "", qty: i.quantity, unit: null });
+    } else {
+      // a line the price list never matched keeps the price it was entered at
+      const lidText = i.lid_label && i.lid_label !== "—" ? i.lid_label : "";
+      lines.push({ kind: "custom", desc: [i.label, lidText].filter(Boolean).join(" + ") || "Item", qty: i.quantity, unit: i.unit_price || 0 });
     }
   });
-
-  updateQuoteTotals();
+  let rules = [];
+  if (order.is_discounted) {
+    try {
+      const res = await fetch(`/api/print/clients/${order.client_id}/discounts`);
+      if (res.ok) rules = (await res.json()).discounts;
+    } catch (e) { /* no special prices is a safe fallback: regular rates */ }
+  }
+  cq = {
+    order,
+    rules,
+    discounted: rules.length > 0,
+    lines,
+    view: "quote",
+    rush: { on: !!order.is_rush, amount: fees.rush_fee },
+    // same rule as the badge on the queue: a first order needs a new frame too
+    frame: { on: !!order.needs_new_frame || order.client_order_count === 1, amount: fees.frame_fee },
+  };
+  const modal = document.getElementById("cupQuoteModal");
+  modal.classList.remove("hidden");
+  modal.classList.add("flex");
+  cqRender();
 }
 
-function updateQuoteTotals() {
-  const totals = quoteLineTotals();
-  const host = document.getElementById("quoteLines");
-  host.querySelectorAll("[data-row]").forEach((el, idx) => {
-    const t = totals[idx];
-    const line = el.querySelector(".q-line");
-    line.textContent = t.cup ? `${t.unit.toFixed(2)} × ${t.qty.toLocaleString("en-PH")}` : "";
-  });
-  const total = totals.reduce((n, t) => n + t.amount, 0);
-  const cups = totals.reduce((n, t) => n + (t.cup ? t.qty : 0), 0);
-  document.getElementById("quoteTotal").textContent = printMoney(total);
-  document.getElementById("quoteCups").textContent =
-    `${cups.toLocaleString("en-PH")} cup${cups === 1 ? "" : "s"}`;
+function closeCupQuote() {
+  const modal = document.getElementById("cupQuoteModal");
+  modal.classList.add("hidden");
+  modal.classList.remove("flex");
+  cq = null;
 }
 
-function quoteText() {
-  const totals = quoteLineTotals().filter((t) => t.cup);
-  if (!totals.length) return "";
-  const lines = totals.map((t) => {
-    const bits = [t.cup.label];
-    if (t.lid) bits.push(t.lid.family);
-    return `${t.qty.toLocaleString("en-PH")} x ${bits.join(" + ")} — ${printMoney(t.unit)} each — ${printMoney(t.amount)}`;
+if (document.getElementById("cupQuoteModal")) {
+  document.getElementById("cupQuoteModal").addEventListener("mousedown", (e) => {
+    if (e.target.id === "cupQuoteModal") closeCupQuote();
   });
-  const total = totals.reduce((n, t) => n + t.amount, 0);
-  return `Metro Packaging Depot — cup printing quote\n\n${lines.join("\n")}\n\nTotal: ${printMoney(total)}`;
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !cq) return;
+    const confirm = document.getElementById("confirmModal");
+    if (confirm && !confirm.classList.contains("hidden")) return;   // that dialog handles its own Escape
+    closeCupQuote();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -11751,34 +12515,30 @@ if (tabPricingBtn) {
   document.getElementById("pricingSearch").addEventListener("input", () => {
     if (printCatalogue) renderPricing();
   });
+  document.getElementById("pricingEditBtn").addEventListener("click", () => {
+    pricingEdit = !pricingEdit;
+    if (printCatalogue) renderPricing();
+  });
 
-  document.getElementById("quoteAddBtn").addEventListener("click", () => {
-    quoteRows.push({ cup: "", lid: "", qty: 500 });
-    renderQuote();
+  // the two flat order fees save as soon as the field is left
+  [["feeRush", "rush_fee"], ["feeFrame", "frame_fee"]].forEach(([id, key]) => {
+    document.getElementById(id).addEventListener("change", async (e) => {
+      const note = document.getElementById("feesNote");
+      try {
+        const res = await postJSON("/api/print/fees", { [key]: e.target.value });
+        if (printCatalogue) printCatalogue.fees = res.fees || { ...(printCatalogue.fees || {}), [key]: e.target.value === "" ? null : Number(e.target.value) };
+        renderFees();
+        note.textContent = "Saved.";
+        setTimeout(() => { note.textContent = ""; }, 1500);
+      } catch (err) {
+        note.textContent = "";
+        alert(err.message || "Could not save that fee.");
+        renderFees();
+      }
+    });
   });
-  document.getElementById("quoteClearBtn").addEventListener("click", () => {
-    quoteRows = [{ cup: "", lid: "", qty: 500 }];
-    renderQuote();
-    document.getElementById("quoteCopied").textContent = "";
-  });
-  document.getElementById("quoteCopyBtn").addEventListener("click", async () => {
-    const text = quoteText();
-    const note = document.getElementById("quoteCopied");
-    if (!text) {
-      note.textContent = "Pick a cup first.";
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      note.textContent = "Copied — paste it to the client.";
-    } catch (e) {
-      // clipboard blocked (an insecure origin, usually) - show it instead
-      // so it can still be copied by hand
-      note.textContent = "";
-      alert(text);
-    }
-    setTimeout(() => (note.textContent = ""), 4000);
-  });
+
+  document.getElementById("newQuoteBtn").addEventListener("click", () => openCupQuote(cqBlankOrder()));
 }
 
 

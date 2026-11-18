@@ -262,6 +262,97 @@
   }
   .po-invalid { border-color: #dc2626 !important; background-color: #fef2f2; }
   .cps-edit-btn:hover { background: #eef0fc; }
+  .cps-quote-btn {
+    font-size: 11px; font-weight: 600; color: #fff; border: 1px solid #15268f; background: #15268f;
+    border-radius: 6px; padding: .15rem .55rem; white-space: nowrap;
+  }
+  .cps-quote-btn:hover { background: #1e3a8a; }
+  /* a client on the discounted price list - seen on the queue, the drawer, the quote and the receipt */
+  .disc-badge {
+    display: inline-flex; align-items: center; gap: .2rem; font-size: 9px; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: #92400e; background: #fef3c7; border: 1px solid #f5c26b;
+    border-radius: 999px; padding: 0 .4rem; line-height: 1.5; white-space: nowrap; vertical-align: middle;
+  }
+  /* quote lines: a table on a desktop, one card per line on a phone */
+  @media (max-width: 640px) {
+    .cq-table thead { display: none; }
+    .cq-table, .cq-table tbody { display: block; }
+    .cq-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px 8px; padding: 10px 0; border-top: 1px solid #f3f4f6; }
+    .cq-row td { display: block; padding: 0 !important; text-align: left !important; }
+    .cq-row td:nth-child(1), .cq-row td:nth-child(2):not([data-l]) { grid-column: 1 / -1; }
+    .cq-row td[colspan] { grid-column: 1 / -1; }
+    .cq-row td[data-l]::before { content: attr(data-l); display: block; font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: .05em; }
+    .cq-row input.cq-qty, .cq-row input.cq-unit { width: 100%; text-align: right; }
+    .cq-row td:last-child { align-self: end; padding-bottom: 6px !important; }
+  }
+  .pm-edit-btn { font-size: .8rem; font-weight: 600; color: #15268f; border: 1px solid #c7cdf3; background: #fff; border-radius: 8px; padding: .4rem .8rem; white-space: nowrap; }
+  .pm-edit-btn:hover { background: #eef0fc; }
+  .pm-edit-btn.is-on { background: #1c33bb; color: #fff; border-color: #1c33bb; }
+  .cup-readonly .pm-edit-btn { display: none !important; }
+  /* Cup Pricing lookup: cup on its own, then each lid that fits */
+  .pm-matrix { border-collapse: separate; border-spacing: 0; width: 100%; font-variant-numeric: tabular-nums; }
+  .pm-matrix thead th { background: #f3f4f6; color: #6b7280; font-weight: 600; padding: .5rem .7rem; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; border-bottom: 1px solid #e5e7eb; }
+  .pm-matrix thead th.pm-lidhead { text-align: left; }
+  .pm-matrix thead th.pm-size { text-align: center; font-size: 1rem; }
+  .pm-matrix thead tr:nth-child(2) th { background: #eef0fc; color: #4b5563; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; padding: .3rem .6rem; text-align: right; }
+  .pm-matrix thead .pm-first, .pm-matrix td.pm-first { border-left: 1px solid #d9dcf0; }
+  .pm-matrix tbody th { text-align: left; font-weight: 500; font-size: .85rem; padding: .55rem .9rem; white-space: nowrap; background: #fff; border-top: 1px solid #f0f1f5; position: sticky; left: 0; }
+  .pm-matrix tbody td { text-align: right; padding: .55rem .8rem; font-size: 1.02rem; border-top: 1px solid #f0f1f5; background: #fff; }
+  .pm-matrix tbody tr:nth-child(even) th, .pm-matrix tbody tr:nth-child(even) td { background: #fafbfd; }
+  .pm-matrix tbody tr:hover th, .pm-matrix tbody tr:hover td { background: #eef0fc; }
+  .pm-matrix tr.pm-nolid th, .pm-matrix tr.pm-nolid td { background: #eef0fc !important; font-weight: 700; }
+  .pm-matrix tr.pm-nolid th span { font-weight: 400; font-size: 10px; color: #6b7280; margin-left: .3rem; text-transform: uppercase; letter-spacing: .04em; }
+  .pm-matrix td.pm-na { color: #d1d5db; }
+  /* Cup Pricing: one cup's list */
+  /* sizes live in the card's blue header, styled like the top navbar */
+  .pm-sizenav { margin-left: auto; display: inline-flex; gap: 2px; padding: 3px; background: rgba(255,255,255,.12); border-radius: 10px; }
+  .pm-sizebtn { color: #fff; font-size: .85rem; font-weight: 600; padding: .3rem .85rem; border-radius: 8px; white-space: nowrap; transition: background .15s; }
+  .pm-sizebtn:hover { background: rgba(255,255,255,.15); }
+  .pm-sizebtn.is-on { background: #fff; color: #1c33bb; }
+  .pm-list thead th { text-align: right; }
+  .pm-list thead th.pm-lidhead { text-align: left; }
+  .pm-list tbody td { font-size: 1.2rem; font-weight: 600; padding: .65rem 1.1rem; width: 9rem; }
+  .pm-list tbody th { font-size: .95rem; padding: .65rem 1.1rem; }
+  /* Cup Pricing family picker: a nav-style group plus one dropdown */
+  #pricingTabs { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+  .pm-seg { display: inline-flex; gap: 2px; padding: 4px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .pm-segbtn { font-size: .9rem; font-weight: 600; color: #4b5563; padding: .45rem 1.05rem; border-radius: 9px; white-space: nowrap; transition: background .15s, color .15s; }
+  .pm-segbtn:hover { background: #f3f4f6; }
+  .pm-segbtn.is-on { background: #1c33bb; color: #fff; }
+  .pm-more {
+    font-size: .85rem; font-weight: 600; color: #4b5563; background-color: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+    padding: .62rem 2.1rem .62rem 1rem; appearance: none; -webkit-appearance: none; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%236b7280" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>');
+    background-repeat: no-repeat; background-position: right .8rem center; background-size: 11px;
+  }
+  .pm-more:hover { border-color: #9ca3af; }
+  .pm-more.is-on { background-color: #1c33bb; border-color: #1c33bb; color: #fff;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'); }
+  /* Cup Pricing matrix */
+  .pm-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .85rem; }
+  .pm-table th { font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: .05em; padding: .4rem .75rem; white-space: nowrap; background: #fff; }
+  .pm-table tr.pm-group th { font-size: 10px !important; text-align: center; padding-top: .55rem; padding-bottom: .1rem; color: #9ca3af; }
+  .pm-table tr.pm-group th span { display: block; border-bottom: 2px solid currentColor; padding-bottom: 2px; }
+  .pm-table tr.pm-group th.g-print span { color: #15268f; }
+  .pm-table tr.pm-group th.g-disc span { color: #d97706; }
+  .pm-table td { padding: .35rem .75rem; border-top: 1px solid #f3f4f6; }
+  .pm-table tbody tr:hover td { background: #f9fafb; }
+  .pm-table td.c-print { font-weight: 600; color: #111827; }
+  .pm-table td.c-disc, .pm-table th.c-disc { background: #fffbeb; }
+  .pm-table tbody tr:hover td.c-disc { background: #fef3c7; }
+  .pm-table td.c-muted { color: #6b7280; }
+  .pm-table td .price-cell { display: inline-block; min-width: 3.1rem; padding: .05rem .3rem; border-radius: 5px; cursor: text; }
+  .pm-table td .price-cell:hover { background: #fff; box-shadow: inset 0 0 0 1px #c7cdf3; }
+  .pm-family { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding: .6rem 1rem; background: #1c33bb; color: #fff; }
+  .pm-family span { color: rgba(255,255,255,.7) !important; }
+  /* receipt: printing shows only the receipt, whatever page the quote was opened from */
+  #cupReceiptPrint { display: none; }
+  @media print {
+    body.printing-receipt > *:not(#cupReceiptPrint) { display: none !important; }
+    body.printing-receipt #cupReceiptPrint { display: block !important; position: static; padding: 0; }
+    body.printing-receipt { background: #fff !important; }
+    @page { margin: 14mm; }
+  }
   /* an order saved but not confirmed yet */
   .cps-draft {
     font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
@@ -283,7 +374,7 @@
   /* A machine operator's Cup Printing: look, don't touch. The server refuses the
      writes anyway; this takes away what they'd press. */
   .cup-readonly #statusNewBtn, .cup-readonly #cupPrintsNewBtn, .cup-readonly #printNewBtn, .cup-readonly #addClientBtn,
-  .cup-readonly .cps-menu-btn, .cup-readonly .cps-edit-btn, .cup-readonly .print-logo-remove, .cup-readonly .print-discount-remove,
+  .cup-readonly .cps-menu-btn, .cup-readonly .cps-edit-btn, .cup-readonly .cps-quote-btn,.cup-readonly .print-logo-remove, .cup-readonly .print-discount-remove,
   .cup-readonly #addDiscountBtn, .cup-readonly #newDiscountItem, .cup-readonly #newDiscountValue,
   .cup-readonly #mergeClientBtn, .cup-readonly #clientsImportBtn, .cup-readonly label:has(> .print-logo-input) { display: none !important; }
   .cup-readonly #statusView .print-edit, .cup-readonly #cupPrintsView .print-edit, .cup-readonly #printView .print-edit,
@@ -913,7 +1004,7 @@
         <button id="statusNewBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New order</button>
       </div>
     </div>
-    <p class="text-xs text-gray-400 mb-3">Drag a card to another column to move the whole order along, or click one open for the cup lines and quantities. Mark a finished card paid and it moves itself.</p>
+    <p class="text-xs text-gray-400 mb-3">Drag a card to another column to move the whole order along, or click one open for the cup lines and quantities.</p>
     <div id="statusBoard" class="flex gap-3 overflow-x-auto pb-2"></div>
   </div>
 
@@ -951,11 +1042,6 @@
           <option value="ongoing">Ongoing</option><option value="done">Done</option>
         </select>
       </label>
-      <label class="text-xs text-gray-500">Paid
-        <select id="cupPrintsPaid" class="block border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white text-gray-900">
-          <option value="">All</option><option value="yes">Paid</option><option value="no">Unpaid</option>
-        </select>
-      </label>
       <label class="text-xs text-gray-500">New logo
         <select id="cupPrintsLogo" class="block border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white text-gray-900">
           <option value="">All</option><option value="yes">Yes</option><option value="no">No</option>
@@ -982,7 +1068,7 @@
           <thead>
             <tr>
               <th>Date</th><th>Client</th><th>Item</th><th>Lid</th><th>New logo</th>
-              <th class="r">Qty</th><th>Color</th><th>Paid</th><th>Status</th><th>Deadline</th><th></th><th>Remarks</th>
+              <th class="r">Qty</th><th>Color</th><th>Status</th><th>Deadline</th><th></th><th>Remarks</th>
             </tr>
           </thead>
           <tbody id="cupPrintsBody"></tbody>
@@ -1203,47 +1289,57 @@
   </div>
 
   <div id="pricingView" style="display:none">
-    <div class="flex flex-wrap items-end justify-between gap-3 mb-4">
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
       <div>
         <h2 class="font-display font-semibold text-xl leading-tight">Cup Pricing</h2>
         <p id="pricingSubtitle" class="text-sm text-gray-500">The price list the queue prices from.</p>
       </div>
-      <input id="pricingSearch" type="search" placeholder="Search cups or lids…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-full sm:w-56" />
+      <div class="flex items-center gap-2 w-full sm:w-auto">
+        <input id="pricingSearch" type="search" placeholder="Search cups…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm flex-1 sm:w-48" />
+        <button id="pricingEditBtn" type="button" class="pm-edit-btn shrink-0">Edit prices</button>
+      </div>
     </div>
-    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_22rem] gap-5 items-start">
+
+    <p id="pricingHint" class="text-xs text-gray-500 mb-3"></p>
+
+    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_21rem] gap-5 items-start">
       <div>
-        <p class="text-xs text-gray-500 mb-3">
-          Printing is priced per cup and the lid is added on top, so a line
-          costs the print tier for its quantity plus its lid. Click any figure
-          to change it.
-        </p>
-        <div id="pricingTables" class="flex flex-col gap-5"></div>
+        <div id="pricingTabs" class="mb-3"></div>
+        <div id="pricingTables" class="flex flex-col gap-4"></div>
       </div>
 
-      {# Quoting panel: the same arithmetic the queue uses, before an order
-         exists. #}
-      <aside class="border border-gray-200 bg-white rounded-xl shadow-sm xl:sticky xl:top-4">
-        <div class="px-4 py-3 border-b border-gray-200">
-          <h3 class="font-display font-semibold text-base leading-none">Quote a client</h3>
-          <p class="text-xs text-gray-500 mt-1">Priced exactly as an order would be.</p>
-        </div>
-        <div class="px-4 py-3 flex flex-col gap-3">
-          <div id="quoteLines" class="flex flex-col gap-3"></div>
-          <button id="quoteAddBtn" type="button" class="text-sm text-brand-blue hover:underline self-start">+ Add another cup</button>
-        </div>
-        <div class="px-4 py-3 border-t border-gray-200 bg-gray-50 rounded-b-xl">
-          <div class="flex items-baseline justify-between mb-1">
-            <span class="text-[11px] text-gray-400 uppercase tracking-wide font-mono">Total</span>
-            <span id="quoteTotal" class="font-semibold text-lg">₱0.00</span>
+      <div class="flex flex-col gap-4 xl:sticky xl:top-4">
+        {# Order-level charges, added once per order on a quote #}
+        <aside class="border border-gray-200 bg-white rounded-xl shadow-sm">
+          <div class="px-4 py-3 border-b border-gray-200">
+            <h3 class="font-display font-semibold text-base leading-none">Order fees</h3>
+            <p class="text-xs text-gray-500 mt-1">One flat amount each, added once to an order's quote.</p>
           </div>
-          <p id="quoteCups" class="text-[11px] text-gray-400 mb-3">0 cups</p>
-          <div class="flex gap-2">
-            <button id="quoteCopyBtn" type="button" class="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm hover:border-gray-400 transition">Copy quote</button>
-            <button id="quoteClearBtn" type="button" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm hover:border-gray-400 transition">Clear</button>
+          <div class="px-4 py-3 flex flex-col gap-3">
+            <label class="flex items-center justify-between gap-3 text-sm">
+              <span><span class="text-amber-500">&#9889;</span> Rush fee</span>
+              <span class="flex items-center gap-1 text-gray-500">₱<input id="feeRush" type="number" min="0" step="0.01" placeholder="not set" class="print-edit-fee w-24 border border-gray-300 rounded-lg px-2 py-1 text-sm text-right text-gray-900" /></span>
+            </label>
+            <label class="flex items-center justify-between gap-3 text-sm">
+              <span><span class="text-emerald-500">&#127381;</span> New frame fee</span>
+              <span class="flex items-center gap-1 text-gray-500">₱<input id="feeFrame" type="number" min="0" step="0.01" placeholder="not set" class="print-edit-fee w-24 border border-gray-300 rounded-lg px-2 py-1 text-sm text-right text-gray-900" /></span>
+            </label>
+            <p id="feesNote" class="text-[11px] text-gray-400 h-3"></p>
           </div>
-          <p id="quoteCopied" class="text-[11px] text-green-700 mt-2 h-3"></p>
-        </div>
-      </aside>
+        </aside>
+
+        {# A quote with no order behind it - the same popup as Cup Prints' Quote button #}
+        <aside class="border border-gray-200 bg-white rounded-xl shadow-sm">
+          <div class="px-4 py-3 border-b border-gray-200">
+            <h3 class="font-display font-semibold text-base leading-none">Quote</h3>
+            <p class="text-xs text-gray-500 mt-1">Price a job before there is an order.</p>
+          </div>
+          <div class="px-4 py-3">
+            <button id="newQuoteBtn" type="button" class="w-full bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New quote</button>
+            <p class="text-[11px] text-gray-400 mt-2">The same as the Quote button on Cup Prints: pick a client to use their special prices, add cups and fees, then view or copy the receipt.</p>
+          </div>
+        </aside>
+      </div>
     </div>
   </div>
 
@@ -1581,12 +1677,14 @@
         <button id="discountAddBtn" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition whitespace-nowrap">+ Add</button>
       </div>
     </div>
-    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm max-w-3xl">
+    <p class="text-xs text-gray-500 mb-3 max-w-3xl">A client with a row here is a <b>discounted client</b>. Link a row to a cup or lid on the price list and quotes use its price; an unlinked row is only a note. A price covers the item alone, or the cup <i>with</i> its lid when you pick one.</p>
+    <div class="overflow-x-auto border border-gray-200 rounded-xl bg-white shadow-sm max-w-5xl">
       <table class="w-full text-sm">
         <thead>
           <tr class="text-[10px] uppercase tracking-wide font-mono text-gray-400 bg-gray-50 border-b border-gray-200">
             <th class="text-left px-3 py-2">Client</th>
             <th class="text-left px-3 py-2">Item</th>
+            <th class="text-left px-3 py-2">Price list item</th>
             <th class="text-right px-3 py-2">Price / discount</th>
             <th class="px-3 py-2"></th>
           </tr>
@@ -1609,6 +1707,14 @@
       <label class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Item</span>
         <input id="discountItem" type="text" class="w-full border border-gray-300 rounded-lg px-2 py-1.5" placeholder="e.g. PET 16oz" />
+      </label>
+      <label class="text-sm block mb-2">
+        <span class="text-xs text-gray-500 block mb-1">Price list item <span class="text-gray-400">(so quotes can use it)</span></span>
+        <select id="discountProduct" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 bg-white"></select>
+      </label>
+      <label id="discountLidWrap" class="text-sm block mb-2 hidden">
+        <span class="text-xs text-gray-500 block mb-1">The price covers</span>
+        <select id="discountLidMode" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 bg-white"></select>
       </label>
       <label class="text-sm block mb-2">
         <span class="text-xs text-gray-500 block mb-1">Price / discount</span>
@@ -1947,6 +2053,17 @@
     </div>
   </div>
   {% endif %}
+
+  {# Quote for one Cup Prints order - see openCupQuote() in script.js. A working
+     copy: editing it never touches the order itself. #}
+  <script>window.BUSINESS_NAME = {{ business_name|tojson }};</script>
+  <div id="cupQuoteModal" class="fixed inset-0 bg-black/50 z-[55] hidden items-center justify-center p-3 sm:p-4">
+    <div class="bg-white rounded-2xl w-full max-w-4xl max-h-[94vh] flex flex-col overflow-hidden shadow-xl">
+      <div id="cqHeader" class="px-5 py-3.5 border-b border-gray-200 flex items-center gap-3 shrink-0"></div>
+      <div id="cqBody" class="px-5 py-4 overflow-y-auto flex-1 min-h-0"></div>
+      <div id="cqFooter" class="px-5 py-3 border-t border-gray-200 bg-gray-50 flex flex-wrap items-center gap-2 shrink-0"></div>
+    </div>
+  </div>
 
   {# Merge a duplicate client into another - see openMergeClient() in script.js #}
   <div id="mergeClientModal" class="fixed inset-0 bg-black/50 z-[55] hidden items-center justify-center p-4">

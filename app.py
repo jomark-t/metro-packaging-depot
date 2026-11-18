@@ -652,6 +652,13 @@ def init_db():
         )"""
     )
 
+    # a discount row can optionally be tied to the price list so a quote can
+    # use it: product_id is the cup (or lid) it prices, includes_lid says the
+    # amount covers cup AND lid together, lid_product_id narrows that to one lid
+    cur.execute("ALTER TABLE print_client_discounts ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES print_products(id) ON DELETE SET NULL")
+    cur.execute("ALTER TABLE print_client_discounts ADD COLUMN IF NOT EXISTS includes_lid BOOLEAN NOT NULL DEFAULT FALSE")
+    cur.execute("ALTER TABLE print_client_discounts ADD COLUMN IF NOT EXISTS lid_product_id INTEGER REFERENCES print_products(id) ON DELETE SET NULL")
+
     cur.execute(
         """CREATE TABLE IF NOT EXISTS print_orders (
             id SERIAL PRIMARY KEY,
@@ -737,6 +744,26 @@ def init_db():
         )
         if cur.fetchone():
             cur.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE {spec}")
+
+    # small key/value store for Cup Printing (rush fee, new-frame fee)
+    cur.execute("CREATE TABLE IF NOT EXISTS print_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+
+    # Lids are universal: the Mario flat lid and the Non-PET strawless lid are
+    # folded into the plain lid of the same size. Lines and discounts that used
+    # them move across (their saved prices are untouched), then the variant is
+    # switched off so it stops appearing in any picker. Safe to run every boot:
+    # once a variant is inactive it is skipped.
+    for old_name, new_name in (("95 Flat Lid - Mario", "95 Flat Lid"), ("95 Strawless Non-PET", "95 Strawless")):
+        cur.execute("SELECT id FROM print_products WHERE kind='lid' AND family=%s AND is_active", (old_name,))
+        old = cur.fetchone()
+        cur.execute("SELECT id FROM print_products WHERE kind='lid' AND family=%s AND is_active", (new_name,))
+        new = cur.fetchone()
+        if not old or not new:
+            continue
+        cur.execute("UPDATE print_order_items SET lid_product_id=%s WHERE lid_product_id=%s", (new["id"], old["id"]))
+        cur.execute("UPDATE print_client_discounts SET product_id=%s WHERE product_id=%s", (new["id"], old["id"]))
+        cur.execute("UPDATE print_client_discounts SET lid_product_id=%s WHERE lid_product_id=%s", (new["id"], old["id"]))
+        cur.execute("UPDATE print_products SET is_active=FALSE WHERE id=%s", (old["id"],))
 
     cur.execute("CREATE INDEX IF NOT EXISTS print_order_items_order_idx ON print_order_items(order_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS print_orders_date_idx ON print_orders(order_date DESC)")
@@ -4625,7 +4652,7 @@ def _print_order_rows(where="", params=()):
                    o.is_rush, o.needs_new_frame, o.is_draft,
                    o.is_paid, o.remarks, o.created_by, o.placed_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
-                   c.logo_filename, c.is_discounted
+                   c.logo_filename, (c.is_discounted OR EXISTS (SELECT 1 FROM print_client_discounts dd WHERE dd.client_id = c.id)) AS is_discounted
             FROM print_orders o
             JOIN print_clients c ON c.id = o.client_id
             {where}
@@ -4755,7 +4782,7 @@ def api_print_orders_history():
                    o.is_rush, o.needs_new_frame, o.is_draft,
                    o.is_paid, o.remarks, o.created_by, o.placed_by,
                    c.id AS client_id, c.name AS client_name, c.instagram, c.facebook,
-                   c.logo_filename, c.is_discounted,
+                   c.logo_filename, (c.is_discounted OR EXISTS (SELECT 1 FROM print_client_discounts dd WHERE dd.client_id = c.id)) AS is_discounted,
                    (SELECT COUNT(*) FROM print_orders o2 WHERE o2.client_id = o.client_id)
                      AS client_order_count
             FROM print_orders o
@@ -5256,15 +5283,16 @@ def api_print_order_delete(order_id):
 #   diameters  - the lid sizes that physically fit
 #   no_hard    - the cup cannot take a hard lid whatever the diameter
 #   only_hard  - the cup takes nothing but hard lids
+#   only_black - a black cup is only offered black lids
 LID_RULES = {
     "Double Wall":            {"diameters": ["90"]},
     "Double Wall BLUE":       {"diameters": ["90"]},
     "Paper Cup":              {"diameters": ["90"], "no_hard": True},
     "PET 95mm":               {"diameters": ["95"]},
     "PET 98mm":               {"diameters": ["98"]},
-    "PET 98 Black - Thick":   {"diameters": ["98"]},
+    "PET 98 Black - Thick":   {"diameters": ["98"], "only_black": True},
     "PET U 90 - Thick":       {"diameters": ["90"]},
-    "PET U 90 Black  - Thick": {"diameters": ["90"]},
+    "PET U 90 Black  - Thick": {"diameters": ["90"], "only_black": True},
     "PPY":                    {"diameters": ["95"]},
     "PPU":                    {"diameters": ["95"]},
     "Dabba":                  {"diameters": ["Dabba"]},
@@ -5290,6 +5318,8 @@ def _lid_fits(lid_name, rule):
     if rule.get("no_hard") and is_hard:
         return False
     if rule.get("only_hard") and not is_hard:
+        return False
+    if rule.get("only_black") and "black" not in name.lower():
         return False
     for dia in rule["diameters"]:
         if dia == "Dabba":
@@ -5320,7 +5350,7 @@ def api_print_catalogue():
     cups, lids = [], []
     for r in cur.fetchall():
         row = dict(r)
-        for money in ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k"):
+        for money in PRINT_PRICE_FIELDS:
             row[money] = float(row[money]) if row[money] is not None else None
         row["label"] = f"{row['family']} {row['size']}".strip()
         (cups if row["kind"] == "cup" else lids).append(row)
@@ -5360,7 +5390,62 @@ def api_print_catalogue():
             colors[str(cup["id"])] = options
 
     return jsonify({"cups": cups, "lids": lids, "fits": fits, "colors": colors,
-                    "usage": usage, "shows_cost": show_cost})
+                    "usage": usage, "shows_cost": show_cost, "fees": print_fees(cur)})
+
+
+# every price column on the grid, in one place so the catalogue, the edit
+# route and the float conversion can't drift apart
+PRINT_PRICE_FIELDS = ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k")
+
+# order-level charges that sit on top of the cups. Amounts live in
+# print_settings so they can be changed from the Cup Pricing page.
+PRINT_FEE_KEYS = ("rush_fee", "frame_fee")
+
+
+def print_fees(cur):
+    cur.execute("SELECT key, value FROM print_settings WHERE key = ANY(%s)", (list(PRINT_FEE_KEYS),))
+    stored = {r["key"]: r["value"] for r in cur.fetchall()}
+    fees = {}
+    for key in PRINT_FEE_KEYS:
+        try:
+            fees[key] = float(stored[key]) if stored.get(key) not in (None, "") else None
+        except ValueError:
+            fees[key] = None
+    return fees
+
+
+@app.route("/api/print/fees", methods=["POST"])
+@login_required
+def api_print_fees_update():
+    """Rush fee and new-frame fee: one flat amount each, added once per order."""
+    data = request.get_json(force=True)
+    db = get_db()
+    cur = db.cursor()
+    changed = {}
+    for key in PRINT_FEE_KEYS:
+        if key not in data:
+            continue
+        raw = data[key]
+        if raw in (None, ""):
+            cur.execute("DELETE FROM print_settings WHERE key=%s", (key,))
+            changed[key] = None
+            continue
+        try:
+            value = round(float(raw), 2)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "That fee isn't a number."}), 400
+        if value < 0:
+            return jsonify({"status": "error", "message": "A fee can't be negative."}), 400
+        cur.execute(
+            """INSERT INTO print_settings (key, value) VALUES (%s, %s)
+               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+            (key, str(value)),
+        )
+        changed[key] = value
+    if changed:
+        record_audit(cur, "Updated print fees", "Cup Pricing", changed)
+        db.commit()
+    return jsonify({"status": "ok", "fees": print_fees(cur)})
 
 
 @app.route("/api/print/products/<int:product_id>", methods=["POST"])
@@ -5369,7 +5454,7 @@ def api_print_product_price_update(product_id):
     """Edit one price on the price list."""
     data = request.get_json(force=True)
     fields = {}
-    for key in ("cost", "retail", "wholesale", "print_only_1k", "print_only_sub1k"):
+    for key in PRINT_PRICE_FIELDS:
         if key in data:
             raw = data[key]
             if raw in (None, ""):
@@ -6357,7 +6442,7 @@ def api_print_client(client_id):
         deals.append(d)
 
     cur.execute(
-        "SELECT id, item, discount FROM print_client_discounts WHERE client_id=%s ORDER BY id",
+        "SELECT id, item, discount, product_id, includes_lid, lid_product_id FROM print_client_discounts WHERE client_id=%s ORDER BY id",
         (client_id,),
     )
     discounts = [dict(r) for r in cur.fetchall()]
@@ -6613,11 +6698,59 @@ def api_print_client_merge(client_id):
     return jsonify({"status": "ok", "kept": keep["name"], "moved": moved})
 
 
+def _discount_link(cur, data):
+    """The optional price-list link on a discount row, validated. Returns a
+    dict of only the keys the request actually sent, so an edit that is just
+    a text change never wipes a link that was set elsewhere."""
+    link = {}
+    if "product_id" in data:
+        raw = data["product_id"]
+        if raw in (None, ""):
+            link["product_id"] = None
+            link["includes_lid"] = False
+            link["lid_product_id"] = None
+        else:
+            cur.execute("SELECT 1 FROM print_products WHERE id=%s", (raw,))
+            if cur.fetchone() is None:
+                raise ValueError("That item isn't on the price list.")
+            link["product_id"] = int(raw)
+    if "includes_lid" in data and link.get("product_id", 1) is not None:
+        link["includes_lid"] = bool(data["includes_lid"])
+    if "lid_product_id" in data and link.get("product_id", 1) is not None:
+        raw = data["lid_product_id"]
+        if raw in (None, ""):
+            link["lid_product_id"] = None
+        else:
+            cur.execute("SELECT 1 FROM print_products WHERE id=%s AND kind='lid'", (raw,))
+            if cur.fetchone() is None:
+                raise ValueError("That lid isn't on the price list.")
+            link["lid_product_id"] = int(raw)
+            link["includes_lid"] = True
+    if link.get("includes_lid") is False:
+        link["lid_product_id"] = None
+    return link
+
+
+@app.route("/api/print/clients/<int:client_id>/discounts")
+@login_required
+def api_print_client_discount_list(client_id):
+    """One client's special prices with their price-list links - what a quote
+    reads to price an order for them."""
+    cur = get_db().cursor()
+    cur.execute(
+        """SELECT id, item, discount, product_id, includes_lid, lid_product_id
+           FROM print_client_discounts WHERE client_id=%s ORDER BY id""",
+        (client_id,),
+    )
+    return jsonify({"discounts": [dict(r) for r in cur.fetchall()]})
+
+
 @app.route("/api/print/clients/<int:client_id>/discounts", methods=["POST"])
 @login_required
 def api_print_client_discount_create(client_id):
-    """One row of the client's freeform discount table - item and discount
-    are both typed in by staff, not looked up against a product catalog."""
+    """One row of the client's discount table. Item and discount are typed in
+    by staff; the price-list link is optional, and only a linked row is used
+    when a quote is priced."""
     data = request.get_json(force=True)
     item = (data.get("item") or "").strip()
     discount = (data.get("discount") or "").strip()
@@ -6630,13 +6763,18 @@ def api_print_client_discount_create(client_id):
     client_row = cur.fetchone()
     if client_row is None:
         return jsonify({"status": "error", "message": "No such client"}), 404
+    try:
+        link = _discount_link(cur, data)
+    except ValueError as err:
+        return jsonify({"status": "error", "message": str(err)}), 400
 
+    cols = ["client_id", "item", "discount", *link]
     cur.execute(
-        "INSERT INTO print_client_discounts (client_id, item, discount) VALUES (%s,%s,%s) RETURNING id",
-        (client_id, item, discount),
+        f"INSERT INTO print_client_discounts ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING id",
+        (client_id, item, discount, *link.values()),
     )
     discount_id = cur.fetchone()["id"]
-    record_audit(cur, "Added client discount", client_row["name"], {"item": item, "discount": discount})
+    record_audit(cur, "Added client discount", client_row["name"], {"item": item, "discount": discount, **link})
     db.commit()
     return jsonify({"status": "ok", "id": discount_id})
 
@@ -6645,15 +6783,10 @@ def api_print_client_discount_create(client_id):
 @login_required
 def api_print_client_discount_update(client_id, discount_id):
     data = request.get_json(force=True)
-    item = (data.get("item") or "").strip()
-    discount = (data.get("discount") or "").strip()
-    if not item or not discount:
-        return jsonify({"status": "error", "message": "Both an item and a discount are needed."}), 400
-
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT c.name FROM print_client_discounts d JOIN print_clients c ON c.id = d.client_id "
+        "SELECT c.name, d.item, d.discount FROM print_client_discounts d JOIN print_clients c ON c.id = d.client_id "
         "WHERE d.id=%s AND d.client_id=%s",
         (discount_id, client_id),
     )
@@ -6661,11 +6794,25 @@ def api_print_client_discount_update(client_id, discount_id):
     if row is None:
         return jsonify({"status": "error", "message": "No such discount"}), 404
 
+    fields = {}
+    if "item" in data or "discount" in data:
+        item = (data.get("item", row["item"]) or "").strip()
+        discount = (data.get("discount", row["discount"]) or "").strip()
+        if not item or not discount:
+            return jsonify({"status": "error", "message": "Both an item and a discount are needed."}), 400
+        fields["item"], fields["discount"] = item, discount
+    try:
+        fields.update(_discount_link(cur, data))
+    except ValueError as err:
+        return jsonify({"status": "error", "message": str(err)}), 400
+    if not fields:
+        return jsonify({"status": "ok"})
+
     cur.execute(
-        "UPDATE print_client_discounts SET item=%s, discount=%s WHERE id=%s",
-        (item, discount, discount_id),
+        f"UPDATE print_client_discounts SET {', '.join(f'{k}=%s' for k in fields)} WHERE id=%s",
+        (*fields.values(), discount_id),
     )
-    record_audit(cur, "Updated client discount", row["name"], {"item": item, "discount": discount})
+    record_audit(cur, "Updated client discount", row["name"], fields)
     db.commit()
     return jsonify({"status": "ok"})
 
@@ -7237,7 +7384,8 @@ def api_office_discounts():
     drawer edits (print_client_discounts), just not scoped to one client."""
     cur = get_db().cursor()
     cur.execute(
-        """SELECT d.id, d.client_id, c.name AS client_name, d.item, d.discount
+        """SELECT d.id, d.client_id, c.name AS client_name, d.item, d.discount,
+                  d.product_id, d.includes_lid, d.lid_product_id
            FROM print_client_discounts d
            JOIN print_clients c ON c.id = d.client_id
            ORDER BY LOWER(c.name), d.id"""
