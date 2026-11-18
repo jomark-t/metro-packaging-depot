@@ -1415,11 +1415,17 @@
       <div class="flex flex-wrap items-center gap-2">
         <a href="/shop" target="_blank" rel="noopener" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition">View catalog &#8599;</a>
         <button id="productsCopyLink" type="button" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition">Copy link</button>
-        <button id="productsSettingsBtn" type="button" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition">Catalog settings</button>
+        <span id="productsItemActions" class="contents">
         <button id="productsImportBtn" type="button" class="text-sm border border-gray-300 rounded-lg px-3 py-2 hover:bg-gray-50 transition" style="display:none">Import price list</button>
         <button id="productsAddBtn" type="button" class="bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ Add product</button>
+        </span>
       </div>
     </div>
+    <div class="flex gap-5 border-b border-gray-200 mb-4 text-sm" id="productsTabs">
+      <button type="button" data-ptab="catalog" class="pb-2 -mb-px border-b-2 font-medium">Catalog items</button>
+      <button type="button" data-ptab="settings" class="pb-2 -mb-px border-b-2 font-medium">Catalog settings</button>
+    </div>
+    <div id="productsCatalogPane">
     <div class="bg-white border border-gray-200 rounded-xl shadow-sm px-3 py-3 mb-3 flex flex-wrap items-end gap-x-3 gap-y-2">
       <label class="text-xs text-gray-500">Search
         <input id="productsSearch" type="search" placeholder="Name or SKU…" class="block border border-gray-300 rounded-lg px-2 py-1.5 text-sm w-48 text-gray-900" />
@@ -1464,6 +1470,8 @@
         </div>
       </div>
     </div>
+    </div>
+    <div id="productsSettingsPane" class="hidden"></div>
   </div>
 
   <div id="productEditModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
@@ -1480,9 +1488,6 @@
   </div>
   <div id="productsImportModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
     <div id="productsImportBody" class="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-5"></div>
-  </div>
-  <div id="productsSettingsModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
-    <div id="productsSettingsBody" class="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto p-5"></div>
   </div>
   {% endif %}
 

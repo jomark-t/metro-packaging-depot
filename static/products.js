@@ -1054,25 +1054,43 @@ async function runProductsImport(commit) {
 
 // ------------------------------------------------------------- settings
 
-function openProductsSettings() {
-  const s = productsData.settings;
+let productsTab = "catalog"; // "catalog" | "settings"
+
+function setProductsTab(tab) {
+  productsTab = tab;
+  document.querySelectorAll("#productsTabs [data-ptab]").forEach((b) => {
+    const on = b.dataset.ptab === tab;
+    b.classList.toggle("border-brand-blue", on);
+    b.classList.toggle("text-brand-blue", on);
+    b.classList.toggle("border-transparent", !on);
+    b.classList.toggle("text-gray-500", !on);
+  });
+  document.getElementById("productsCatalogPane").classList.toggle("hidden", tab !== "catalog");
+  document.getElementById("productsItemActions").classList.toggle("hidden", tab !== "catalog");
+  const pane = document.getElementById("productsSettingsPane");
+  pane.classList.toggle("hidden", tab !== "settings");
+  if (tab === "settings") renderProductsSettings();
+}
+
+function renderProductsSettings() {
+  const s = productsData.settings || {};
   const inp = "w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm mt-0.5";
-  document.getElementById("productsSettingsBody").innerHTML = `
-    <div class="flex items-start justify-between mb-3"><h3 class="font-display font-semibold text-lg">Catalog settings</h3>
-      <button type="button" id="settingsClose" class="text-gray-400 hover:text-black text-2xl leading-none" aria-label="Close">×</button></div>
-    <div class="space-y-3 text-xs">
-      <label class="block"><span class="text-gray-500">Intro line at the top of the catalog</span><textarea id="stIntro" rows="2" class="${inp}">${pEsc(s.intro)}</textarea></label>
-      <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" id="stBox" ${s.show_box_prices === "1" ? "checked" : ""}> Show box prices to clients (where one is set)</label><br>
-      <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" id="stSku" ${s.show_sku === "1" ? "checked" : ""}> Show SKU codes to clients</label>
-      <div class="grid grid-cols-2 gap-3">
+  const card = (title, hint, inner) => `<section class="bg-white border border-gray-200 rounded-xl shadow-sm p-4">
+    <h3 class="font-display font-semibold text-base leading-tight">${title}</h3><p class="text-xs text-gray-500 mb-3">${hint}</p>${inner}</section>`;
+  document.getElementById("productsSettingsPane").innerHTML = `<div class="max-w-2xl space-y-4">
+    ${card("Catalog page", "The text clients see when they open the catalog.",
+      `<label class="block text-xs"><span class="text-gray-500">Intro line at the top of the catalog</span><textarea id="stIntro" rows="2" class="${inp}">${pEsc(s.intro)}</textarea></label>`)}
+    ${card("What clients see", "Choose which details show next to each product.",
+      `<label class="flex items-center gap-2 text-sm mb-2"><input type="checkbox" id="stBox" ${s.show_box_prices === "1" ? "checked" : ""}> Show box prices (where one is set)</label>
+       <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="stSku" ${s.show_sku === "1" ? "checked" : ""}> Show SKU codes</label>`)}
+    ${card("Contact", "The button and number clients use to reach you. Leave blank to hide it.",
+      `<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
         <label class="block"><span class="text-gray-500">Contact button text</span><input id="stLabel" value="${pEsc(s.contact_label)}" class="${inp}" placeholder="Message us"></label>
         <label class="block"><span class="text-gray-500">Phone number to show</span><input id="stPhone" value="${pEsc(s.contact_phone)}" class="${inp}" placeholder="0917 000 0000"></label>
-        <label class="block col-span-2"><span class="text-gray-500">Contact link (Messenger, Viber, WhatsApp...) - must start with https://</span><input id="stUrl" value="${pEsc(s.contact_url)}" class="${inp}" placeholder="https://m.me/yourpage"></label>
-      </div>
-    </div>
-    <div class="flex items-center gap-3 mt-4"><button type="button" id="stSave" class="bg-brand-green text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition">Save</button>
-      <span id="stStatus" class="text-xs text-red-600"></span></div>`;
-  openModalEl("productsSettingsModal");
+        <label class="block sm:col-span-2"><span class="text-gray-500">Contact link (Messenger, Viber, WhatsApp...) - must start with https://</span><input id="stUrl" value="${pEsc(s.contact_url)}" class="${inp}" placeholder="https://m.me/yourpage"></label>
+      </div>`)}
+    <div class="flex items-center gap-3"><button type="button" id="stSave" class="bg-brand-green text-white font-semibold text-sm rounded-lg px-4 py-2 hover:brightness-95 transition">Save settings</button>
+      <span id="stStatus" class="text-xs text-red-600"></span></div></div>`;
 }
 
 // ------------------------------------------------------------- wiring
@@ -1134,7 +1152,11 @@ function wireProducts() {
   });
   document.getElementById("productsAddBtn").addEventListener("click", () => openNewProduct());
   document.getElementById("productsImportBtn").addEventListener("click", openProductsImport);
-  document.getElementById("productsSettingsBtn").addEventListener("click", openProductsSettings);
+  document.getElementById("productsTabs").addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-ptab]");
+    if (b) setProductsTab(b.dataset.ptab);
+  });
+  setProductsTab("catalog");
   document.getElementById("productsCopyLink").addEventListener("click", async () => {
     const url = location.origin + "/shop";
     try { await navigator.clipboard.writeText(url); productsToast("Catalog link copied."); }
@@ -1197,10 +1219,10 @@ function wireProducts() {
     if (ev.target.id === "importFile") runProductsImport(false);
   });
 
-  document.getElementById("productsSettingsModal").addEventListener("click", async (ev) => {
-    if (ev.target.id === "productsSettingsModal" || ev.target.id === "settingsClose") return closeModalEl("productsSettingsModal");
+  document.getElementById("productsSettingsPane").addEventListener("click", async (ev) => {
     if (ev.target.id !== "stSave") return;
     const status = document.getElementById("stStatus");
+    status.textContent = "";
     try {
       const r = await productsFetch("/api/products/settings", {
         method: "POST",
@@ -1214,7 +1236,6 @@ function wireProducts() {
         },
       });
       productsData.settings = r.settings;
-      closeModalEl("productsSettingsModal");
       productsToast("Settings saved.");
     } catch (err) { status.textContent = err.message; }
   });
