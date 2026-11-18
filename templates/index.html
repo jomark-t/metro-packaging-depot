@@ -322,6 +322,14 @@
   #opexBody th { font-size: 12px !important; letter-spacing: .04em; }
   #opexBody td, #opexBody th { white-space: nowrap; }
   #salesBody .sales-head td { padding: 14px 16px !important; border-color: #1c33bb; }
+  /* Products: searchable picker (categories, suppliers, merge into, move to) */
+  .pcombo { position: relative; }
+  .pcombo-list { position: fixed; z-index: 200; overflow: auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 4px; font-size: 13px; }
+  .pcombo-list[hidden], .pcombo-item[hidden], .pcombo-none[hidden] { display: none; }
+  .pcombo-item { padding: 7px 10px; border-radius: 7px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; color: #111827; }
+  .pcombo-item:hover, .pcombo-item.on { background: #eef2ff; }
+  .pcombo-sub { color: #9ca3af; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+  .pcombo-none { padding: 8px 10px; color: #9ca3af; }
 </style>
 </head>
 <body class="bg-[#F3F4F8] text-black" data-payroll-unlocked="{{ 1 if current_user.payroll_unlocked else 0 }}" data-superuser="{{ 1 if current_user.is_superuser else 0 }}">

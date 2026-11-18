@@ -29,6 +29,139 @@ const askYes = (message, opts = {}) =>
   typeof confirmDialog === "function" ? confirmDialog(message, Object.assign({ title: "Are you sure?", confirmLabel: "Yes" }, opts)) : Promise.resolve(window.confirm(message));
 
 const pEsc = (s) => (typeof escapeHtml === "function" ? escapeHtml(String(s == null ? "" : s)) : String(s == null ? "" : s));
+
+// ---- Searchable picker -------------------------------------------------------
+// The browser's own <datalist> only offers what matches the text already in the
+// box (so a filled-in category shows just itself), and a plain <select> with a
+// few hundred products can't be searched and acts the moment it changes. This
+// one lists every choice when you click it, narrows as you type, and only acts
+// when you pick something.
+//   free: true  - the typed text is the value (categories, suppliers)
+//   free: false - you must pick a row; the pick is left on input.dataset.pick and
+//                 a "change" event fires (merge / move)
+function comboHtml({ attr = "", value = "", items = [], placeholder = "", free = true, cls = "", id = "" }) {
+  return `<div class="pcombo" data-free="${free ? 1 : 0}">
+    <input type="text" ${id ? `id="${id}"` : ""} ${attr} autocomplete="off" spellcheck="false" value="${pEsc(value)}" placeholder="${pEsc(placeholder)}" class="${cls}">
+    <div class="pcombo-list" role="listbox" hidden>${items.map((i) =>
+      `<div class="pcombo-item" role="option" data-v="${pEsc(i.v)}" data-label="${pEsc(i.label)}" data-find="${pEsc((i.label + " " + (i.sub || "")).toLowerCase())}">${pEsc(i.label)}${i.sub ? `<span class="pcombo-sub">${pEsc(i.sub)}</span>` : ""}</div>`).join("")}
+      <div class="pcombo-none" hidden>Nothing matches.</div></div></div>`;
+}
+
+const comboProductItems = (exceptId) =>
+  productsData.families.filter((x) => x.id !== exceptId)
+    .slice().sort((a, b) => a.name.localeCompare(b.name))
+    .map((x) => ({ v: x.id, label: x.name, sub: x.section }));
+
+(function wireCombos() {
+  if (window.__pcomboWired) return;
+  window.__pcomboWired = true;
+  let openBox = null;
+
+  const itemsOf = (box) => [...box.querySelectorAll(".pcombo-item")];
+  function place(box) {
+    const input = box.querySelector("input"), list = box.querySelector(".pcombo-list");
+    const r = input.getBoundingClientRect();
+    const width = Math.max(r.width, 260);
+    list.style.width = width + "px";
+    list.style.left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8)) + "px";
+    const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
+    const h = Math.min(240, list.scrollHeight);
+    if (below >= Math.min(h, 160) || below >= above) {
+      list.style.top = r.bottom + 4 + "px"; list.style.bottom = "auto"; list.style.maxHeight = Math.max(120, Math.min(240, below)) + "px";
+    } else {
+      list.style.bottom = window.innerHeight - r.top + 4 + "px"; list.style.top = "auto"; list.style.maxHeight = Math.max(120, Math.min(240, above)) + "px";
+    }
+  }
+  function filter(box, q) {
+    q = q.trim().toLowerCase();
+    let shown = 0, first = null;
+    itemsOf(box).forEach((it) => {
+      const hit = !q || it.dataset.find.includes(q);
+      it.hidden = !hit;
+      it.classList.remove("on");
+      if (hit) { shown++; first = first || it; }
+    });
+    if (first && q) first.classList.add("on");
+    box.querySelector(".pcombo-none").hidden = shown > 0;
+    return shown;
+  }
+  function open(box, showAll) {
+    if (openBox && openBox !== box) close(openBox);
+    openBox = box;
+    const input = box.querySelector("input");
+    filter(box, showAll ? "" : input.value);
+    const list = box.querySelector(".pcombo-list");
+    list.hidden = false;
+    place(box);
+  }
+  function close(box) {
+    if (!box) return;
+    box.querySelector(".pcombo-list").hidden = true;
+    if (openBox === box) openBox = null;
+  }
+  function choose(box, item) {
+    const input = box.querySelector("input");
+    close(box);
+    if (box.dataset.free === "1") {
+      input.value = item.dataset.label;
+      delete input.dataset.pick;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    } else {
+      input.value = item.dataset.label;
+      input.dataset.pick = item.dataset.v;
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  const boxOf = (el) => (el && el.closest ? el.closest(".pcombo") : null);
+
+  document.addEventListener("focusin", (ev) => {
+    const box = boxOf(ev.target);
+    if (box && ev.target.tagName === "INPUT") { ev.target.select(); open(box, true); }
+    else if (openBox) close(openBox);
+  });
+  document.addEventListener("mousedown", (ev) => {
+    const box = boxOf(ev.target);
+    if (box && ev.target.tagName === "INPUT" && document.activeElement === ev.target && box.querySelector(".pcombo-list").hidden) open(box, true);
+    const item = ev.target.closest && ev.target.closest(".pcombo-item");
+    if (item) { ev.preventDefault(); choose(boxOf(item), item); return; }
+    if (!box && openBox) close(openBox);
+  });
+  // a click on a row must not reach the <label> around the picker, or it would refocus the box and reopen the list
+  document.addEventListener("click", (ev) => {
+    if (ev.target.closest && ev.target.closest(".pcombo-list")) { ev.preventDefault(); ev.stopPropagation(); }
+  }, true);
+  document.addEventListener("input", (ev) => {
+    const box = boxOf(ev.target);
+    if (!box || ev.target.tagName !== "INPUT" || !ev.isTrusted) return;
+    delete ev.target.dataset.pick;
+    open(box, false);
+  });
+  document.addEventListener("keydown", (ev) => {
+    const box = boxOf(ev.target);
+    if (!box || ev.target.tagName !== "INPUT") return;
+    const list = box.querySelector(".pcombo-list");
+    const visible = itemsOf(box).filter((x) => !x.hidden);
+    if (ev.key === "Escape" && !list.hidden) { ev.preventDefault(); ev.stopPropagation(); close(box); return; }
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (list.hidden) open(box, true);
+      const items = itemsOf(box).filter((x) => !x.hidden);
+      if (!items.length) return;
+      let at = items.findIndex((x) => x.classList.contains("on"));
+      items.forEach((x) => x.classList.remove("on"));
+      at = ev.key === "ArrowDown" ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
+      items[at].classList.add("on");
+      items[at].scrollIntoView({ block: "nearest" });
+    } else if (ev.key === "Enter" && !list.hidden) {
+      const on = visible.find((x) => x.classList.contains("on"));
+      ev.preventDefault();
+      if (on) choose(box, on);
+      else if (box.dataset.free === "1") close(box);
+    }
+  }, true);
+  window.addEventListener("resize", () => close(openBox));
+  document.addEventListener("scroll", (ev) => { if (openBox && !ev.target.closest?.(".pcombo-list")) close(openBox); }, true);
+})();
 const pesos = (n) =>
   n == null ? "—" : "₱" + Number(n).toLocaleString("en-PH", { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
 // a unit price can run to four places (28 / 3 pieces), so show what is there, at least two
@@ -297,15 +430,13 @@ function renderOptionPopup() {
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
       ${lab("Product name", field("name"), "col-span-2 sm:col-span-3")}
-      ${lab("Category (moves this item)", `<input data-o="section" list="optionSectionList" value="${pEsc("section" in optionEdits ? optionEdits.section : f.section)}" class="${inp}" placeholder="Pick one or type a new one">
-        <datalist id="optionSectionList">${productSections().map((x) => `<option value="${pEsc(x)}">`).join("")}</datalist>`, "col-span-2 sm:col-span-3")}
+      ${lab("Category (moves this item)", comboHtml({ attr: 'data-o="section"', value: "section" in optionEdits ? optionEdits.section : f.section, items: productSections().map((x) => ({ v: x, label: x })), placeholder: "Pick one or type a new one", cls: inp }), "col-span-2 sm:col-span-3")}
       ${lab("Status", `<select data-o="status" class="${inp} bg-white">${["", "new", "repriced", "incoming", "shelfed"].map((s) => `<option value="${s}" ${m.status === s ? "selected" : ""}>${PRODUCT_STATUS_LABELS[s] || "—"}</option>`).join("")}</select>`)}
       ${lab("SKU", field("sku"))}
       ${lab("Unit type", `<select data-o="unit_type" class="${inp} bg-white"><option value=""></option>${unitTypes.map((u) => `<option ${m.unit_type === u ? "selected" : ""}>${pEsc(u)}</option>`).join("")}</select>`)}
       ${lab("Product (sheet)", field("product"))}${lab("Sub (sheet)", field("sub"))}${lab("Description (brand, material)", field("note"))}
       ${lab("Size", field("size"))}${lab("Color", field("color"))}
-      ${costs ? lab("Supplier (private)", field("supplier", "text", 'list="productSupplierList"') +
-        `<datalist id="productSupplierList">${[...new Set(productsData.families.flatMap((x) => x.variants.map((y) => y.supplier).filter(Boolean)))].sort().map((n) => `<option value="${pEsc(n)}">`).join("")}</datalist>`) : "<div></div>"}
+      ${costs ? lab("Supplier (private)", comboHtml({ attr: 'data-o="supplier"', value: m.supplier ?? "", items: [...new Set(productsData.families.flatMap((x) => x.variants.map((y) => y.supplier).filter(Boolean)))].sort().map((n) => ({ v: n, label: n })), cls: inp })) : "<div></div>"}
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3 pt-3 border-t border-gray-100">
       ${lab("Qty per unit (pieces in a pack)", field("qty_per_unit", "number"))}${lab("Qty per box", field("qty_per_box", "number"))}${lab("Minimum qty", field("min_qty", "number"))}
@@ -596,8 +727,7 @@ function variantRowHtml(f, v) {
       </div>
       <div class="flex items-center gap-4 mt-3 text-xs">
         <span class="text-gray-400">Move to:</span>
-        <select data-move="${v.id}" class="border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[14rem]"><option value="">choose a product…</option>${
-          productsData.families.filter((x) => x.id !== f.id).map((x) => `<option value="${x.id}">${pEsc(x.name)} (${pEsc(x.section)})</option>`).join("")}</select>
+        <span class="w-56">${comboHtml({ attr: `data-move="${v.id}"`, items: comboProductItems(f.id), free: false, placeholder: "Search for a product…", cls: "w-full border border-gray-300 rounded-md px-2 py-1 bg-white" })}</span>
         <button type="button" class="text-brand-blue hover:underline" data-split="${v.id}">Make it its own product</button>
         <button type="button" class="text-red-600 hover:underline ml-auto" data-delvariant="${v.id}">Delete option</button>
       </div></td></tr>` : ""}
@@ -632,8 +762,7 @@ function renderProductEditor() {
         <label class="block text-xs"><span class="text-gray-500">Product name</span>
           <input data-f="name" value="${pEsc(val("name"))}" class="${inp} mt-0.5"></label>
         <label class="block text-xs"><span class="text-gray-500">Category (the band in the price list)</span>
-          <input data-f="section" list="productSectionList" value="${pEsc(val("section"))}" class="${inp} mt-0.5">
-          <datalist id="productSectionList">${productSections().map((s) => `<option value="${pEsc(s)}">`).join("")}</datalist></label>
+          ${comboHtml({ attr: 'data-f="section"', value: val("section"), items: productSections().map((s) => ({ v: s, label: s })), cls: inp + " mt-0.5" })}</label>
         <label class="block text-xs sm:col-span-2"><span class="text-gray-500">Description (shown to clients)</span>
           <textarea data-f="description" rows="2" class="${inp} mt-0.5" placeholder="Optional - what it's for, what it's made of">${pEsc(val("description") || "")}</textarea></label>
         <label class="inline-flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" data-f="is_visible" ${val("is_visible") ? "checked" : ""}> Show this product in the catalog</label>
@@ -656,8 +785,7 @@ function renderProductEditor() {
       <button type="button" id="productAddOption" class="text-sm text-brand-blue hover:underline">+ Add a size or color</button>
       <span id="productSaveStatus" class="text-xs text-gray-500">${dirty ? "Unsaved changes" : ""}</span>
       <span class="ml-auto flex items-center gap-3 text-xs">
-        <select id="productMergeInto" class="border border-gray-300 rounded-md px-2 py-1 bg-white max-w-[12rem]"><option value="">Merge into…</option>${
-          productsData.families.filter((x) => x.id !== f.id).map((x) => `<option value="${x.id}">${pEsc(x.name)} (${pEsc(x.section)})</option>`).join("")}</select>
+        <span class="w-52">${comboHtml({ id: "productMergeInto", items: comboProductItems(f.id), free: false, placeholder: "Merge into… (search)", cls: "w-full border border-gray-300 rounded-md px-2 py-1 bg-white" })}</span>
         <button type="button" id="productDelete" class="text-red-600 hover:underline">Delete product</button>
       </span>
     </div>`;
@@ -738,16 +866,17 @@ function wireProductEditor() {
         await productsFetch(`/api/products/families/${productsOpenId}/photo`, { method: "POST", form });
         await loadProducts();
         productsToast("Photo saved.");
-      } else if (el.dataset.move && el.value) {
-        const to = productFamily(Number(el.value));
-        if (!(await askYes(`Move this option under "${to.name}"?`, { title: "Move this option?", confirmLabel: "Move" }))) { el.value = ""; return; }
-        await productsFetch(`/api/products/variants/${el.dataset.move}/move`, { method: "POST", body: { family_id: Number(el.value) } });
+      } else if (el.dataset.move && el.dataset.pick) {
+        const to = productFamily(Number(el.dataset.pick));
+        const reset = () => { el.value = ""; delete el.dataset.pick; };
+        if (!(await askYes(`Move this option under "${to.name}"?`, { title: "Move this option?", confirmLabel: "Move" }))) { reset(); return; }
+        await productsFetch(`/api/products/variants/${el.dataset.move}/move`, { method: "POST", body: { family_id: to.id } });
         await loadProducts();
         if (!productFamily(productsOpenId)) { productsOpenId = null; closeModalEl("productEditModal"); }
         productsToast("Moved.");
-      } else if (el.id === "productMergeInto" && el.value) {
-        const into = productFamily(Number(el.value)), f = productFamily(productsOpenId);
-        if (!(await askYes(`Merge all of "${f.name}" into "${into.name}"? "${f.name}" will be removed as its own product.`, { title: "Merge products?", confirmLabel: "Merge" }))) { el.value = ""; return; }
+      } else if (el.id === "productMergeInto" && el.dataset.pick) {
+        const into = productFamily(Number(el.dataset.pick)), f = productFamily(productsOpenId);
+        if (!(await askYes(`Merge all of "${f.name}" into "${into.name}"? "${f.name}" will be removed as its own product.`, { title: "Merge products?", confirmLabel: "Merge" }))) { el.value = ""; delete el.dataset.pick; return; }
         await productsFetch(`/api/products/families/${f.id}/merge`, { method: "POST", body: { into: into.id } });
         productsOpenId = into.id;
         productsEdits = { family: {}, variants: {} };
@@ -871,8 +1000,7 @@ function openNewProduct(section = "") {
     <div class="grid grid-cols-2 gap-3 text-xs">
       <label class="block col-span-2"><span class="text-gray-500">Product name *</span><input id="pnName" class="${inp}" placeholder="e.g. Kraft Tub 12oz"></label>
       <label class="block col-span-2"><span class="text-gray-500">Category *</span>
-        <input id="pnSection" list="pnSections" class="${inp}" value="${pEsc(section)}" placeholder="Pick one or type a new one">
-        <datalist id="pnSections">${productSections().map((s) => `<option value="${pEsc(s)}">`).join("")}</datalist></label>
+        ${comboHtml({ id: "pnSection", value: section, items: productSections().map((s) => ({ v: s, label: s })), placeholder: "Pick one or type a new one", cls: inp })}</label>
       <label class="block"><span class="text-gray-500">Sold by</span>
         <select id="pnUnit" class="${inp} bg-white">${productsData.unit_types.map((u) => `<option>${pEsc(u)}</option>`).join("")}</select></label>
       <label class="block"><span class="text-gray-500">Pieces per pack</span><input id="pnQty" type="number" step="any" min="1" value="1" class="${inp}"></label>
