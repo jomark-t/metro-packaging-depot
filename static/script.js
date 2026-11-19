@@ -11658,10 +11658,10 @@ function priceCard(cup, cat, sizes) {
       <td>${hasPrint ? `${peso}${money2(priceFor(cup, lid, 1000))}` : "—"}</td>
     </tr>`;
   return `
-    <section class="border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
+    <section class="pm-card border border-gray-200 bg-white rounded-xl shadow-sm overflow-hidden">
       <div class="pm-family">
-        <h4 class="font-display font-semibold text-base">${escapeHtml(sizes ? cup.family : cup.label)}</h4>
-        <span class="text-[11px]">price per cup</span>
+        <h4 class="font-display font-semibold text-lg">${escapeHtml(sizes ? cup.family : cup.label)}</h4>
+        <span class="text-xs">price per cup</span>
         ${sizes && sizes.length > 1
           ? `<nav class="pm-sizenav">${sizes.map((s) =>
               `<button type="button" class="pm-sizebtn${s === (cup.size || cup.family) ? " is-on" : ""}" data-size="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join("")}</nav>`
@@ -12539,6 +12539,21 @@ if (tabPricingBtn) {
   });
 
   document.getElementById("newQuoteBtn").addEventListener("click", () => openCupQuote(cqBlankOrder()));
+
+  // the fees live in a small popup beside Edit prices
+  const feesModal = document.getElementById("feesModal");
+  const setFeesOpen = (on) => {
+    feesModal.classList.toggle("hidden", !on);
+    feesModal.classList.toggle("flex", on);
+    if (on) { renderFees(); document.getElementById("feeRush").focus(); }
+  };
+  document.getElementById("feesBtn").addEventListener("click", () => setFeesOpen(true));
+  document.getElementById("feesClose").addEventListener("click", () => setFeesOpen(false));
+  document.getElementById("feesDone").addEventListener("click", () => setFeesOpen(false));
+  feesModal.addEventListener("click", (e) => { if (e.target === feesModal) setFeesOpen(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !feesModal.classList.contains("hidden")) setFeesOpen(false);
+  });
 }
 
 

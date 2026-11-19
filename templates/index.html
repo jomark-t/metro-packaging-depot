@@ -311,8 +311,16 @@
   .pm-sizebtn.is-on { background: #fff; color: #1c33bb; }
   .pm-list thead th { text-align: right; }
   .pm-list thead th.pm-lidhead { text-align: left; }
-  .pm-list tbody td { font-size: 1.2rem; font-weight: 600; padding: .65rem 1.1rem; width: 9rem; }
-  .pm-list tbody th { font-size: .95rem; padding: .65rem 1.1rem; }
+  .pm-list thead th { font-size: 11px; padding: .55rem 1.1rem; }
+  .pm-list tbody td { font-size: 1.3rem; font-weight: 600; padding: .65rem 1.1rem; width: 8.5rem; }
+  .pm-card .pm-list tbody th { font-size: 1rem !important; font-weight: 600; padding: .65rem 1.1rem; letter-spacing: 0 !important; }
+  .pm-list tr.pm-nolid th span { font-size: 11px; }
+  .pm-card .pm-family { padding: .75rem 1.1rem; }
+  .pm-sizenav .pm-sizebtn { font-size: .9rem; padding: .35rem .95rem; }
+  @media (max-width: 640px) {
+    .pm-list tbody td { font-size: 1.15rem; width: 6rem; padding: .6rem .6rem; }
+    .pm-card .pm-list tbody th { font-size: .95rem !important; padding: .6rem .8rem; white-space: normal; }
+  }
   /* Cup Pricing family picker: a nav-style group plus one dropdown */
   #pricingTabs { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
   .pm-seg { display: inline-flex; gap: 2px; padding: 4px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
@@ -1289,56 +1297,50 @@
   </div>
 
   <div id="pricingView" style="display:none">
+   <div class="max-w-3xl mx-auto">
     <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
       <div>
         <h2 class="font-display font-semibold text-xl leading-tight">Cup Pricing</h2>
         <p id="pricingSubtitle" class="text-sm text-gray-500">The price list the queue prices from.</p>
       </div>
-      <div class="flex items-center gap-2 w-full sm:w-auto">
-        <input id="pricingSearch" type="search" placeholder="Search cups…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm flex-1 sm:w-48" />
+      <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+        <input id="pricingSearch" type="search" placeholder="Search cups…" class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm flex-1 sm:flex-none sm:w-40 min-w-0" />
+        <button id="feesBtn" type="button" class="pm-edit-btn shrink-0">Order fees</button>
         <button id="pricingEditBtn" type="button" class="pm-edit-btn shrink-0">Edit prices</button>
+        <button id="newQuoteBtn" type="button" class="bg-brand-green text-white text-[.8rem] font-semibold px-3.5 py-[.45rem] rounded-lg hover:opacity-90 transition shrink-0">+ New quote</button>
       </div>
     </div>
 
     <p id="pricingHint" class="text-xs text-gray-500 mb-3"></p>
 
-    <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_21rem] gap-5 items-start">
-      <div>
-        <div id="pricingTabs" class="mb-3"></div>
-        <div id="pricingTables" class="flex flex-col gap-4"></div>
+    <div id="pricingTabs" class="mb-3"></div>
+    <div id="pricingTables" class="flex flex-col gap-4"></div>
+   </div>
+  </div>
+
+  {# Order-level charges, added once per order on a quote #}
+  <div id="feesModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-sm p-5 shadow-xl">
+      <div class="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 class="font-display font-semibold text-lg leading-tight">Order fees</h3>
+          <p class="text-xs text-gray-500 mt-1">One flat amount each, added once to an order's quote.</p>
+        </div>
+        <button id="feesClose" type="button" class="text-gray-400 hover:text-gray-600 text-xl leading-none" aria-label="Close">&times;</button>
       </div>
-
-      <div class="flex flex-col gap-4 xl:sticky xl:top-4">
-        {# Order-level charges, added once per order on a quote #}
-        <aside class="border border-gray-200 bg-white rounded-xl shadow-sm">
-          <div class="px-4 py-3 border-b border-gray-200">
-            <h3 class="font-display font-semibold text-base leading-none">Order fees</h3>
-            <p class="text-xs text-gray-500 mt-1">One flat amount each, added once to an order's quote.</p>
-          </div>
-          <div class="px-4 py-3 flex flex-col gap-3">
-            <label class="flex items-center justify-between gap-3 text-sm">
-              <span><span class="text-amber-500">&#9889;</span> Rush fee</span>
-              <span class="flex items-center gap-1 text-gray-500">₱<input id="feeRush" type="number" min="0" step="0.01" placeholder="not set" class="print-edit-fee w-24 border border-gray-300 rounded-lg px-2 py-1 text-sm text-right text-gray-900" /></span>
-            </label>
-            <label class="flex items-center justify-between gap-3 text-sm">
-              <span><span class="text-emerald-500">&#127381;</span> New frame fee</span>
-              <span class="flex items-center gap-1 text-gray-500">₱<input id="feeFrame" type="number" min="0" step="0.01" placeholder="not set" class="print-edit-fee w-24 border border-gray-300 rounded-lg px-2 py-1 text-sm text-right text-gray-900" /></span>
-            </label>
-            <p id="feesNote" class="text-[11px] text-gray-400 h-3"></p>
-          </div>
-        </aside>
-
-        {# A quote with no order behind it - the same popup as Cup Prints' Quote button #}
-        <aside class="border border-gray-200 bg-white rounded-xl shadow-sm">
-          <div class="px-4 py-3 border-b border-gray-200">
-            <h3 class="font-display font-semibold text-base leading-none">Quote</h3>
-            <p class="text-xs text-gray-500 mt-1">Price a job before there is an order.</p>
-          </div>
-          <div class="px-4 py-3">
-            <button id="newQuoteBtn" type="button" class="w-full bg-brand-green text-white text-sm font-semibold px-3 py-2 rounded-lg hover:opacity-90 transition">+ New quote</button>
-            <p class="text-[11px] text-gray-400 mt-2">The same as the Quote button on Cup Prints: pick a client to use their special prices, add cups and fees, then view or copy the receipt.</p>
-          </div>
-        </aside>
+      <div class="flex flex-col gap-3">
+        <label class="flex items-center justify-between gap-3 text-sm">
+          <span><span class="text-amber-500">&#9889;</span> Rush fee</span>
+          <span class="flex items-center gap-1 text-gray-500">₱<input id="feeRush" type="number" min="0" step="0.01" placeholder="not set" class="print-edit-fee w-28 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right text-gray-900" /></span>
+        </label>
+        <label class="flex items-center justify-between gap-3 text-sm">
+          <span><span class="text-emerald-500">&#127381;</span> New frame fee</span>
+          <span class="flex items-center gap-1 text-gray-500">₱<input id="feeFrame" type="number" min="0" step="0.01" placeholder="not set" class="print-edit-fee w-28 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right text-gray-900" /></span>
+        </label>
+        <p id="feesNote" class="text-[11px] text-gray-400 h-3"></p>
+      </div>
+      <div class="flex justify-end mt-2">
+        <button id="feesDone" type="button" class="bg-brand-green text-white rounded-lg px-4 py-2 text-sm font-semibold hover:opacity-90 transition">Done</button>
       </div>
     </div>
   </div>
