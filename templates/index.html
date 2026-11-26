@@ -643,10 +643,11 @@
       {% endfor %}
       {% endif %}
       {# The audit trail spans everyone's pay and login changes, including
-         the managers' own - superuser only. #}
+         the managers' own, and Users hands out logins - superuser only.
+         They live in the Admin app. #}
       {% if current_user.is_superuser %}
-      <button id="tabActivityBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Activity</button>
-      <button id="tabAdminBtn" data-app="payroll" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Admin</button>
+      <button id="tabActivityBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Activity</button>
+      <button id="tabAdminBtn" data-app="office" class="tab-btn shrink-0 whitespace-nowrap w-full sm:w-auto text-left sm:text-center px-3 py-2 sm:py-1.5 rounded-md text-sm font-medium transition">Users</button>
       {% endif %}
 
       {# Phone-only footer for this menu - who you are and how to leave.
@@ -2290,7 +2291,7 @@
           <tr><td class="py-2 font-medium">Superuser <span class="text-gray-400 font-normal">(you)</span></td>
             <td class="py-2 text-gray-600">Everything</td><td class="py-2 text-gray-600">Everything</td></tr>
           <tr><td class="py-2 font-medium">Manager</td>
-            <td class="py-2 text-gray-600">Everything except Activity and Admin</td>
+            <td class="py-2 text-gray-600">Everything except Activity and Users</td>
             <td class="py-2 text-gray-600">The schedule and employee records</td></tr>
           <tr><td class="py-2 font-medium">Staff</td>
             <td class="py-2 text-gray-600">Their own dashboard, the schedule, their leave</td>
