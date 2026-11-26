@@ -289,6 +289,13 @@
   .pm-edit-btn:hover { background: #eef0fc; }
   .pm-edit-btn.is-on { background: #1c33bb; color: #fff; border-color: #1c33bb; }
   .cup-readonly .pm-edit-btn { display: none !important; }
+  @media (max-width: 639px) { body { padding-bottom: 5rem; } }
+  /* the Quick add "+" needs a little room in the longest navbar (Payroll), so tabs sit a touch closer on mid-width screens */
+  @media (min-width: 640px) and (max-width: 1400px) { header #navTabs .tab-btn { padding-left: .6rem; padding-right: .6rem; } }
+  #quickAddMenu .qa-group { padding: .55rem .9rem .2rem; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: #9ca3af; font-family: ui-monospace, monospace; }
+  #quickAddMenu .qa-item { display: flex; align-items: center; gap: .6rem; width: 100%; text-align: left; padding: .5rem .9rem; font-size: .9rem; color: #111827; }
+  #quickAddMenu .qa-item:hover, #quickAddMenu .qa-item:focus-visible { background: #f3f4f6; outline: none; }
+  #quickAddMenu .qa-plus { width: 1.35rem; height: 1.35rem; border-radius: 6px; background: #e6f9ee; color: #0a8f45; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; line-height: 1; flex: none; }
   /* Cup Pricing lookup: cup on its own, then each lid that fits */
   .pm-matrix { border-collapse: separate; border-spacing: 0; width: 100%; font-variant-numeric: tabular-nums; }
   .pm-matrix thead th { background: #f3f4f6; color: #6b7280; font-weight: 600; padding: .5rem .7rem; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; border-bottom: 1px solid #e5e7eb; }
@@ -523,7 +530,14 @@
       {# On a phone the account lives at the bottom of the hamburger menu
          instead, so the top row is just the name of the place and the
          menu button. #}
-      <div class="relative hidden sm:block sm:order-4">
+      {# Quick add: one "+" for every "new ..." in the app. Desktop button here;
+         phones get the floating one near the end of the page. #}
+      <div class="hidden sm:flex sm:order-4 items-center shrink-0">
+      <button id="quickAddBtn" type="button" title="Quick add" aria-label="Quick add" aria-haspopup="true"
+              class="flex items-center justify-center w-8 h-8 rounded-lg bg-white/15 hover:bg-white/25 transition shrink-0">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <div class="relative">
         <button id="userMenuBtn" type="button" class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-white/10 transition">
           <div class="text-right leading-tight">
             <p class="text-sm font-semibold">{{ current_user.display_name }}</p>
@@ -542,6 +556,7 @@
             <button type="submit" class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition">Log out</button>
           </form>
         </div>
+      </div>
       </div>
 
       <button id="navToggle" type="button" aria-label="Menu" aria-expanded="false"
@@ -2066,6 +2081,13 @@
       <div id="cqFooter" class="px-5 py-3 border-t border-gray-200 bg-gray-50 flex flex-wrap items-center gap-2 shrink-0"></div>
     </div>
   </div>
+
+  {# Quick add - the menu behind the navbar "+" (desktop) and the floating "+" (phones). Built in script.js. #}
+  <button id="quickAddFab" type="button" aria-label="Quick add" aria-haspopup="true"
+          class="hidden fixed bottom-5 right-4 z-40 w-14 h-14 rounded-full bg-brand-green text-white shadow-lg items-center justify-center active:scale-95 transition">
+    <svg xmlns="http://www.w3.org/2000/svg" class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+  </button>
+  <div id="quickAddMenu" class="hidden fixed z-[45] w-64 max-h-[70vh] overflow-y-auto bg-white rounded-xl shadow-xl border border-gray-200 py-1"></div>
 
   {# Merge a duplicate client into another - see openMergeClient() in script.js #}
   <div id="mergeClientModal" class="fixed inset-0 bg-black/50 z-[55] hidden items-center justify-center p-4">

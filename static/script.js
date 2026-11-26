@@ -13030,3 +13030,99 @@ if (document.getElementById("tabPrintBtn") && document.getElementById("printWeek
   setPrintMode(printState.mode);
 }
 
+
+// ---------------------------------------------------------------------------
+// Quick add - one "+" (navbar on desktop, floating on phones) listing every
+// "new ..." in the app the person is allowed to use. Each entry just presses
+// the real button on its own page, so the form and the rules behind it are
+// the same ones; the menu only gets you there. Nothing is saved by opening one.
+// ---------------------------------------------------------------------------
+const QUICK_ACTIONS = [
+  // tabBtn: the tab that owns the button (its existence = access to that app)
+  { app: "admin", label: "New order", tabBtn: "tabStatusBtn", btn: "statusNewBtn", can: () => !CURRENT_USER.cup_printing_read_only },
+  { app: "admin", label: "New quote", tabBtn: "tabPricingBtn", btn: "newQuoteBtn", can: () => !CURRENT_USER.cup_printing_read_only },
+  { app: "clients", label: "New client", tabBtn: "tabPrintClientsBtn", btn: "addClientBtn", can: () => !CURRENT_USER.cup_printing_read_only },
+  { app: "products", label: "New product", tabBtn: "tabProductsBtn", btn: "productsAddBtn" },
+  { app: "office", label: "New expense", tabBtn: "tabExpensesBtn", btn: "expenseAddBtn" },
+  { app: "office", label: "New purchase order", tabBtn: "tabCollectionsBtn", btn: "newPoBtn" },
+  { app: "office", label: "New note", tabBtn: "tabNotesBtn", btn: "noteAddBtn" },
+  { app: "ops", label: "New supplier", tabBtn: "tabSuppliersBtn", btn: "supplierAddBtn", can: () => IS_SUPERUSER },
+  { app: "ops", label: "New supplier PO", tabBtn: "tabPurchaseOrdersBtn", btn: "poAddBtn", can: () => IS_SUPERUSER },
+  { app: "payroll", label: "New employee", tabBtn: "tabEmployeesBtn", btn: "addEmployeeBtn", can: () => !CURRENT_USER.is_view_only,
+    // that button toggles an inline form, so only press it when it is closed
+    skipIf: () => document.getElementById("addEmployeeForm").style.display !== "none" },
+];
+const QUICK_APP_ORDER = ["payroll", "admin", "clients", "products", "office", "ops"];
+
+function quickActionsForMe() {
+  return QUICK_ACTIONS.filter((a) => document.getElementById(a.tabBtn) && (!a.can || a.can()));
+}
+
+function runQuickAction(a) {
+  closeQuickAdd();
+  if (a.app !== currentApp) {
+    switchApp(a.app);
+    if (currentApp !== a.app) return;   // payroll asked for its PIN: pick it again once unlocked
+  }
+  const tab = document.getElementById(a.tabBtn);
+  if (tab && !tab.classList.contains("active-tab")) tab.click();
+  setTimeout(() => {
+    if (a.skipIf && a.skipIf()) { document.getElementById(a.btn).scrollIntoView({ block: "center" }); return; }
+    document.getElementById(a.btn).click();
+  }, 0);
+}
+
+const quickAddMenu = document.getElementById("quickAddMenu");
+const quickAddBtn = document.getElementById("quickAddBtn");
+const quickAddFab = document.getElementById("quickAddFab");
+
+function closeQuickAdd() {
+  if (quickAddMenu) quickAddMenu.classList.add("hidden");
+}
+
+function openQuickAdd(anchor) {
+  const mine = quickActionsForMe();
+  if (!mine.length) return;
+  const order = [currentApp, ...QUICK_APP_ORDER.filter((x) => x !== currentApp)];
+  let html = "";
+  order.forEach((app) => {
+    const items = mine.filter((a) => a.app === app);
+    if (!items.length) return;
+    html += `<p class="qa-group">${escapeHtml(APP_NAMES[app])}${app === currentApp ? " &middot; here" : ""}</p>`;
+    items.forEach((a) => {
+      html += `<button type="button" class="qa-item" data-qa="${QUICK_ACTIONS.indexOf(a)}"><span class="qa-plus">+</span>${escapeHtml(a.label)}</button>`;
+    });
+  });
+  quickAddMenu.innerHTML = html;
+  quickAddMenu.querySelectorAll("[data-qa]").forEach((b) =>
+    b.addEventListener("click", () => runQuickAction(QUICK_ACTIONS[Number(b.dataset.qa)])));
+  // under the navbar button on desktop, above the floating one on a phone
+  const r = anchor.getBoundingClientRect();
+  quickAddMenu.style.top = quickAddMenu.style.bottom = quickAddMenu.style.left = quickAddMenu.style.right = "";
+  quickAddMenu.style.right = Math.max(8, window.innerWidth - r.right) + "px";
+  if (anchor === quickAddFab) quickAddMenu.style.bottom = window.innerHeight - r.top + 8 + "px";
+  else quickAddMenu.style.top = r.bottom + 8 + "px";
+  quickAddMenu.classList.remove("hidden");
+  const first = quickAddMenu.querySelector(".qa-item");
+  if (first) first.focus();
+}
+
+if (quickAddMenu && quickAddBtn && quickAddFab) {
+  // someone with nothing to add never sees the button
+  if (quickActionsForMe().length) {
+    quickAddFab.classList.remove("hidden");
+    quickAddFab.classList.add("flex", "sm:hidden");
+  } else {
+    quickAddBtn.remove();
+  }
+  [quickAddBtn, quickAddFab].forEach((btn) =>
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      quickAddMenu.classList.contains("hidden") ? openQuickAdd(btn) : closeQuickAdd();
+    }));
+  document.addEventListener("click", (e) => {
+    if (!quickAddMenu.contains(e.target)) closeQuickAdd();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeQuickAdd(); });
+  window.addEventListener("resize", closeQuickAdd);
+}
